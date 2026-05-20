@@ -10,6 +10,7 @@ interface GoogleIdInitializeConfig {
   use_fedcm_for_prompt?: boolean;
   context?: 'signin' | 'signup' | 'use';
   ux_mode?: 'popup' | 'redirect';
+  hd?: string;
 }
 
 interface GoogleIdRenderButtonConfig {
