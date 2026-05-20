@@ -63,8 +63,9 @@ router.post('/:id/resync', async (req: Request, res: Response, next: NextFunctio
     if (!mailbox) {
       return next(createError('Mailbox not found', 404));
     }
-    await syncMessages(id);
-    res.json({ success: true, message: 'Resync triggered' });
+    const result = await syncMessages(id, { maxResults: 250, daysBack: 7 });
+    await logEvent('MAILBOX_RESYNCED', { mailboxId: id, ...result }, 'INFO');
+    res.json({ success: true, data: result });
   } catch (err) {
     next(err);
   }
@@ -108,6 +109,26 @@ router.post('/workspace/connect', async (req: Request, res: Response, next: Next
         });
 
         await logEvent('MAILBOX_WORKSPACE_CONNECTED', { mailboxId: mailbox.id, email }, 'INFO');
+
+        try {
+          const result = await syncMessages(mailbox.id, { maxResults: 250, daysBack: 7 });
+          await logEvent(
+            'MAILBOX_BACKFILLED_ON_CONNECT',
+            { mailboxId: mailbox.id, ...result },
+            'INFO'
+          );
+        } catch (backfillErr) {
+          console.warn('[Mailbox] Workspace backfill failed:', backfillErr);
+          await logEvent(
+            'MAILBOX_BACKFILL_FAILED',
+            {
+              mailboxId: mailbox.id,
+              error: backfillErr instanceof Error ? backfillErr.message : String(backfillErr),
+            },
+            'WARN'
+          );
+        }
+
         results.push({ email, success: true });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

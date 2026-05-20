@@ -26,6 +26,32 @@ const STATUS_LABELS: Record<Candidate['status'], string> = {
   REPLIED: 'Replied',
 };
 
+function ReplyStatusBadge({ candidate }: { candidate: Candidate }) {
+  const derived: NonNullable<Candidate['replyStatus']> =
+    candidate.replyStatus ??
+    (candidate.repliedAt ? 'REPLIED' : candidate.threads?.length ? 'AWAITING_REPLY' : 'NEW');
+
+  if (derived === 'REPLIED') {
+    return (
+      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-900/60 text-green-300 border border-green-700">
+        Replied
+      </span>
+    );
+  }
+  if (derived === 'AWAITING_REPLY') {
+    return (
+      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-900/60 text-yellow-300 border border-yellow-700">
+        Awaiting Reply
+      </span>
+    );
+  }
+  return (
+    <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-800 text-gray-400 border border-gray-600">
+      New
+    </span>
+  );
+}
+
 function ThreadView({ threadId }: { threadId: string }) {
   const { data, isLoading } = useQuery({
     queryKey: ['thread', threadId],
@@ -149,6 +175,9 @@ export default function CandidateTable({ mailboxId }: Props) {
               <th className="text-left px-4 py-3 text-xs font-medium text-gray-400 uppercase tracking-wider">
                 Status
               </th>
+              <th className="text-left px-4 py-3 text-xs font-medium text-gray-400 uppercase tracking-wider">
+                Reply
+              </th>
               <th className="text-left px-4 py-3 text-xs font-medium text-gray-400 uppercase tracking-wider hidden lg:table-cell">
                 Last Activity
               </th>
@@ -161,7 +190,7 @@ export default function CandidateTable({ mailboxId }: Props) {
             {isLoading
               ? Array.from({ length: 5 }).map((_, i) => (
                   <tr key={i}>
-                    {Array.from({ length: 6 }).map((_, j) => (
+                    {Array.from({ length: 7 }).map((_, j) => (
                       <td key={j} className="px-4 py-3">
                         <div className="h-4 bg-gray-800 animate-pulse rounded" />
                       </td>
@@ -217,6 +246,9 @@ export default function CandidateTable({ mailboxId }: Props) {
                           {STATUS_LABELS[candidate.status]}
                         </span>
                       </td>
+                      <td className="px-4 py-3">
+                        <ReplyStatusBadge candidate={candidate} />
+                      </td>
                       <td className="px-4 py-3 hidden lg:table-cell">
                         <span className="text-gray-400 text-sm">
                           {candidate.threads?.[0]
@@ -248,7 +280,7 @@ export default function CandidateTable({ mailboxId }: Props) {
                       candidate.threads.length > 0 && (
                         <tr key={`${candidate.id}-expanded`}>
                           <td
-                            colSpan={6}
+                            colSpan={7}
                             className="bg-gray-950/50 border-b border-gray-800"
                           >
                             <ThreadView threadId={candidate.threads[0].id} />

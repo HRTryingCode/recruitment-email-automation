@@ -5,7 +5,7 @@ import { prisma } from '../db/client';
 import { classifyReply, generateDraftReply } from './claude.service';
 import { logEvent } from './monitoring.service';
 import { decrypt, encrypt } from '../lib/crypto';
-import type { Mailbox } from '@prisma/client';
+import type { Mailbox, EmailThread } from '@prisma/client';
 
 /**
  * Serialize an OAuth2 / service-account credentials object for storage.
@@ -112,19 +112,308 @@ export async function handleCallback(code: string, mailboxId?: string): Promise<
   return mailbox;
 }
 
+// Domains and patterns that are obviously not candidate emails. Skips Claude
+// classification to save tokens. When unsure we let Claude decide.
+const SENDER_DOMAIN_BLACKLIST = new Set([
+  'notifications.github.com',
+  'github.com',
+  'vercel.com',
+  'noreply.github.com',
+  'zoom.us',
+  'docusign.com',
+  'docusign.net',
+  'pandadoc.net',
+  'mailchimp.com',
+  'beehiiv.com',
+  'mail.beehiiv.com',
+  'mercury.com',
+  'posthog.com',
+  'intercom-mail.com',
+  'slack.com',
+  'mailgun.org',
+  'sendgrid.net',
+  'amazonses.com',
+  'linkedin.com',
+  'e.linkedin.com',
+  'em.linkedin.com',
+  'calendar-notification.google.com',
+  'group.calendar.google.com',
+]);
+
+function shouldSkipClassification(opts: {
+  fromAddress: string;
+  fromName?: string | null;
+  subject: string;
+  mailboxEmail: string;
+}): boolean {
+  const from = opts.fromAddress.toLowerCase().trim();
+  const name = (opts.fromName ?? '').toLowerCase();
+  const subject = opts.subject.toLowerCase();
+
+  if (!from) return true;
+  if (from === opts.mailboxEmail.toLowerCase()) return true; // outbound
+
+  const domain = from.split('@')[1] ?? '';
+  if (!domain) return true;
+  if (SENDER_DOMAIN_BLACKLIST.has(domain)) return true;
+
+  // Common newsletter / no-reply patterns
+  if (from.startsWith('no-reply@') || from.startsWith('noreply@') || from.startsWith('do-not-reply@')) {
+    return true;
+  }
+  if (name.includes('no reply') || name.includes('no-reply') || name.includes('notifications')) {
+    return true;
+  }
+  if (subject.startsWith('[') && subject.includes(']')) {
+    // ticketed/automated subjects like "[team-account] ..." or "[GitHub] ..."
+    return true;
+  }
+  return false;
+}
+
+interface ParsedGmailMessage {
+  externalMessageId: string;
+  threadId: string;
+  subject: string;
+  fromAddress: string;
+  fromName?: string;
+  toAddresses: string[];
+  bodyText: string;
+  bodyHtml: string;
+  receivedAt: Date;
+  headers: Record<string, string>;
+}
+
+function parseGmailMessage(
+  msgId: string,
+  fullMsgData: {
+    threadId?: string | null;
+    payload?: {
+      headers?: Array<{ name?: string | null; value?: string | null }> | null;
+      mimeType?: string | null;
+      body?: { data?: string | null } | null;
+      parts?: unknown[] | null;
+    } | null;
+  }
+): ParsedGmailMessage {
+  const headers = fullMsgData.payload?.headers ?? [];
+  const getHeader = (name: string): string =>
+    headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? '';
+
+  const subject = getHeader('Subject') || '(no subject)';
+  const fromRaw = getHeader('From');
+  const toRaw = getHeader('To');
+  const messageId = getHeader('Message-ID');
+  const inReplyTo = getHeader('In-Reply-To');
+  const references = getHeader('References');
+  const dateStr = getHeader('Date');
+  const threadId = fullMsgData.threadId ?? msgId;
+
+  const fromMatch = fromRaw.match(/^(.*?)\s*<([^>]+)>$/) ?? [];
+  const fromName = fromMatch[1]?.trim().replace(/^"|"$/g, '') || undefined;
+  const fromAddress = (fromMatch[2] ?? fromRaw).trim();
+
+  const toAddresses = toRaw
+    .split(',')
+    .map((a) => a.trim())
+    .filter(Boolean);
+
+  let bodyText = '';
+  let bodyHtml = '';
+
+  const extractBody = (part: {
+    mimeType?: string | null;
+    body?: { data?: string | null } | null;
+    parts?: unknown[] | null;
+  }): void => {
+    if (part.mimeType === 'text/plain' && part.body?.data) {
+      bodyText = Buffer.from(part.body.data, 'base64').toString('utf-8');
+    } else if (part.mimeType === 'text/html' && part.body?.data) {
+      bodyHtml = Buffer.from(part.body.data, 'base64').toString('utf-8');
+    } else if (part.parts) {
+      (part.parts as Parameters<typeof extractBody>[0][]).forEach(extractBody);
+    }
+  };
+
+  if (fullMsgData.payload) {
+    extractBody(fullMsgData.payload as Parameters<typeof extractBody>[0]);
+  }
+
+  return {
+    externalMessageId: msgId,
+    threadId,
+    subject,
+    fromAddress,
+    fromName,
+    toAddresses,
+    bodyText,
+    bodyHtml,
+    receivedAt: dateStr ? new Date(dateStr) : new Date(),
+    headers: { messageId, inReplyTo, references },
+  };
+}
+
+/**
+ * Classify a newly-stored inbound message and create/update the associated
+ * Candidate. If INTERESTED, also generate a draft reply.
+ *
+ * Errors are swallowed (logged) so a bad message can't kill the rest of the
+ * sync. The message itself is always already saved before this is called.
+ */
+async function classifyAndDraft(opts: {
+  mailbox: Mailbox;
+  thread: EmailThread;
+  parsed: ParsedGmailMessage;
+}): Promise<void> {
+  const { mailbox, thread, parsed } = opts;
+
+  if (
+    shouldSkipClassification({
+      fromAddress: parsed.fromAddress,
+      fromName: parsed.fromName,
+      subject: parsed.subject,
+      mailboxEmail: mailbox.emailAddress,
+    })
+  ) {
+    return;
+  }
+
+  // Skip if a draft for this thread already exists in a live state
+  const existingDraft = await prisma.emailDraft.findFirst({
+    where: { threadId: thread.id, status: { in: ['PENDING', 'APPROVED', 'SENT'] } },
+  });
+
+  let classificationResult;
+  try {
+    const candidateName = parsed.fromName ?? parsed.fromAddress;
+    classificationResult = await classifyReply(
+      parsed.bodyText || parsed.bodyHtml || parsed.subject,
+      candidateName
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await logEvent(
+      'CLASSIFICATION_FAILED',
+      { mailboxId: mailbox.id, messageId: parsed.externalMessageId, error: message },
+      'WARN'
+    );
+    return;
+  }
+
+  const { classification, confidence } = classificationResult;
+
+  const candidate = await prisma.candidate.upsert({
+    where: { email: parsed.fromAddress },
+    update: {
+      status: classification,
+      mailboxId: mailbox.id,
+      updatedAt: new Date(),
+    },
+    create: {
+      name: parsed.fromName ?? parsed.fromAddress,
+      email: parsed.fromAddress,
+      status: classification,
+      mailboxId: mailbox.id,
+      source: 'EMAIL_REPLY',
+    },
+  });
+
+  // Attach the thread to the candidate if not already attached
+  if (thread.candidateId !== candidate.id) {
+    await prisma.emailThread.update({
+      where: { id: thread.id },
+      data: { candidateId: candidate.id },
+    });
+  }
+
+  await logEvent(
+    'CANDIDATE_CLASSIFIED',
+    {
+      mailboxId: mailbox.id,
+      candidateId: candidate.id,
+      classification,
+      confidence,
+    },
+    'INFO'
+  );
+
+  // Only generate drafts for INTERESTED candidates, and only if there isn't
+  // already a live draft on the thread.
+  if (classification !== 'INTERESTED' || existingDraft) return;
+
+  try {
+    const allMessages = await prisma.emailMessage.findMany({
+      where: { threadId: thread.id },
+      orderBy: { receivedAt: 'asc' },
+    });
+
+    const draftReply = await generateDraftReply({
+      subject: thread.subject,
+      messages: allMessages.map((m) => ({
+        fromAddress: m.fromAddress,
+        fromName: m.fromName,
+        bodyText: m.bodyText,
+        receivedAt: m.receivedAt,
+      })),
+      candidateName: candidate.name,
+      classification,
+    });
+
+    const inReplyToMessageId = parsed.headers.messageId || null;
+    const existingRefs = parsed.headers.references ?? '';
+    const referencesHeader = existingRefs
+      ? `${existingRefs} ${inReplyToMessageId ?? ''}`.trim()
+      : inReplyToMessageId;
+
+    await prisma.emailDraft.create({
+      data: {
+        threadId: thread.id,
+        inReplyToMessageId,
+        referencesHeader,
+        subject: draftReply.subject,
+        bodyText: draftReply.bodyText,
+        bodyHtml: draftReply.bodyHtml,
+        classification,
+        confidence,
+        status: 'PENDING',
+      },
+    });
+
+    await logEvent(
+      'DRAFT_CREATED',
+      { mailboxId: mailbox.id, candidateId: candidate.id, threadId: thread.id },
+      'INFO'
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await logEvent(
+      'DRAFT_GENERATION_FAILED',
+      { mailboxId: mailbox.id, threadId: thread.id, error: message },
+      'WARN'
+    );
+  }
+}
+
 // Fetch a single message by Gmail message ID and persist it (idempotent — skips
 // messages already stored). Used by both the 7-day fallback sync and the
 // incremental history-based sync.
+//
+// After persisting, classifies inbound messages (calls classifyAndDraft) and
+// for outbound messages from the mailbox owner sets Candidate.repliedAt so the
+// dashboard can show reply status when the recruiter replies via Gmail or
+// Superhuman directly.
+//
+// Returns true if a new message was actually stored, false if skipped.
 async function fetchAndStoreMessage(
   gmail: ReturnType<typeof google.gmail>,
-  mailboxId: string,
+  mailbox: Mailbox,
   externalMessageId: string
-): Promise<void> {
+): Promise<boolean> {
   // Skip if already stored
   const existing = await prisma.emailMessage.findUnique({
     where: { externalMessageId },
   });
-  if (existing) return;
+  if (existing) return false;
 
   try {
     const fullMsg = await gmail.users.messages.get({
@@ -133,65 +422,27 @@ async function fetchAndStoreMessage(
       format: 'full',
     });
 
-    const headers = fullMsg.data.payload?.headers ?? [];
-    const getHeader = (name: string) =>
-      headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? '';
-
-    const subject = getHeader('Subject') || '(no subject)';
-    const fromRaw = getHeader('From');
-    const toRaw = getHeader('To');
-    const messageId = getHeader('Message-ID');
-    const inReplyTo = getHeader('In-Reply-To');
-    const references = getHeader('References');
-    const dateStr = getHeader('Date');
-    const threadId = fullMsg.data.threadId ?? externalMessageId;
-
-    // Parse from address
-    const fromMatch = fromRaw.match(/^(.*?)\s*<([^>]+)>$/) ?? [];
-    const fromName = fromMatch[1]?.trim() || undefined;
-    const fromAddress = fromMatch[2] ?? fromRaw;
-
-    const toAddresses = toRaw.split(',').map((a) => a.trim());
-
-    // Extract body
-    let bodyText = '';
-    let bodyHtml = '';
-
-    const extractBody = (part: {
-      mimeType?: string | null;
-      body?: { data?: string | null } | null;
-      parts?: unknown[] | null;
-    }): void => {
-      if (part.mimeType === 'text/plain' && part.body?.data) {
-        bodyText = Buffer.from(part.body.data, 'base64').toString('utf-8');
-      } else if (part.mimeType === 'text/html' && part.body?.data) {
-        bodyHtml = Buffer.from(part.body.data, 'base64').toString('utf-8');
-      } else if (part.parts) {
-        (part.parts as typeof part[]).forEach(extractBody);
-      }
-    };
-
-    if (fullMsg.data.payload) {
-      extractBody(fullMsg.data.payload as Parameters<typeof extractBody>[0]);
-    }
+    const parsed = parseGmailMessage(externalMessageId, fullMsg.data);
+    const isOutbound =
+      parsed.fromAddress.toLowerCase() === mailbox.emailAddress.toLowerCase();
 
     // Upsert thread
     const thread = await prisma.emailThread.upsert({
       where: {
         mailboxId_externalThreadId: {
-          mailboxId,
-          externalThreadId: threadId,
+          mailboxId: mailbox.id,
+          externalThreadId: parsed.threadId,
         },
       },
       update: {
-        subject,
-        lastMessageAt: dateStr ? new Date(dateStr) : new Date(),
+        subject: parsed.subject,
+        lastMessageAt: parsed.receivedAt,
       },
       create: {
-        mailboxId,
-        externalThreadId: threadId,
-        subject,
-        lastMessageAt: dateStr ? new Date(dateStr) : new Date(),
+        mailboxId: mailbox.id,
+        externalThreadId: parsed.threadId,
+        subject: parsed.subject,
+        lastMessageAt: parsed.receivedAt,
       },
     });
 
@@ -199,53 +450,96 @@ async function fetchAndStoreMessage(
     await prisma.emailMessage.create({
       data: {
         threadId: thread.id,
-        mailboxId,
+        mailboxId: mailbox.id,
         externalMessageId,
-        fromAddress,
-        fromName,
-        toAddresses: JSON.stringify(toAddresses),
-        subject,
-        bodyText,
-        bodyHtml,
-        receivedAt: dateStr ? new Date(dateStr) : new Date(),
-        headers: JSON.stringify({ messageId, inReplyTo, references }),
+        fromAddress: parsed.fromAddress,
+        fromName: parsed.fromName,
+        toAddresses: JSON.stringify(parsed.toAddresses),
+        subject: parsed.subject,
+        bodyText: parsed.bodyText,
+        bodyHtml: parsed.bodyHtml,
+        receivedAt: parsed.receivedAt,
+        headers: JSON.stringify(parsed.headers),
       },
     });
+
+    if (isOutbound) {
+      // Recruiter replied via Gmail/Superhuman directly. If this thread maps
+      // to a candidate, mark the candidate as replied.
+      if (thread.candidateId) {
+        await prisma.candidate.update({
+          where: { id: thread.candidateId },
+          data: { repliedAt: parsed.receivedAt },
+        });
+      }
+      return true;
+    }
+
+    // Inbound: classify + maybe draft
+    await classifyAndDraft({ mailbox, thread, parsed });
+    return true;
   } catch (err) {
     console.error(`[Gmail] Failed to process message ${externalMessageId}:`, err);
+    await logEvent(
+      'MESSAGE_PROCESSING_FAILED',
+      {
+        mailboxId: mailbox.id,
+        messageId: externalMessageId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      'WARN'
+    );
+    return false;
   }
 }
 
 /**
- * Full 7-day fallback sync. Used:
+ * Full N-day fallback sync. Used:
  *   - As one-time backfill when `lastHistoryId` is null (no baseline yet).
  *   - Via the manual /api/mailboxes/:id/resync endpoint.
+ *   - Via the OAuth-callback / workspace-connect auto-backfill.
  * Webhook-driven incremental sync uses `syncIncremental` instead.
+ *
+ * For every NEW inbound message we run classification + draft generation
+ * inline (see fetchAndStoreMessage → classifyAndDraft). Outbound messages
+ * from the recruiter update Candidate.repliedAt so the dashboard can show
+ * reply status.
  *
  * After completion, stores the current historyId so future webhooks can run
  * incrementally.
+ *
+ * `maxResults` is capped at 250 to stay within Vercel's serverless timeout
+ * during connect-time backfills.
  */
-export async function syncMessages(mailboxId: string): Promise<void> {
+export async function syncMessages(
+  mailboxId: string,
+  opts: { maxResults?: number; daysBack?: number } = {}
+): Promise<{ messagesSeen: number; messagesStored: number }> {
+  const maxResults = Math.min(opts.maxResults ?? 100, 250);
+  const daysBack = opts.daysBack ?? 7;
+
   const mailbox = await prisma.mailbox.findUnique({ where: { id: mailboxId } });
-  if (!mailbox || !mailbox.isActive) return;
+  if (!mailbox || !mailbox.isActive) return { messagesSeen: 0, messagesStored: 0 };
 
   const credentials = parseCredentials(mailbox);
   const oauth2Client = getAuthenticatedClient(credentials);
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
-  // Get messages from the last 7 days
-  const after = Math.floor((Date.now() - 7 * 24 * 60 * 60 * 1000) / 1000);
+  // Get messages from the last N days
+  const after = Math.floor((Date.now() - daysBack * 24 * 60 * 60 * 1000) / 1000);
   const listRes = await gmail.users.messages.list({
     userId: 'me',
     q: `after:${after}`,
-    maxResults: 100,
+    maxResults,
   });
 
   const messages = listRes.data.messages ?? [];
+  let stored = 0;
 
   for (const msg of messages) {
     if (!msg.id) continue;
-    await fetchAndStoreMessage(gmail, mailboxId, msg.id);
+    const didStore = await fetchAndStoreMessage(gmail, mailbox, msg.id);
+    if (didStore) stored += 1;
   }
 
   // After a full sync, capture the current historyId so subsequent webhooks
@@ -262,7 +556,13 @@ export async function syncMessages(mailboxId: string): Promise<void> {
     console.warn(`[Gmail] Failed to capture historyId after full sync:`, err);
   }
 
-  await logEvent('MAILBOX_SYNCED', { mailboxId, messageCount: messages.length }, 'INFO');
+  await logEvent(
+    'MAILBOX_SYNCED',
+    { mailboxId, messagesSeen: messages.length, messagesStored: stored },
+    'INFO'
+  );
+
+  return { messagesSeen: messages.length, messagesStored: stored };
 }
 
 /**
@@ -300,7 +600,8 @@ export async function syncIncremental(
       const historyRes = await gmail.users.history.list({
         userId: 'me',
         startHistoryId,
-        historyTypes: ['messageAdded'],
+        // No historyTypes filter — we want messageAdded for inbound AND
+        // outbound mail so we can track recruiter replies for repliedAt.
         pageToken,
         maxResults: 500,
       });
@@ -333,9 +634,9 @@ export async function syncIncremental(
     throw err;
   }
 
-  // Fetch and store each new message.
+  // Fetch and store each new message (with classification for inbound).
   for (const msgId of newMessageIds) {
-    await fetchAndStoreMessage(gmail, mailboxId, msgId);
+    await fetchAndStoreMessage(gmail, mailbox, msgId);
   }
 
   // Update historyId to whatever Gmail told us is latest, or fall back to
@@ -369,7 +670,8 @@ export async function watchMailbox(mailboxId: string): Promise<void> {
     userId: 'me',
     requestBody: {
       topicName: config.gmail.pubsubTopic,
-      labelIds: ['INBOX'],
+      // No labelIds filter — we want notifications for both inbound and
+      // outbound mail so we can track recruiter replies for repliedAt.
     },
   });
 
@@ -529,87 +831,10 @@ export async function processWebhook(data: { message: { data: string } }): Promi
     }
 
     // Incremental sync — only fetches messages added since lastHistoryId.
-    // Falls back to syncMessages() if no baseline is set yet.
+    // Falls back to syncMessages() if no baseline is set yet. Classification
+    // and draft generation now happen per-message inside fetchAndStoreMessage,
+    // so the webhook handler is a thin wrapper around the sync call.
     await syncIncremental(mailbox.id, notification.historyId);
-
-    // Find unclassified threads and generate drafts
-    const threads = await prisma.emailThread.findMany({
-      where: {
-        mailboxId: mailbox.id,
-        candidate: { isNot: null },
-        drafts: { none: { status: { in: ['PENDING', 'APPROVED', 'SENT'] } } },
-      },
-      include: {
-        messages: { orderBy: { receivedAt: 'asc' } },
-        candidate: true,
-        drafts: true,
-      },
-      orderBy: { lastMessageAt: 'desc' },
-      take: 10,
-    });
-
-    for (const thread of threads) {
-      if (!thread.candidate) continue;
-
-      const lastMessage = thread.messages[thread.messages.length - 1];
-      if (!lastMessage || !lastMessage.bodyText) continue;
-
-      try {
-        const classification = await classifyReply(
-          lastMessage.bodyText,
-          thread.candidate.name
-        );
-
-        const draftReply = await generateDraftReply({
-          subject: thread.subject,
-          messages: thread.messages,
-          candidateName: thread.candidate.name,
-          classification: classification.classification,
-        });
-
-        // Get headers for threading
-        const headers = (typeof lastMessage.headers === 'string'
-          ? JSON.parse(lastMessage.headers)
-          : lastMessage.headers) as Record<string, string>;
-        const inReplyToMessageId = headers.messageId;
-        const existingRefs = headers.references ?? '';
-        const referencesHeader = existingRefs
-          ? `${existingRefs} ${inReplyToMessageId}`
-          : inReplyToMessageId;
-
-        await prisma.emailDraft.create({
-          data: {
-            threadId: thread.id,
-            inReplyToMessageId,
-            referencesHeader,
-            subject: draftReply.subject,
-            bodyText: draftReply.bodyText,
-            bodyHtml: draftReply.bodyHtml,
-            classification: classification.classification,
-            confidence: classification.confidence,
-            status: 'PENDING',
-          },
-        });
-
-        // Update candidate status
-        await prisma.candidate.update({
-          where: { id: thread.candidate.id },
-          data: { status: classification.classification },
-        });
-
-        await logEvent(
-          'DRAFT_CREATED',
-          {
-            threadId: thread.id,
-            candidateId: thread.candidate.id,
-            classification: classification.classification,
-          },
-          'INFO'
-        );
-      } catch (err) {
-        console.error(`[Gmail Webhook] Failed to process thread ${thread.id}:`, err);
-      }
-    }
   } catch (err) {
     console.error('[Gmail Webhook] Failed to process notification:', err);
     throw err;

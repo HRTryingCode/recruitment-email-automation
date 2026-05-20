@@ -13,9 +13,10 @@ import webhooksRouter from './routes/webhooks';
 import healthRouter from './routes/health';
 import authRouter from './routes/auth';
 import internalCronRouter from './routes/internal-cron';
-import { handleCallback, watchMailbox } from './services/gmail.service';
+import { handleCallback, watchMailbox, syncMessages } from './services/gmail.service';
 import { consumeOAuthState } from './lib/oauthState';
 import { createError } from './middleware/error';
+import { logEvent } from './services/monitoring.service';
 
 const app = express();
 
@@ -78,6 +79,24 @@ app.get(
         await watchMailbox(mailbox.id);
       } catch (watchErr) {
         console.warn('[Mailbox] Gmail watch setup failed:', watchErr);
+      }
+      try {
+        const result = await syncMessages(mailbox.id, { maxResults: 250, daysBack: 7 });
+        await logEvent(
+          'MAILBOX_BACKFILLED_ON_CONNECT',
+          { mailboxId: mailbox.id, ...result },
+          'INFO'
+        );
+      } catch (backfillErr) {
+        console.warn('[Mailbox] Initial backfill failed:', backfillErr);
+        await logEvent(
+          'MAILBOX_BACKFILL_FAILED',
+          {
+            mailboxId: mailbox.id,
+            error: backfillErr instanceof Error ? backfillErr.message : String(backfillErr),
+          },
+          'WARN'
+        );
       }
       const frontendUrl = process.env.FRONTEND_URL ?? 'http://localhost:5173';
       res.redirect(`${frontendUrl}?mailbox=connected`);

@@ -49,6 +49,8 @@ export interface Mailbox {
   _count?: { threads: number; messages: number };
 }
 
+export type ReplyStatus = 'NEW' | 'AWAITING_REPLY' | 'REPLIED';
+
 export interface Candidate {
   id: string;
   name: string;
@@ -61,6 +63,8 @@ export interface Candidate {
   mailboxId?: string;
   mailbox?: Pick<Mailbox, 'id' | 'emailAddress' | 'provider'>;
   threads?: EmailThread[];
+  repliedAt?: string | null;
+  replyStatus?: ReplyStatus;
   createdAt: string;
   updatedAt: string;
 }

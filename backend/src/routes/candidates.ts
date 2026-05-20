@@ -22,6 +22,17 @@ function qs(val: unknown): string | undefined {
   return undefined;
 }
 
+type ReplyStatus = 'NEW' | 'AWAITING_REPLY' | 'REPLIED';
+
+function deriveReplyStatus(c: {
+  repliedAt: Date | null;
+  threads: Array<{ lastMessageAt: Date }>;
+}): ReplyStatus {
+  if (c.repliedAt) return 'REPLIED';
+  if (!c.threads.length) return 'NEW';
+  return 'AWAITING_REPLY';
+}
+
 // GET /api/candidates
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -55,7 +66,12 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       prisma.candidate.count({ where }),
     ]);
 
-    res.json({ success: true, data: candidates, meta: { total, page, limit } });
+    const enriched = candidates.map((c) => ({
+      ...c,
+      replyStatus: deriveReplyStatus(c),
+    }));
+
+    res.json({ success: true, data: enriched, meta: { total, page, limit } });
   } catch (err) {
     next(err);
   }
