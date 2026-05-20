@@ -272,6 +272,27 @@ export async function fetchHealth(): Promise<SingleResponse<HealthStatus>> {
   return res.data as SingleResponse<HealthStatus>;
 }
 
+// Sync-health (per-mailbox observability for dashboard / debug)
+export interface MailboxSyncHealth {
+  mailboxId: string;
+  emailAddress: string;
+  displayName: string | null;
+  isActive: boolean;
+  watchExpiry: string | null;
+  watchExpiresInHours: number | null;
+  lastSyncedMessageAt: string | null;
+  lastReconciliationAt: string | null;
+  lastReconciliationFoundMissing: number;
+  messagesLast24h: number;
+  pendingDrafts: number;
+  candidatesNeedsReview: number;
+}
+
+export async function fetchSyncHealth(): Promise<SingleResponse<MailboxSyncHealth[]>> {
+  const res = await api.get('/internal/sync-health');
+  return res.data as SingleResponse<MailboxSyncHealth[]>;
+}
+
 // Auth
 interface AuthResponse {
   token: string;
