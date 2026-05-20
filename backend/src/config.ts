@@ -23,7 +23,7 @@ interface Config {
 
 export const config: Config = {
   port: parseInt(process.env.PORT ?? '3001', 10),
-  databaseUrl: process.env.DATABASE_URL ?? '',
+  databaseUrl: process.env.POSTGRES_PRISMA_URL ?? '',
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? '',
   gmail: {
     clientId: process.env.GMAIL_CLIENT_ID ?? '',
