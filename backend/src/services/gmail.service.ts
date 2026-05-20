@@ -1,11 +1,17 @@
 import { google } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
-import { Prisma } from '@prisma/client';
 import { config } from '../config';
 import { prisma } from '../db/client';
 import { classifyReply, generateDraftReply } from './claude.service';
 import { logEvent } from './monitoring.service';
 import type { Mailbox } from '@prisma/client';
+
+function parseCredentials(mailbox: Mailbox): Record<string, unknown> {
+  if (typeof mailbox.credentials === 'string') {
+    try { return JSON.parse(mailbox.credentials) as Record<string, unknown>; } catch { return {}; }
+  }
+  return mailbox.credentials as Record<string, unknown>;
+}
 
 function createOAuth2Client(): OAuth2Client {
   return new google.auth.OAuth2(
@@ -49,7 +55,7 @@ export async function handleCallback(code: string, mailboxId?: string): Promise<
   const mailbox = await prisma.mailbox.upsert({
     where: { emailAddress },
     update: {
-      credentials: tokens as Prisma.InputJsonValue,
+      credentials: JSON.stringify(tokens),
       isActive: true,
       updatedAt: new Date(),
     },
@@ -57,7 +63,7 @@ export async function handleCallback(code: string, mailboxId?: string): Promise<
       provider: 'GMAIL',
       emailAddress,
       displayName: emailAddress,
-      credentials: tokens as Prisma.InputJsonValue,
+      credentials: JSON.stringify(tokens),
       isActive: true,
     },
   });
@@ -70,7 +76,7 @@ export async function syncMessages(mailboxId: string): Promise<void> {
   const mailbox = await prisma.mailbox.findUnique({ where: { id: mailboxId } });
   if (!mailbox || !mailbox.isActive) return;
 
-  const credentials = mailbox.credentials as Record<string, unknown>;
+  const credentials = parseCredentials(mailbox);
   const oauth2Client = getAuthenticatedClient(credentials);
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
@@ -170,16 +176,12 @@ export async function syncMessages(mailboxId: string): Promise<void> {
           externalMessageId: msg.id,
           fromAddress,
           fromName,
-          toAddresses,
+          toAddresses: JSON.stringify(toAddresses),
           subject,
           bodyText,
           bodyHtml,
           receivedAt: dateStr ? new Date(dateStr) : new Date(),
-          headers: {
-            messageId,
-            inReplyTo,
-            references,
-          },
+          headers: JSON.stringify({ messageId, inReplyTo, references }),
         },
       });
     } catch (err) {
@@ -194,7 +196,7 @@ export async function watchMailbox(mailboxId: string): Promise<void> {
   const mailbox = await prisma.mailbox.findUnique({ where: { id: mailboxId } });
   if (!mailbox || !config.gmail.pubsubTopic) return;
 
-  const credentials = mailbox.credentials as Record<string, unknown>;
+  const credentials = parseCredentials(mailbox);
   const oauth2Client = getAuthenticatedClient(credentials);
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
@@ -241,6 +243,35 @@ export async function renewGmailWatches(): Promise<void> {
   }
 }
 
+export async function createServiceAccountClient(emailToImpersonate: string) {
+  const keyFilePath = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_FILE;
+  const keyJson = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON;
+
+  if (!keyFilePath && !keyJson) {
+    throw new Error('No service account credentials configured. Set GOOGLE_SERVICE_ACCOUNT_KEY_FILE or GOOGLE_SERVICE_ACCOUNT_KEY_JSON.');
+  }
+
+  const authOptions: {
+    scopes: string[];
+    subject: string;
+    keyFile?: string;
+    credentials?: Record<string, unknown>;
+  } = {
+    scopes: ['https://www.googleapis.com/auth/gmail.modify'],
+    subject: emailToImpersonate,
+  };
+
+  if (keyFilePath) {
+    authOptions.keyFile = keyFilePath;
+  } else if (keyJson) {
+    authOptions.credentials = JSON.parse(keyJson) as Record<string, unknown>;
+  }
+
+  const auth = new google.auth.GoogleAuth(authOptions);
+  const authClient = await auth.getClient();
+  return google.gmail({ version: 'v1', auth: authClient as Parameters<typeof google.gmail>[0]['auth'] });
+}
+
 export async function createDraft(
   mailboxId: string,
   draft: {
@@ -257,7 +288,7 @@ export async function createDraft(
   const mailbox = await prisma.mailbox.findUnique({ where: { id: mailboxId } });
   if (!mailbox) throw new Error('Mailbox not found');
 
-  const credentials = mailbox.credentials as Record<string, unknown>;
+  const credentials = parseCredentials(mailbox);
   const oauth2Client = getAuthenticatedClient(credentials);
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
@@ -301,7 +332,7 @@ export async function sendDraft(mailboxId: string, externalDraftId: string): Pro
   const mailbox = await prisma.mailbox.findUnique({ where: { id: mailboxId } });
   if (!mailbox) throw new Error('Mailbox not found');
 
-  const credentials = mailbox.credentials as Record<string, unknown>;
+  const credentials = parseCredentials(mailbox);
   const oauth2Client = getAuthenticatedClient(credentials);
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
@@ -366,7 +397,9 @@ export async function processWebhook(data: { message: { data: string } }): Promi
         });
 
         // Get headers for threading
-        const headers = lastMessage.headers as Record<string, string>;
+        const headers = (typeof lastMessage.headers === 'string'
+          ? JSON.parse(lastMessage.headers)
+          : lastMessage.headers) as Record<string, string>;
         const inReplyToMessageId = headers.messageId;
         const existingRefs = headers.references ?? '';
         const referencesHeader = existingRefs

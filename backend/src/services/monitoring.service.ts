@@ -1,17 +1,15 @@
 import { prisma } from '../db/client';
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config';
-import { Prisma } from '@prisma/client';
-import type { LogLevel } from '@prisma/client';
 
 export async function logEvent(
   event: string,
   details: Record<string, unknown>,
-  level: LogLevel = 'INFO'
+  level: string = 'INFO'
 ): Promise<void> {
   try {
     await prisma.systemLog.create({
-      data: { event, details: details as Prisma.InputJsonValue, level },
+      data: { event, details: JSON.stringify(details), level },
     });
   } catch (err) {
     console.error('[Monitoring] Failed to log event:', err);

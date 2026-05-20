@@ -1,6 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../db/client';
-import { getAuthUrl, handleCallback, watchMailbox } from '../services/gmail.service';
+import { getAuthUrl, handleCallback, watchMailbox, createServiceAccountClient } from '../services/gmail.service';
 import { createError } from '../middleware/error';
 import { logEvent } from '../services/monitoring.service';
 
@@ -72,6 +72,53 @@ router.get(
     }
   }
 );
+
+// POST /api/mailboxes/workspace/connect
+router.post('/workspace/connect', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { emailAddresses } = req.body as { emailAddresses?: string[] };
+    if (!Array.isArray(emailAddresses) || emailAddresses.length === 0) {
+      return next(createError('emailAddresses must be a non-empty array', 400));
+    }
+
+    const results: Array<{ email: string; success: boolean; error?: string }> = [];
+
+    for (const email of emailAddresses) {
+      try {
+        // Validate by trying to list 1 message via service account
+        const gmail = await createServiceAccountClient(email);
+        await gmail.users.messages.list({ userId: email, maxResults: 1 });
+
+        const mailbox = await prisma.mailbox.upsert({
+          where: { emailAddress: email },
+          update: {
+            provider: 'GMAIL',
+            credentials: JSON.stringify({ type: 'service_account', impersonating: email }),
+            isActive: true,
+            updatedAt: new Date(),
+          },
+          create: {
+            provider: 'GMAIL',
+            emailAddress: email,
+            displayName: email,
+            credentials: JSON.stringify({ type: 'service_account', impersonating: email }),
+            isActive: true,
+          },
+        });
+
+        await logEvent('MAILBOX_WORKSPACE_CONNECTED', { mailboxId: mailbox.id, email }, 'INFO');
+        results.push({ email, success: true });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        results.push({ email, success: false, error: message });
+      }
+    }
+
+    res.json({ success: true, data: results });
+  } catch (err) {
+    next(err);
+  }
+});
 
 // DELETE /api/mailboxes/:id
 router.delete('/:id', async (req: Request, res: Response, next: NextFunction) => {

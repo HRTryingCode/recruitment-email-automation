@@ -3,71 +3,38 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
-
-enum MailboxProvider {
-  GMAIL
-  OUTLOOK
-  IMAP
-}
-
-enum CandidateStatus {
-  PENDING
-  INTERESTED
-  NOT_INTERESTED
-  NEUTRAL
-  REPLIED
-}
-
-enum DraftClassification {
-  INTERESTED
-  NOT_INTERESTED
-  NEUTRAL
-}
-
-enum DraftStatus {
-  PENDING
-  APPROVED
-  SENT
-  DISCARDED
-}
-
-enum LogLevel {
-  INFO
-  WARN
-  ERROR
+  provider = "sqlite"
+  url      = "file:./dev.db"
 }
 
 model Mailbox {
-  id           String          @id @default(cuid())
-  provider     MailboxProvider
-  emailAddress String          @unique
+  id           String        @id @default(cuid())
+  provider     String        @default("GMAIL")
+  emailAddress String        @unique
   displayName  String?
-  credentials  Json
+  credentials  String        @default("{}")
   watchExpiry  DateTime?
-  isActive     Boolean         @default(true)
-  createdAt    DateTime        @default(now())
-  updatedAt    DateTime        @updatedAt
+  isActive     Boolean       @default(true)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
   threads      EmailThread[]
   messages     EmailMessage[]
   candidates   Candidate[]
 }
 
 model Candidate {
-  id        String          @id @default(cuid())
+  id        String        @id @default(cuid())
   name      String
-  email     String          @unique
+  email     String        @unique
   company   String?
   title     String?
-  status    CandidateStatus @default(PENDING)
+  status    String        @default("PENDING")
   source    String?
   notes     String?
   mailboxId String?
-  mailbox   Mailbox?        @relation(fields: [mailboxId], references: [id])
-  createdAt DateTime        @default(now())
-  updatedAt DateTime        @updatedAt
+  mailbox   Mailbox?      @relation(fields: [mailboxId], references: [id])
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
   threads   EmailThread[]
 }
 
@@ -96,37 +63,37 @@ model EmailMessage {
   externalMessageId String      @unique
   fromAddress       String
   fromName          String?
-  toAddresses       String[]
+  toAddresses       String      @default("[]")
   subject           String
   bodyText          String?
   bodyHtml          String?
   receivedAt        DateTime
-  headers           Json
+  headers           String      @default("{}")
   createdAt         DateTime    @default(now())
 }
 
 model EmailDraft {
-  id                  String              @id @default(cuid())
-  threadId            String
-  thread              EmailThread         @relation(fields: [threadId], references: [id])
-  inReplyToMessageId  String?
-  referencesHeader    String?
-  subject             String
-  bodyText            String
-  bodyHtml            String?
-  classification      DraftClassification
-  confidence          Float
-  status              DraftStatus         @default(PENDING)
-  sentAt              DateTime?
-  externalDraftId     String?
-  createdAt           DateTime            @default(now())
-  updatedAt           DateTime            @updatedAt
+  id                 String      @id @default(cuid())
+  threadId           String
+  thread             EmailThread @relation(fields: [threadId], references: [id])
+  inReplyToMessageId String?
+  referencesHeader   String?
+  subject            String
+  bodyText           String
+  bodyHtml           String?
+  classification     String
+  confidence         Float
+  status             String      @default("PENDING")
+  sentAt             DateTime?
+  externalDraftId    String?
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
 }
 
 model SystemLog {
   id        String   @id @default(cuid())
   event     String
-  details   Json
-  level     LogLevel @default(INFO)
+  details   String   @default("{}")
+  level     String   @default("INFO")
   createdAt DateTime @default(now())
 }
