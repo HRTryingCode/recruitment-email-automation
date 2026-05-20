@@ -244,28 +244,21 @@ export async function renewGmailWatches(): Promise<void> {
 }
 
 export async function createServiceAccountClient(emailToImpersonate: string) {
-  const keyFilePath = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_FILE;
   const keyJson = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON;
 
-  if (!keyFilePath && !keyJson) {
-    throw new Error('No service account credentials configured. Set GOOGLE_SERVICE_ACCOUNT_KEY_FILE or GOOGLE_SERVICE_ACCOUNT_KEY_JSON.');
+  if (!keyJson) {
+    throw new Error("GOOGLE_SERVICE_ACCOUNT_KEY_JSON is not set — required for workspace OAuth");
   }
 
   const authOptions: {
     scopes: string[];
     subject: string;
-    keyFile?: string;
-    credentials?: Record<string, unknown>;
+    credentials: Record<string, unknown>;
   } = {
     scopes: ['https://www.googleapis.com/auth/gmail.modify'],
     subject: emailToImpersonate,
+    credentials: JSON.parse(keyJson) as Record<string, unknown>,
   };
-
-  if (keyFilePath) {
-    authOptions.keyFile = keyFilePath;
-  } else if (keyJson) {
-    authOptions.credentials = JSON.parse(keyJson) as Record<string, unknown>;
-  }
 
   const auth = new google.auth.GoogleAuth(authOptions);
   const authClient = await auth.getClient();
