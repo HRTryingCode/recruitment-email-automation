@@ -1,0 +1,132 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MailboxProvider {
+  GMAIL
+  OUTLOOK
+  IMAP
+}
+
+enum CandidateStatus {
+  PENDING
+  INTERESTED
+  NOT_INTERESTED
+  NEUTRAL
+  REPLIED
+}
+
+enum DraftClassification {
+  INTERESTED
+  NOT_INTERESTED
+  NEUTRAL
+}
+
+enum DraftStatus {
+  PENDING
+  APPROVED
+  SENT
+  DISCARDED
+}
+
+enum LogLevel {
+  INFO
+  WARN
+  ERROR
+}
+
+model Mailbox {
+  id           String          @id @default(cuid())
+  provider     MailboxProvider
+  emailAddress String          @unique
+  displayName  String?
+  credentials  Json
+  watchExpiry  DateTime?
+  isActive     Boolean         @default(true)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  threads      EmailThread[]
+  messages     EmailMessage[]
+  candidates   Candidate[]
+}
+
+model Candidate {
+  id        String          @id @default(cuid())
+  name      String
+  email     String          @unique
+  company   String?
+  title     String?
+  status    CandidateStatus @default(PENDING)
+  source    String?
+  notes     String?
+  mailboxId String?
+  mailbox   Mailbox?        @relation(fields: [mailboxId], references: [id])
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  threads   EmailThread[]
+}
+
+model EmailThread {
+  id               String         @id @default(cuid())
+  candidateId      String?
+  candidate        Candidate?     @relation(fields: [candidateId], references: [id])
+  mailboxId        String
+  mailbox          Mailbox        @relation(fields: [mailboxId], references: [id])
+  externalThreadId String
+  subject          String
+  lastMessageAt    DateTime       @default(now())
+  createdAt        DateTime       @default(now())
+  messages         EmailMessage[]
+  drafts           EmailDraft[]
+
+  @@unique([mailboxId, externalThreadId])
+}
+
+model EmailMessage {
+  id                String      @id @default(cuid())
+  threadId          String
+  thread            EmailThread @relation(fields: [threadId], references: [id])
+  mailboxId         String
+  mailbox           Mailbox     @relation(fields: [mailboxId], references: [id])
+  externalMessageId String      @unique
+  fromAddress       String
+  fromName          String?
+  toAddresses       String[]
+  subject           String
+  bodyText          String?
+  bodyHtml          String?
+  receivedAt        DateTime
+  headers           Json
+  createdAt         DateTime    @default(now())
+}
+
+model EmailDraft {
+  id                  String              @id @default(cuid())
+  threadId            String
+  thread              EmailThread         @relation(fields: [threadId], references: [id])
+  inReplyToMessageId  String?
+  referencesHeader    String?
+  subject             String
+  bodyText            String
+  bodyHtml            String?
+  classification      DraftClassification
+  confidence          Float
+  status              DraftStatus         @default(PENDING)
+  sentAt              DateTime?
+  externalDraftId     String?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+}
+
+model SystemLog {
+  id        String   @id @default(cuid())
+  event     String
+  details   Json
+  level     LogLevel @default(INFO)
+  createdAt DateTime @default(now())
+}
