@@ -485,17 +485,26 @@ async function classifyAndDraft(opts: {
   if (classification !== 'INTERESTED') return;
 
   try {
-    const draftReply = await generateDraftReply({
-      subject: thread.subject,
-      messages: allMessages.map((m) => ({
-        fromAddress: m.fromAddress,
-        fromName: m.fromName,
-        bodyText: m.bodyText,
-        receivedAt: m.receivedAt,
-      })),
-      candidateName: candidate.name,
-      classification,
-    });
+    const draftReply = await generateDraftReply(
+      {
+        subject: thread.subject,
+        messages: allMessages.map((m) => ({
+          fromAddress: m.fromAddress,
+          fromName: m.fromName,
+          bodyText: m.bodyText,
+          receivedAt: m.receivedAt,
+        })),
+        candidateName: candidate.name,
+        classification,
+      },
+      // Ghostwrite the draft as the mailbox owner (Paul / Em / etc.), not as a
+      // fixed company-wide persona. Sofia is the CC recipient (Phase I), not
+      // the sender persona.
+      {
+        email: mailbox.emailAddress,
+        displayName: mailbox.displayName,
+      }
+    );
 
     const inReplyToMessageId = parsed.headers.messageId || null;
     const existingRefs = parsed.headers.references ?? '';

@@ -126,6 +126,43 @@ export interface ThreadContext {
   classification: 'INTERESTED' | 'NOT_INTERESTED' | 'NEUTRAL';
 }
 
+/**
+ * Identity of the recruiter whose inbox is receiving this message — the persona
+ * the draft should be ghostwritten as. We sign each draft as the mailbox owner
+ * (e.g. Paul, Em), not as a fixed company-wide persona.
+ */
+export type DraftCaller = {
+  email: string;              // e.g. paul.b@archive.com
+  displayName: string | null; // e.g. "Paul Bourgeois" (from Gmail OAuth)
+};
+
+/**
+ * Derive a first name to sign drafts with. Prefers the OAuth displayName, falls
+ * back to the email local-part split on common separators and title-cased.
+ *
+ * Examples:
+ *   { displayName: "Paul Bourgeois", email: "paul.b@archive.com" } → "Paul"
+ *   { displayName: null, email: "paul.b@archive.com" }              → "Paul"
+ *   { displayName: null, email: "emaenza@archive.com" }             → "Emaenza"
+ *   { displayName: null, email: "john_smith@archive.com" }          → "John"
+ *   { displayName: "paul.b@archive.com", email: "paul.b@archive.com" } → "Paul"
+ */
+function deriveFirstName(caller: DraftCaller): string {
+  const trimmed = (caller.displayName ?? '').trim();
+  const emailLc = caller.email.trim().toLowerCase();
+  const looksLikeEmail = trimmed.toLowerCase() === emailLc;
+  if (trimmed.length > 0 && !looksLikeEmail) {
+    // Take the first whitespace-separated token from the display name.
+    const first = trimmed.split(/\s+/)[0] ?? trimmed;
+    return first.charAt(0).toUpperCase() + first.slice(1);
+  }
+  const local = (caller.email.split('@')[0] ?? '').trim();
+  if (!local) return 'there';
+  const firstSegment = local.split(/[._-]/)[0] ?? local;
+  if (!firstSegment) return 'there';
+  return firstSegment.charAt(0).toUpperCase() + firstSegment.slice(1).toLowerCase();
+}
+
 export interface ClassifyThreadContext {
   /** Subject of the thread (for first-vs-followup signal). */
   subject?: string;
@@ -313,7 +350,8 @@ ${emailBody}`,
 }
 
 export async function generateDraftReply(
-  thread: ThreadContext
+  thread: ThreadContext,
+  caller: DraftCaller
 ): Promise<DraftReplyResult> {
   const messagesContext = thread.messages
     .map((m) => {
@@ -323,6 +361,8 @@ export async function generateDraftReply(
     })
     .join('\n\n---\n\n');
 
+  const firstName = deriveFirstName(caller);
+
   const response = await client.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 2048,
@@ -330,7 +370,13 @@ export async function generateDraftReply(
     messages: [
       {
         role: 'user',
-        content: `Generate a personalized reply email for candidate ${thread.candidateName}.
+        content: `You are ghostwriting this reply as the mailbox owner. Sign the reply as them — do NOT mention or invent any other Archive recruiter or co-worker.
+
+Persona to write as:
+- First name (use this in the sign-off): ${firstName}
+- Email: ${caller.email}
+
+Generate a personalized reply email for candidate ${thread.candidateName}.
 
 Thread subject: ${thread.subject}
 Classification: ${thread.classification}
@@ -350,7 +396,8 @@ Requirements:
 - Be appropriate for the classification (${thread.classification})
 - Keep it concise and action-oriented
 - Subject should be prefixed with "Re: " if replying to existing thread
-- HTML version should use simple formatting (no complex CSS)`,
+- HTML version should use simple formatting (no complex CSS)
+- Sign off with the persona's first name (${firstName}). Do not invent or mention any other person from Archive's team.`,
       },
     ],
   });
