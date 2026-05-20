@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
+import { OAuth2Client } from 'google-auth-library';
 import { prisma } from '../db/client';
 import {
   hashPassword,
@@ -8,6 +9,7 @@ import {
 } from '../services/auth.service';
 import { requireAuth } from '../middleware/requireAuth';
 import { createError } from '../middleware/error';
+import { config } from '../config';
 
 const router = Router();
 
@@ -22,16 +24,24 @@ const loginSchema = z.object({
   password: z.string().min(1).max(128),
 });
 
+const googleSchema = z.object({
+  idToken: z.string().min(1),
+});
+
+const oauthClient = new OAuth2Client(config.gmail.clientId);
+
 function publicUser(user: {
   id: string;
   email: string;
   name: string | null;
+  avatarUrl?: string | null;
   createdAt: Date;
 }) {
   return {
     id: user.id,
     email: user.email,
     name: user.name,
+    avatarUrl: user.avatarUrl ?? null,
     createdAt: user.createdAt,
   };
 }
@@ -80,13 +90,81 @@ router.post(
       const { email, password } = parsed.data;
 
       const user = await prisma.user.findUnique({ where: { email } });
-      if (!user) {
+      if (!user || !user.passwordHash) {
         return next(createError('Invalid email or password', 401));
       }
 
       const ok = await verifyPassword(password, user.passwordHash);
       if (!ok) {
         return next(createError('Invalid email or password', 401));
+      }
+
+      const token = issueToken(user.id);
+      res.json({
+        success: true,
+        data: { token, user: publicUser(user) },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// POST /api/auth/google
+router.post(
+  '/google',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const parsed = googleSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return next(createError(parsed.error.errors[0]?.message ?? 'Invalid input', 400));
+      }
+      const { idToken } = parsed.data;
+
+      if (!config.gmail.clientId) {
+        return next(createError('Google sign-in is not configured', 500));
+      }
+
+      let payload;
+      try {
+        const ticket = await oauthClient.verifyIdToken({
+          idToken,
+          audience: config.gmail.clientId,
+        });
+        payload = ticket.getPayload();
+      } catch {
+        return next(createError('Invalid Google ID token', 401));
+      }
+
+      if (!payload?.email || !payload.email_verified || !payload.sub) {
+        return next(createError('Google account email is not verified', 401));
+      }
+
+      const email = payload.email.toLowerCase();
+      const googleId = payload.sub;
+      const name = payload.name ?? null;
+      const avatarUrl = payload.picture ?? null;
+
+      const existing = await prisma.user.findUnique({ where: { email } });
+      let user;
+      if (existing) {
+        user = await prisma.user.update({
+          where: { id: existing.id },
+          data: {
+            googleId: existing.googleId ?? googleId,
+            avatarUrl: existing.avatarUrl ?? avatarUrl,
+            name: existing.name ?? name,
+          },
+        });
+      } else {
+        user = await prisma.user.create({
+          data: {
+            email,
+            googleId,
+            avatarUrl,
+            name,
+          },
+        });
       }
 
       const token = issueToken(user.id);

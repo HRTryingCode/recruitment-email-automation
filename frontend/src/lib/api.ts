@@ -268,6 +268,12 @@ export async function login(email: string, password: string): Promise<AuthRespon
   return body.data;
 }
 
+export async function loginWithGoogle(idToken: string): Promise<AuthResponse> {
+  const res = await api.post('/auth/google', { idToken });
+  const body = res.data as SingleResponse<AuthResponse>;
+  return body.data;
+}
+
 export async function getMe(): Promise<User> {
   const res = await api.get('/auth/me');
   const body = res.data as SingleResponse<{ user: User }>;
