@@ -16,6 +16,7 @@ const STATUS_COLORS: Record<Candidate['status'], string> = {
   NEUTRAL: 'bg-gray-800 text-gray-300 border border-gray-600',
   PENDING: 'bg-yellow-900/60 text-yellow-300 border border-yellow-700',
   REPLIED: 'bg-blue-900/60 text-blue-300 border border-blue-700',
+  NEEDS_REVIEW: 'bg-amber-900/60 text-amber-300 border border-amber-600',
 };
 
 const STATUS_LABELS: Record<Candidate['status'], string> = {
@@ -24,6 +25,7 @@ const STATUS_LABELS: Record<Candidate['status'], string> = {
   NEUTRAL: 'Neutral',
   PENDING: 'Pending',
   REPLIED: 'Replied',
+  NEEDS_REVIEW: 'Needs Review',
 };
 
 function ReplyStatusBadge({ candidate }: { candidate: Candidate }) {
@@ -152,6 +154,7 @@ export default function CandidateTable({ mailboxId }: Props) {
           <option value="NOT_INTERESTED">Not Interested</option>
           <option value="NEUTRAL">Neutral</option>
           <option value="REPLIED">Replied</option>
+          <option value="NEEDS_REVIEW">Needs Review</option>
         </select>
         <span className="text-gray-500 text-sm">
           {data?.meta.total ?? 0} candidates
@@ -272,6 +275,7 @@ export default function CandidateTable({ mailboxId }: Props) {
                           <option value="NOT_INTERESTED">Not Interested</option>
                           <option value="NEUTRAL">Neutral</option>
                           <option value="REPLIED">Replied</option>
+                          <option value="NEEDS_REVIEW">Needs Review</option>
                         </select>
                       </td>
                     </tr>

@@ -11,7 +11,14 @@ const updateCandidateSchema = z.object({
   company: z.string().optional(),
   title: z.string().optional(),
   status: z
-    .enum(['PENDING', 'INTERESTED', 'NOT_INTERESTED', 'NEUTRAL', 'REPLIED'])
+    .enum([
+      'PENDING',
+      'INTERESTED',
+      'NOT_INTERESTED',
+      'NEUTRAL',
+      'REPLIED',
+      'NEEDS_REVIEW',
+    ])
     .optional(),
   notes: z.string().optional(),
 });

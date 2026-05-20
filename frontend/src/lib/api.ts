@@ -57,7 +57,13 @@ export interface Candidate {
   email: string;
   company?: string;
   title?: string;
-  status: 'PENDING' | 'INTERESTED' | 'NOT_INTERESTED' | 'NEUTRAL' | 'REPLIED';
+  status:
+    | 'PENDING'
+    | 'INTERESTED'
+    | 'NOT_INTERESTED'
+    | 'NEUTRAL'
+    | 'REPLIED'
+    | 'NEEDS_REVIEW';
   source?: string;
   notes?: string;
   mailboxId?: string;
