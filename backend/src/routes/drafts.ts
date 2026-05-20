@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../db/client';
 import { createError } from '../middleware/error';
 import { createDraft, sendDraft as gmailSendDraft } from '../services/gmail.service';
+import { classifyReply, generateDraftReply } from '../services/claude.service';
 import { logEvent } from '../services/monitoring.service';
 import { z } from 'zod';
 
@@ -226,6 +227,166 @@ router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => 
     });
 
     res.json({ success: true, data: updated });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Internal: re-run classifier + draft generator on an existing PENDING draft.
+// Returns either the updated draft + resolved originalMessage, or an error
+// shape (kept as a discriminated union so the bulk endpoint can collect
+// per-draft skip reasons without try/catching on validation outcomes).
+type RegenerateOk = {
+  ok: true;
+  draft: Awaited<ReturnType<typeof prisma.emailDraft.update>>;
+  originalMessage: OriginalMessagePayload;
+  mailboxId: string;
+};
+type RegenerateFail = { ok: false; status: number; message: string };
+
+async function regenerateDraftById(id: string): Promise<RegenerateOk | RegenerateFail> {
+  const draft = await prisma.emailDraft.findUnique({
+    where: { id },
+    include: {
+      thread: {
+        include: {
+          messages: { orderBy: { receivedAt: 'desc' } },
+          candidate: true,
+          mailbox: true,
+        },
+      },
+    },
+  });
+
+  if (!draft) return { ok: false, status: 404, message: 'Draft not found' };
+  if (draft.status !== 'PENDING') {
+    return { ok: false, status: 400, message: 'Can only regenerate pending drafts' };
+  }
+
+  const thread = draft.thread;
+  const mailbox = thread.mailbox;
+  const candidate = thread.candidate;
+  if (!candidate) {
+    return { ok: false, status: 400, message: 'Thread has no candidate' };
+  }
+
+  const originalMessage = pickOriginalMessage(
+    thread.messages,
+    mailbox,
+    draft.inReplyToMessageId
+  );
+  if (!originalMessage) {
+    return { ok: false, status: 400, message: 'No inbound message to reply to' };
+  }
+
+  // Re-classify the inbound message so the draft's classification/confidence
+  // reflect the current classifier prompt. previousMessages = thread history
+  // strictly before the inbound, oldest → newest (same shape sync uses).
+  const inboundTs = originalMessage.receivedAt.getTime();
+  const previousMessages = thread.messages
+    .filter((m) => m.receivedAt.getTime() < inboundTs)
+    .sort((a, b) => a.receivedAt.getTime() - b.receivedAt.getTime())
+    .map((m) => ({
+      fromAddress: m.fromAddress,
+      fromName: m.fromName,
+      bodyText: m.bodyText,
+      receivedAt: m.receivedAt,
+    }));
+
+  const classificationResult = await classifyReply(
+    originalMessage.bodyText || originalMessage.bodyHtml || originalMessage.subject,
+    originalMessage.fromName ?? candidate.name,
+    { subject: thread.subject, previousMessages }
+  );
+
+  const allMessagesAsc = thread.messages
+    .slice()
+    .sort((a, b) => a.receivedAt.getTime() - b.receivedAt.getTime())
+    .map((m) => ({
+      fromAddress: m.fromAddress,
+      fromName: m.fromName,
+      bodyText: m.bodyText,
+      receivedAt: m.receivedAt,
+    }));
+
+  const draftReply = await generateDraftReply(
+    {
+      subject: thread.subject,
+      messages: allMessagesAsc,
+      candidateName: candidate.name,
+      classification: classificationResult.classification,
+    },
+    {
+      email: mailbox.emailAddress,
+      displayName: mailbox.displayName,
+    }
+  );
+
+  const updated = await prisma.emailDraft.update({
+    where: { id },
+    data: {
+      subject: draftReply.subject,
+      bodyText: draftReply.bodyText,
+      bodyHtml: draftReply.bodyHtml,
+      classification: classificationResult.classification,
+      confidence: classificationResult.confidence,
+    },
+  });
+
+  await logEvent('DRAFT_REGENERATED', { draftId: id, mailboxId: mailbox.id }, 'INFO');
+
+  return { ok: true, draft: updated, originalMessage, mailboxId: mailbox.id };
+}
+
+// POST /api/drafts/regenerate-pending
+// Bulk re-runs Claude on every PENDING draft attached to an active mailbox.
+// Capped at 50 per request to stay inside Vercel's function timeout.
+router.post('/regenerate-pending', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const pending = await prisma.emailDraft.findMany({
+      where: {
+        status: 'PENDING',
+        thread: { mailbox: { isActive: true } },
+      },
+      select: { id: true },
+      orderBy: { createdAt: 'asc' },
+      take: 50,
+    });
+
+    let regenerated = 0;
+    const skipped: string[] = [];
+    for (const { id } of pending) {
+      try {
+        const result = await regenerateDraftById(id);
+        if (result.ok) {
+          regenerated += 1;
+        } else {
+          skipped.push(`${id}: ${result.message}`);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        skipped.push(`${id}: ${message}`);
+      }
+    }
+
+    res.json({ success: true, regenerated, skipped });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/drafts/:id/regenerate
+router.post('/:id/regenerate', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = String(req.params.id);
+    const result = await regenerateDraftById(id);
+    if (!result.ok) {
+      return next(createError(result.message, result.status));
+    }
+    res.json({
+      success: true,
+      data: { ...result.draft, originalMessage: result.originalMessage },
+    });
   } catch (err) {
     next(err);
   }

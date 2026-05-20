@@ -6,9 +6,11 @@ import {
   discardDraft,
   sendDraft,
   updateDraft,
+  regenerateDraft,
   type EmailDraft,
   type OriginalMessage,
 } from '../lib/api';
+import axios from 'axios';
 import { cn, formatTimeAgo } from '../lib/utils';
 import { Check, X, Send, Edit2, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
 
@@ -126,12 +128,18 @@ function DraftCard({
   onDiscard,
   onSend,
   onUpdate,
+  onRegenerate,
+  regenerating,
+  regenerateError,
 }: {
   draft: EmailDraft;
   onApprove: (id: string) => void;
   onDiscard: (id: string) => void;
   onSend: (id: string) => void;
   onUpdate: (id: string, body: string) => void;
+  onRegenerate: (id: string) => void;
+  regenerating: boolean;
+  regenerateError: string | null;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -227,28 +235,44 @@ function DraftCard({
 
           {/* Actions */}
           {draft.status === 'PENDING' && !editing && (
-            <div className="flex items-center gap-2 px-4 pb-4">
-              <button
-                onClick={() => onApprove(draft.id)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-green-700 hover:bg-green-600 text-white text-sm rounded-lg transition-colors"
-              >
-                <Check className="w-3.5 h-3.5" />
-                Approve
-              </button>
-              <button
-                onClick={() => setEditing(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded-lg transition-colors"
-              >
-                <Edit2 className="w-3.5 h-3.5" />
-                Edit
-              </button>
-              <button
-                onClick={() => onDiscard(draft.id)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-red-900/60 hover:bg-red-800 text-red-300 text-sm rounded-lg transition-colors"
-              >
-                <X className="w-3.5 h-3.5" />
-                Discard
-              </button>
+            <div className="px-4 pb-4 space-y-2">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => onApprove(draft.id)}
+                  disabled={regenerating}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-green-700 hover:bg-green-600 text-white text-sm rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  Approve
+                </button>
+                <button
+                  onClick={() => setEditing(true)}
+                  disabled={regenerating}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Edit2 className="w-3.5 h-3.5" />
+                  Edit
+                </button>
+                <button
+                  onClick={() => onDiscard(draft.id)}
+                  disabled={regenerating}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-red-900/60 hover:bg-red-800 text-red-300 text-sm rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  Discard
+                </button>
+                <button
+                  onClick={() => onRegenerate(draft.id)}
+                  disabled={regenerating}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <RefreshCw className={cn('w-3.5 h-3.5', regenerating && 'animate-spin')} />
+                  {regenerating ? 'Regenerating…' : 'Regenerate'}
+                </button>
+              </div>
+              {regenerateError && (
+                <p className="text-red-400 text-xs">{regenerateError}</p>
+              )}
             </div>
           )}
 
@@ -315,6 +339,24 @@ export default function EmailDrafts({ mailboxId: _mailboxId }: Props) {
       void queryClient.invalidateQueries({ queryKey: ['drafts'] });
     },
   });
+
+  const regenerateMutation = useMutation({
+    mutationFn: regenerateDraft,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['drafts'] });
+    },
+  });
+
+  const regenerateErrorMessage = (id: string): string | null => {
+    if (regenerateMutation.variables !== id) return null;
+    if (regenerateMutation.isPending || !regenerateMutation.isError) return null;
+    const err = regenerateMutation.error;
+    if (axios.isAxiosError(err)) {
+      const data = err.response?.data as { error?: string } | undefined;
+      return data?.error ?? err.message;
+    }
+    return err instanceof Error ? err.message : 'Failed to regenerate draft';
+  };
 
   const drafts = data?.data ?? [];
   const total = data?.meta.total ?? 0;
@@ -384,6 +426,11 @@ export default function EmailDrafts({ mailboxId: _mailboxId }: Props) {
                 onDiscard={(id) => discardMutation.mutate(id)}
                 onSend={(id) => sendMutation.mutate(id)}
                 onUpdate={(id, bodyText) => updateMutation.mutate({ id, bodyText })}
+                onRegenerate={(id) => regenerateMutation.mutate(id)}
+                regenerating={
+                  regenerateMutation.isPending && regenerateMutation.variables === draft.id
+                }
+                regenerateError={regenerateErrorMessage(draft.id)}
               />
             ))}
 

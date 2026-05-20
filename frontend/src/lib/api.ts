@@ -261,6 +261,11 @@ export async function sendDraft(id: string): Promise<{ success: boolean; message
   return res.data as { success: boolean; message: string };
 }
 
+export async function regenerateDraft(id: string): Promise<SingleResponse<EmailDraft>> {
+  const res = await api.post(`/drafts/${id}/regenerate`);
+  return res.data as SingleResponse<EmailDraft>;
+}
+
 // Health
 export async function fetchHealth(): Promise<SingleResponse<HealthStatus>> {
   const res = await api.get('/health');
