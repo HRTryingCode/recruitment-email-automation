@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { fetchMailboxes, addGmailMailbox } from '../lib/api';
+import { fetchMailboxes, addGmailMailbox, fetchDrafts } from '../lib/api';
 import Dashboard from '../components/Dashboard';
 import EmailDrafts from '../components/EmailDrafts';
 import CandidateTable from '../components/CandidateTable';
@@ -20,7 +20,14 @@ export default function Index() {
     staleTime: 60_000,
   });
 
+  const { data: draftsData } = useQuery({
+    queryKey: ['drafts'],
+    queryFn: () => fetchDrafts({ limit: 1000 }),
+    staleTime: 30_000,
+  });
+
   const mailboxes = mailboxesData?.data ?? [];
+  const pendingDraftCount = (draftsData?.data ?? []).filter((d) => d.status === 'PENDING').length;
 
   const handleAddMailbox = async () => {
     try {
@@ -31,9 +38,9 @@ export default function Index() {
     }
   };
 
-  const tabs: { id: Tab; label: string }[] = [
+  const tabs: { id: Tab; label: string; badge?: number }[] = [
     { id: 'dashboard', label: 'Dashboard' },
-    { id: 'drafts', label: 'Email Drafts' },
+    { id: 'drafts', label: 'Email Drafts', badge: pendingDraftCount > 0 ? pendingDraftCount : undefined },
     { id: 'candidates', label: 'Candidates' },
   ];
 
@@ -80,13 +87,18 @@ export default function Index() {
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 className={cn(
-                  'px-4 py-3 text-sm font-medium border-b-2 transition-colors',
+                  'px-4 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2',
                   activeTab === tab.id
                     ? 'border-blue-500 text-blue-400'
                     : 'border-transparent text-gray-400 hover:text-gray-200'
                 )}
               >
                 {tab.label}
+                {tab.badge !== undefined && tab.badge > 0 && (
+                  <span className="px-1.5 py-0.5 bg-red-500 text-white text-xs font-bold rounded-full leading-none">
+                    {tab.badge}
+                  </span>
+                )}
               </button>
             ))}
           </nav>
@@ -96,7 +108,11 @@ export default function Index() {
       {/* Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {activeTab === 'dashboard' && (
-          <Dashboard mailboxId={selectedMailboxId} onRefetchMailboxes={refetchMailboxes} />
+          <Dashboard
+            mailboxId={selectedMailboxId}
+            onRefetchMailboxes={refetchMailboxes}
+            onSwitchToDrafts={() => setActiveTab('drafts')}
+          />
         )}
         {activeTab === 'drafts' && <EmailDrafts mailboxId={selectedMailboxId} />}
         {activeTab === 'candidates' && (

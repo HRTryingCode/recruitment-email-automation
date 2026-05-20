@@ -1,9 +1,9 @@
 import { prisma } from '../db/client';
 import { syncMessages as gmailSync } from './gmail.service';
-import type { Mailbox, MailboxProvider } from '@prisma/client';
+import type { Mailbox } from '@prisma/client';
 
 export function getService(mailbox: Mailbox): { sync: () => Promise<void> } {
-  const provider: MailboxProvider = mailbox.provider;
+  const provider = mailbox.provider;
   switch (provider) {
     case 'GMAIL':
       return {
