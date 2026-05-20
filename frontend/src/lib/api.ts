@@ -1,9 +1,40 @@
 import axios from 'axios';
+import { getToken, clearToken, clearUser, type User } from './auth';
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL ?? '/api',
   headers: { 'Content-Type': 'application/json' },
 });
+
+// Inject Bearer token on every request if available
+api.interceptors.request.use((config) => {
+  const token = getToken();
+  if (token) {
+    config.headers = config.headers ?? {};
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// On 401, clear auth state and bounce to /login — but skip /auth/* routes
+// because login/signup pages display their own error messages.
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const status = error?.response?.status;
+    const url: string | undefined = error?.config?.url;
+    if (status === 401 && url && !url.startsWith('/auth/')) {
+      clearToken();
+      clearUser();
+      if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+        window.location.assign('/login');
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
+export type { User };
 
 // Types
 export interface Mailbox {
@@ -213,4 +244,32 @@ export async function sendDraft(id: string): Promise<{ success: boolean; message
 export async function fetchHealth(): Promise<SingleResponse<HealthStatus>> {
   const res = await api.get('/health');
   return res.data as SingleResponse<HealthStatus>;
+}
+
+// Auth
+interface AuthResponse {
+  token: string;
+  user: User;
+}
+
+export async function signup(
+  email: string,
+  password: string,
+  name?: string
+): Promise<AuthResponse> {
+  const res = await api.post('/auth/signup', { email, password, name });
+  const body = res.data as SingleResponse<AuthResponse>;
+  return body.data;
+}
+
+export async function login(email: string, password: string): Promise<AuthResponse> {
+  const res = await api.post('/auth/login', { email, password });
+  const body = res.data as SingleResponse<AuthResponse>;
+  return body.data;
+}
+
+export async function getMe(): Promise<User> {
+  const res = await api.get('/auth/me');
+  const body = res.data as SingleResponse<{ user: User }>;
+  return body.data.user;
 }
