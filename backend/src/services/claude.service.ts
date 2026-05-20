@@ -92,6 +92,17 @@ export interface ThreadContext {
   classification: 'INTERESTED' | 'NOT_INTERESTED' | 'NEUTRAL';
 }
 
+// Build cached system block - use type assertion for cache_control
+// which is supported at runtime but may not be in all SDK type definitions
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const CACHED_SYSTEM: any[] = [
+  {
+    type: 'text',
+    text: ARCHIVE_SYSTEM_PROMPT,
+    cache_control: { type: 'ephemeral' },
+  },
+];
+
 export async function classifyReply(
   emailBody: string,
   candidateName: string
@@ -99,13 +110,7 @@ export async function classifyReply(
   const response = await client.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 1024,
-    system: [
-      {
-        type: 'text',
-        text: ARCHIVE_SYSTEM_PROMPT,
-        cache_control: { type: 'ephemeral' },
-      },
-    ],
+    system: CACHED_SYSTEM,
     messages: [
       {
         role: 'user',
@@ -130,7 +135,6 @@ ${emailBody}`,
   }
 
   try {
-    // Extract JSON from the response
     const jsonMatch = textContent.text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       throw new Error('No JSON found in response');
@@ -156,13 +160,7 @@ export async function generateDraftReply(
   const response = await client.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 2048,
-    system: [
-      {
-        type: 'text',
-        text: ARCHIVE_SYSTEM_PROMPT,
-        cache_control: { type: 'ephemeral' },
-      },
-    ],
+    system: CACHED_SYSTEM,
     messages: [
       {
         role: 'user',
