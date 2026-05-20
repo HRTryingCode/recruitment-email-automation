@@ -1,0 +1,18 @@
+{
+  "buildCommand": "npm run vercel-build --workspace=backend && npm run build --workspace=frontend",
+  "outputDirectory": "frontend/dist",
+  "installCommand": "npm install",
+  "framework": null,
+  "functions": {
+    "api/index.ts": {
+      "runtime": "@vercel/node@5",
+      "includeFiles": "backend/**"
+    }
+  },
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "/api/index" }
+  ],
+  "crons": [
+    { "path": "/api/internal/cron/renew-watches", "schedule": "0 */6 * * *" }
+  ]
+}
