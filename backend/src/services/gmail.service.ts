@@ -67,6 +67,11 @@ export function getAuthUrl(state: string): string {
     'https://www.googleapis.com/auth/gmail.readonly',
     'https://www.googleapis.com/auth/gmail.compose',
     'https://www.googleapis.com/auth/gmail.modify',
+    // Needed so we can fetch the connected user's real display name
+    // (e.g. "Ethan Maenza") and store it on Mailbox.displayName. Phase J
+    // derives the draft signing persona from this field.
+    'https://www.googleapis.com/auth/userinfo.profile',
+    'https://www.googleapis.com/auth/userinfo.email',
   ];
 
   return oauth2Client.generateAuthUrl({
@@ -75,6 +80,29 @@ export function getAuthUrl(state: string): string {
     state,
     prompt: 'consent',
   });
+}
+
+/**
+ * Fetch the OAuth user's profile (name, email, picture) via the userinfo
+ * endpoint. Requires the userinfo.profile scope. Returns null if the call
+ * fails (e.g. user granted older scopes without userinfo.profile).
+ */
+export async function fetchUserInfo(
+  oauth2Client: OAuth2Client
+): Promise<{ name?: string; email?: string; picture?: string; givenName?: string } | null> {
+  try {
+    const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+    const res = await oauth2.userinfo.get();
+    return {
+      name: res.data.name ?? undefined,
+      email: res.data.email ?? undefined,
+      picture: res.data.picture ?? undefined,
+      givenName: res.data.given_name ?? undefined,
+    };
+  } catch (err) {
+    console.warn('[Gmail] userinfo.get failed:', err instanceof Error ? err.message : err);
+    return null;
+  }
 }
 
 export async function handleCallback(code: string, mailboxId?: string): Promise<Mailbox> {
@@ -88,11 +116,18 @@ export async function handleCallback(code: string, mailboxId?: string): Promise<
   // Baseline historyId so the first incremental sync isn't empty.
   const baselineHistoryId = profile.data.historyId ?? null;
 
+  // Pull the real display name (e.g. "Ethan Maenza") via userinfo. Falls back
+  // to the email if the scope wasn't granted or the call fails.
+  const userInfo = await fetchUserInfo(oauth2Client);
+  const resolvedDisplayName =
+    userInfo?.name && userInfo.name.trim().length > 0 ? userInfo.name.trim() : emailAddress;
+
   const encryptedCreds = serializeCredentials(tokens as Record<string, unknown>);
   const mailbox = await prisma.mailbox.upsert({
     where: { emailAddress },
     update: {
       credentials: encryptedCreds,
+      displayName: resolvedDisplayName,
       isActive: true,
       // Reset historyId baseline on reconnect so the next webhook starts fresh.
       lastHistoryId: baselineHistoryId,
@@ -101,14 +136,18 @@ export async function handleCallback(code: string, mailboxId?: string): Promise<
     create: {
       provider: 'GMAIL',
       emailAddress,
-      displayName: emailAddress,
+      displayName: resolvedDisplayName,
       credentials: encryptedCreds,
       lastHistoryId: baselineHistoryId,
       isActive: true,
     },
   });
 
-  await logEvent('MAILBOX_CONNECTED', { mailboxId: mailbox.id, emailAddress }, 'INFO');
+  await logEvent(
+    'MAILBOX_CONNECTED',
+    { mailboxId: mailbox.id, emailAddress, displayName: resolvedDisplayName },
+    'INFO'
+  );
   return mailbox;
 }
 
@@ -809,6 +848,61 @@ export async function syncIncremental(
   );
 
   return newMessageIds.size;
+}
+
+/**
+ * Resolve a mailbox owner's real display name for backfill.
+ *
+ * Strategy (in order):
+ *   1. Try userinfo via the stored OAuth credentials. Will fail if the user
+ *      connected before Phase L added the userinfo.profile scope.
+ *   2. Fall back to the most recent outbound `EmailMessage.fromName` for this
+ *      mailbox (i.e. messages the owner has sent — their own client typically
+ *      sets the From header to their real display name).
+ *
+ * Returns the resolved name + which source it came from, or null if neither
+ * source produced a usable name. Callers decide what error to surface.
+ */
+export async function resolveMailboxDisplayName(
+  mailbox: Mailbox
+): Promise<{ displayName: string; source: 'userinfo' | 'sent_messages' } | null> {
+  // 1. Try userinfo.
+  try {
+    const credentials = parseCredentials(mailbox);
+    if (Object.keys(credentials).length > 0) {
+      const oauth2Client = getAuthenticatedClient(credentials);
+      const info = await fetchUserInfo(oauth2Client);
+      if (info?.name && info.name.trim().length > 0) {
+        return { displayName: info.name.trim(), source: 'userinfo' };
+      }
+    }
+  } catch (err) {
+    console.warn(
+      `[Gmail] userinfo path failed for mailbox ${mailbox.id}:`,
+      err instanceof Error ? err.message : err
+    );
+  }
+
+  // 2. Fall back to inferring from sent messages. We look for outbound
+  // messages where fromAddress matches the mailbox owner; their mail client
+  // usually puts "Real Name <email>" in the From header, which we already
+  // parsed into fromName at sync time.
+  const recentOutbound = await prisma.emailMessage.findFirst({
+    where: {
+      mailboxId: mailbox.id,
+      fromAddress: { equals: mailbox.emailAddress, mode: 'insensitive' },
+      fromName: { not: null },
+    },
+    orderBy: { receivedAt: 'desc' },
+    select: { fromName: true },
+  });
+
+  const inferred = recentOutbound?.fromName?.trim();
+  if (inferred && inferred.length > 0 && inferred.toLowerCase() !== mailbox.emailAddress.toLowerCase()) {
+    return { displayName: inferred, source: 'sent_messages' };
+  }
+
+  return null;
 }
 
 export async function watchMailbox(mailboxId: string): Promise<void> {

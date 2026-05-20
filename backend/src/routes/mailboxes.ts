@@ -4,6 +4,7 @@ import { prisma } from '../db/client';
 import {
   getAuthUrl,
   createServiceAccountClient,
+  resolveMailboxDisplayName,
   serializeCredentials,
   syncMessages,
 } from '../services/gmail.service';
@@ -141,6 +142,156 @@ router.post('/workspace/connect', async (req: Request, res: Response, next: Next
     next(err);
   }
 });
+
+// POST /api/mailboxes/refresh-all-profiles
+// Bulk version of refresh-profile. Loops over active mailboxes and refreshes
+// each one's displayName using the same userinfo → sent-messages fallback.
+// Capped at 25 mailboxes per request to fit within Vercel's serverless
+// timeout (we hit Google userinfo for each).
+router.post(
+  '/refresh-all-profiles',
+  async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const mailboxes = await prisma.mailbox.findMany({
+        where: { isActive: true },
+        orderBy: { createdAt: 'asc' },
+        take: 25,
+      });
+
+      let updated = 0;
+      let unchanged = 0;
+      let failed = 0;
+      const details: Array<{
+        id: string;
+        emailAddress: string;
+        result: 'updated' | 'unchanged' | 'failed';
+        displayName?: string;
+        source?: 'userinfo' | 'sent_messages';
+        error?: string;
+      }> = [];
+
+      for (const mailbox of mailboxes) {
+        try {
+          const resolved = await resolveMailboxDisplayName(mailbox);
+          if (!resolved) {
+            failed += 1;
+            details.push({
+              id: mailbox.id,
+              emailAddress: mailbox.emailAddress,
+              result: 'failed',
+              error:
+                'Could not infer display name; user should re-OAuth to grant the profile scope',
+            });
+            continue;
+          }
+
+          if (resolved.displayName === mailbox.displayName) {
+            unchanged += 1;
+            details.push({
+              id: mailbox.id,
+              emailAddress: mailbox.emailAddress,
+              result: 'unchanged',
+              displayName: resolved.displayName,
+              source: resolved.source,
+            });
+            continue;
+          }
+
+          await prisma.mailbox.update({
+            where: { id: mailbox.id },
+            data: { displayName: resolved.displayName },
+          });
+          await logEvent(
+            'MAILBOX_DISPLAYNAME_REFRESHED',
+            {
+              mailboxId: mailbox.id,
+              displayName: resolved.displayName,
+              source: resolved.source,
+            },
+            'INFO'
+          );
+          updated += 1;
+          details.push({
+            id: mailbox.id,
+            emailAddress: mailbox.emailAddress,
+            result: 'updated',
+            displayName: resolved.displayName,
+            source: resolved.source,
+          });
+        } catch (err) {
+          failed += 1;
+          details.push({
+            id: mailbox.id,
+            emailAddress: mailbox.emailAddress,
+            result: 'failed',
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      res.json({
+        success: true,
+        data: { updated, unchanged, failed, total: mailboxes.length, details },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// POST /api/mailboxes/:id/refresh-profile
+// Refresh the displayName for a single mailbox. Tries userinfo first (using
+// the stored OAuth credentials). If that fails (e.g. the user connected
+// before Phase L added the userinfo.profile scope), falls back to inferring
+// the name from the most recent outbound EmailMessage.fromName. Returns 400
+// if neither source produces a usable name.
+router.post(
+  '/:id/refresh-profile',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const id = String(req.params.id);
+      const mailbox = await prisma.mailbox.findUnique({ where: { id } });
+      if (!mailbox) {
+        return next(createError('Mailbox not found', 404));
+      }
+
+      const resolved = await resolveMailboxDisplayName(mailbox);
+      if (!resolved) {
+        return next(
+          createError(
+            'Could not infer display name; user should re-OAuth to grant the profile scope',
+            400
+          )
+        );
+      }
+
+      const updated = await prisma.mailbox.update({
+        where: { id },
+        data: { displayName: resolved.displayName },
+        select: {
+          id: true,
+          provider: true,
+          emailAddress: true,
+          displayName: true,
+          isActive: true,
+          watchExpiry: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      });
+
+      await logEvent(
+        'MAILBOX_DISPLAYNAME_REFRESHED',
+        { mailboxId: id, displayName: resolved.displayName, source: resolved.source },
+        'INFO'
+      );
+
+      res.json({ success: true, data: { mailbox: updated, source: resolved.source } });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 // DELETE /api/mailboxes/:id
 router.delete('/:id', async (req: Request, res: Response, next: NextFunction) => {
