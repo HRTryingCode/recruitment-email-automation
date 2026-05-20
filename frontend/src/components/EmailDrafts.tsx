@@ -185,6 +185,9 @@ function DraftCard({
       {/* Expanded content */}
       {expanded && (
         <div className="border-t border-gray-800">
+          <div className="px-4 pt-3 -mb-1">
+            <p className="text-gray-500 text-xs">Will Cc: sofia@archive.com</p>
+          </div>
           <div className="p-4">
             {draft.originalMessage && <OriginalMessageBlock original={draft.originalMessage} />}
             {editing ? (
