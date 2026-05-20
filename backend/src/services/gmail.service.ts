@@ -254,6 +254,32 @@ function parseGmailMessage(
 }
 
 /**
+ * Status priority — never downgrade a candidate's status as a side-effect
+ * of a later, less-informative reply.
+ *
+ * Higher index = higher priority. NEEDS_REVIEW wins outright (a human must
+ * look). Otherwise REPLIED > INTERESTED > NEUTRAL > NOT_INTERESTED > PENDING.
+ *
+ * Unknown / legacy values fall to the bottom so they never beat a known one.
+ */
+const STATUS_PRIORITY: Record<string, number> = {
+  PENDING: 0,
+  NOT_INTERESTED: 1,
+  NEUTRAL: 2,
+  INTERESTED: 3,
+  REPLIED: 4,
+  NEEDS_REVIEW: 5,
+};
+
+export function pickHigherPriorityStatus(current: string, next: string): string {
+  const cur = STATUS_PRIORITY[current] ?? -1;
+  const nxt = STATUS_PRIORITY[next] ?? -1;
+  return nxt > cur ? next : current;
+}
+
+const MAX_THREAD_CONTEXT_MESSAGES = 5;
+
+/**
  * Classify a newly-stored inbound message and create/update the associated
  * Candidate. If INTERESTED, also generate a draft reply.
  *
@@ -278,9 +304,29 @@ async function classifyAndDraft(opts: {
     return;
   }
 
-  // Skip if a draft for this thread already exists in a live state
+  // Pull every prior message in this thread (ordered oldest → newest) so we
+  // can both (a) feed thread context into the classifier and (b) reuse the
+  // list as the draft-generation history below.
+  const allMessages = await prisma.emailMessage.findMany({
+    where: { threadId: thread.id },
+    orderBy: { receivedAt: 'asc' },
+  });
+
+  // Previous messages = everything except the one we're classifying right now.
+  const previousMessages = allMessages
+    .filter((m) => m.externalMessageId !== parsed.externalMessageId)
+    .slice(-MAX_THREAD_CONTEXT_MESSAGES)
+    .map((m) => ({
+      fromAddress: m.fromAddress,
+      fromName: m.fromName,
+      bodyText: m.bodyText,
+      receivedAt: m.receivedAt,
+    }));
+
+  // Existing draft check happens BEFORE we burn Claude tokens — if there is
+  // already a PENDING/APPROVED draft on this thread, we just log + bail.
   const existingDraft = await prisma.emailDraft.findFirst({
-    where: { threadId: thread.id, status: { in: ['PENDING', 'APPROVED', 'SENT'] } },
+    where: { threadId: thread.id, status: { in: ['PENDING', 'APPROVED'] } },
   });
 
   let classificationResult;
@@ -288,9 +334,14 @@ async function classifyAndDraft(opts: {
     const candidateName = parsed.fromName ?? parsed.fromAddress;
     classificationResult = await classifyReply(
       parsed.bodyText || parsed.bodyHtml || parsed.subject,
-      candidateName
+      candidateName,
+      {
+        subject: thread.subject,
+        previousMessages,
+      }
     );
   } catch (err) {
+    // classifyReply is now fail-safe and shouldn't throw, but belt-and-braces:
     const message = err instanceof Error ? err.message : String(err);
     await logEvent(
       'CLASSIFICATION_FAILED',
@@ -300,19 +351,52 @@ async function classifyAndDraft(opts: {
     return;
   }
 
-  const { classification, confidence } = classificationResult;
+  const { classification, messageType, needsReview, confidence } = classificationResult;
+
+  // ---- Routing decisions ----------------------------------------------------
+  // NOT_RECRUITING_RELATED: don't pollute the candidate table at all.
+  if (messageType === 'NOT_RECRUITING_RELATED') {
+    await logEvent(
+      'MESSAGE_SKIPPED_NOT_RECRUITING',
+      {
+        mailboxId: mailbox.id,
+        messageId: parsed.externalMessageId,
+        fromAddress: parsed.fromAddress,
+        confidence,
+      },
+      'INFO'
+    );
+    return;
+  }
+
+  const lowConfidence = confidence < 0.7;
+  // The candidate-level status we want to write. NEEDS_REVIEW for any low-trust
+  // signal so a human looks before we auto-draft.
+  const desiredStatus =
+    needsReview || lowConfidence ? 'NEEDS_REVIEW' : classification;
+
+  // Look up the existing candidate to enforce status-priority (don't downgrade
+  // an INTERESTED candidate to NEUTRAL just because they sent a logistics
+  // follow-up).
+  const existingCandidate = await prisma.candidate.findUnique({
+    where: { email: parsed.fromAddress },
+  });
+
+  const finalStatus = existingCandidate
+    ? pickHigherPriorityStatus(existingCandidate.status, desiredStatus)
+    : desiredStatus;
 
   const candidate = await prisma.candidate.upsert({
     where: { email: parsed.fromAddress },
     update: {
-      status: classification,
+      status: finalStatus,
       mailboxId: mailbox.id,
       updatedAt: new Date(),
     },
     create: {
       name: parsed.fromName ?? parsed.fromAddress,
       email: parsed.fromAddress,
-      status: classification,
+      status: finalStatus,
       mailboxId: mailbox.id,
       source: 'EMAIL_REPLY',
     },
@@ -332,21 +416,75 @@ async function classifyAndDraft(opts: {
       mailboxId: mailbox.id,
       candidateId: candidate.id,
       classification,
+      messageType,
+      needsReview,
       confidence,
+      finalStatus,
     },
     'INFO'
   );
 
-  // Only generate drafts for INTERESTED candidates, and only if there isn't
-  // already a live draft on the thread.
-  if (classification !== 'INTERESTED' || existingDraft) return;
+  // ---- Draft skip checks ----------------------------------------------------
+  // 1. Dedup: thread already has a live draft (PENDING or APPROVED).
+  if (existingDraft) {
+    await logEvent(
+      'DRAFT_SKIPPED_DUPLICATE',
+      {
+        mailboxId: mailbox.id,
+        candidateId: candidate.id,
+        threadId: thread.id,
+        existingDraftId: existingDraft.id,
+      },
+      'INFO'
+    );
+    return;
+  }
+
+  // 2. needsReview = true → human should look first.
+  if (needsReview) {
+    await logEvent(
+      'DRAFT_SKIPPED_NEEDS_REVIEW',
+      {
+        mailboxId: mailbox.id,
+        candidateId: candidate.id,
+        threadId: thread.id,
+        messageType,
+        confidence,
+      },
+      'INFO'
+    );
+    return;
+  }
+
+  // 3. Confidence below threshold → human should look first.
+  if (lowConfidence) {
+    await logEvent(
+      'DRAFT_SKIPPED_LOW_CONFIDENCE',
+      {
+        mailboxId: mailbox.id,
+        candidateId: candidate.id,
+        threadId: thread.id,
+        confidence,
+      },
+      'INFO'
+    );
+    return;
+  }
+
+  // 4. OUT_OF_OFFICE auto-replies: candidate recorded, no draft.
+  if (messageType === 'OUT_OF_OFFICE') {
+    await logEvent(
+      'DRAFT_SKIPPED_OUT_OF_OFFICE',
+      { mailboxId: mailbox.id, candidateId: candidate.id, threadId: thread.id },
+      'INFO'
+    );
+    return;
+  }
+
+  // 5. Existing behavior: only auto-draft for INTERESTED candidates.
+  if (classification !== 'INTERESTED') return;
 
   try {
-    const allMessages = await prisma.emailMessage.findMany({
-      where: { threadId: thread.id },
-      orderBy: { receivedAt: 'asc' },
-    });
-
     const draftReply = await generateDraftReply({
       subject: thread.subject,
       messages: allMessages.map((m) => ({
@@ -381,7 +519,13 @@ async function classifyAndDraft(opts: {
 
     await logEvent(
       'DRAFT_CREATED',
-      { mailboxId: mailbox.id, candidateId: candidate.id, threadId: thread.id },
+      {
+        mailboxId: mailbox.id,
+        candidateId: candidate.id,
+        threadId: thread.id,
+        messageType,
+        confidence,
+      },
       'INFO'
     );
   } catch (err) {

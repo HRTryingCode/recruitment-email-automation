@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { fetchCandidates, fetchMailboxes, fetchDrafts, type Candidate, type Mailbox, type EmailDraft } from '../lib/api';
 import { cn } from '../lib/utils';
-import { Mail, Users, Send, Clock, AlertCircle, CheckCircle2, XCircle, MinusCircle, FileText } from 'lucide-react';
+import { Mail, Users, Send, Clock, AlertCircle, CheckCircle2, XCircle, MinusCircle, FileText, AlertTriangle } from 'lucide-react';
 
 interface Props {
   mailboxId?: string;
@@ -17,6 +17,7 @@ function statusColor(status: string) {
     case 'NOT_INTERESTED': return 'bg-red-500/20 text-red-400 border-red-500/30';
     case 'REPLIED': return 'bg-blue-500/20 text-blue-400 border-blue-500/30';
     case 'PENDING': return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30';
+    case 'NEEDS_REVIEW': return 'bg-amber-500/20 text-amber-400 border-amber-500/30';
     default: return 'bg-gray-500/20 text-gray-400 border-gray-500/30';
   }
 }
@@ -26,6 +27,7 @@ function StatusBadge({ status }: { status: string }) {
     status === 'INTERESTED' ? CheckCircle2 :
     status === 'NOT_INTERESTED' ? XCircle :
     status === 'REPLIED' ? Send :
+    status === 'NEEDS_REVIEW' ? AlertTriangle :
     MinusCircle;
 
   return (
@@ -180,6 +182,7 @@ export default function Dashboard({ mailboxId, onSwitchToDrafts }: Props) {
     const status = c.replyStatus ?? (c.repliedAt ? 'REPLIED' : c.threads?.length ? 'AWAITING_REPLY' : 'NEW');
     return status === 'AWAITING_REPLY';
   }).length;
+  const needsReview = candidates.filter((c) => c.status === 'NEEDS_REVIEW').length;
   const pendingDrafts = allDrafts.filter((d) => d.status === 'PENDING').length;
 
   // "Sent this week" = drafts sent within the last 7 days
@@ -218,7 +221,7 @@ export default function Dashboard({ mailboxId, onSwitchToDrafts }: Props) {
   return (
     <div className="space-y-8">
       {/* Section 3: Metric Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
         <MetricCard
           label="Total Candidates"
           value={total}
@@ -238,6 +241,13 @@ export default function Dashboard({ mailboxId, onSwitchToDrafts }: Props) {
           value={awaitingReply}
           icon={Clock}
           color="bg-yellow-600"
+          loading={loadingCandidates}
+        />
+        <MetricCard
+          label="Needs Review"
+          value={needsReview}
+          icon={AlertTriangle}
+          color="bg-amber-600"
           loading={loadingCandidates}
         />
         <MetricCard
