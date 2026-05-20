@@ -44,6 +44,7 @@ export default function Login() {
         },
         auto_select: false,
         use_fedcm_for_prompt: true,
+        hd: 'archive.com',
       });
 
       gis.renderButton(btnRef.current, {

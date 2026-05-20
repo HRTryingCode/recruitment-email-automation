@@ -141,6 +141,9 @@ router.post(
       }
 
       const email = payload.email.toLowerCase();
+      if (!email.endsWith('@archive.com')) {
+        return next(createError('Access restricted to @archive.com accounts', 403));
+      }
       const googleId = payload.sub;
       const name = payload.name ?? null;
       const avatarUrl = payload.picture ?? null;
