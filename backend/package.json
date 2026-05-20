@@ -13,7 +13,6 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.0",
-    "@azure/msal-node": "^2.16.2",
     "@prisma/client": "^5.22.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
@@ -22,20 +21,16 @@
     "express-rate-limit": "^7.5.0",
     "googleapis": "^144.0.0",
     "helmet": "^8.0.0",
-    "imap": "^0.8.19",
     "jsonwebtoken": "^9.0.2",
     "node-fetch": "^3.3.2",
-    "nodemailer": "^6.9.16",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
-    "@types/imap": "^0.8.40",
     "@types/jsonwebtoken": "^9.0.7",
     "@types/node": "^22.9.3",
-    "@types/nodemailer": "^6.4.17",
     "prisma": "^5.22.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"

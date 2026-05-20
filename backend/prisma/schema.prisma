@@ -19,18 +19,19 @@ model User {
 }
 
 model Mailbox {
-  id           String        @id @default(cuid())
-  provider     String        @default("GMAIL")
-  emailAddress String        @unique
-  displayName  String?
-  credentials  String        @default("{}")
-  watchExpiry  DateTime?
-  isActive     Boolean       @default(true)
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  threads      EmailThread[]
-  messages     EmailMessage[]
-  candidates   Candidate[]
+  id            String         @id @default(cuid())
+  provider      String         @default("GMAIL")
+  emailAddress  String         @unique
+  displayName   String?
+  credentials   String         @default("{}")
+  watchExpiry   DateTime?
+  lastHistoryId String?
+  isActive      Boolean        @default(true)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  threads       EmailThread[]
+  messages      EmailMessage[]
+  candidates    Candidate[]
 }
 
 model Candidate {
@@ -43,18 +44,21 @@ model Candidate {
   source    String?
   notes     String?
   mailboxId String?
-  mailbox   Mailbox?      @relation(fields: [mailboxId], references: [id])
+  mailbox   Mailbox?      @relation(fields: [mailboxId], references: [id], onDelete: SetNull)
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
   threads   EmailThread[]
+
+  @@index([mailboxId])
+  @@index([status])
 }
 
 model EmailThread {
   id               String         @id @default(cuid())
   candidateId      String?
-  candidate        Candidate?     @relation(fields: [candidateId], references: [id])
+  candidate        Candidate?     @relation(fields: [candidateId], references: [id], onDelete: SetNull)
   mailboxId        String
-  mailbox          Mailbox        @relation(fields: [mailboxId], references: [id])
+  mailbox          Mailbox        @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
   externalThreadId String
   subject          String
   lastMessageAt    DateTime       @default(now())
@@ -63,14 +67,17 @@ model EmailThread {
   drafts           EmailDraft[]
 
   @@unique([mailboxId, externalThreadId])
+  @@index([mailboxId])
+  @@index([candidateId])
+  @@index([lastMessageAt])
 }
 
 model EmailMessage {
   id                String      @id @default(cuid())
   threadId          String
-  thread            EmailThread @relation(fields: [threadId], references: [id])
+  thread            EmailThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
   mailboxId         String
-  mailbox           Mailbox     @relation(fields: [mailboxId], references: [id])
+  mailbox           Mailbox     @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
   externalMessageId String      @unique
   fromAddress       String
   fromName          String?
@@ -81,12 +88,16 @@ model EmailMessage {
   receivedAt        DateTime
   headers           String      @default("{}")
   createdAt         DateTime    @default(now())
+
+  @@index([threadId])
+  @@index([mailboxId])
+  @@index([receivedAt])
 }
 
 model EmailDraft {
   id                 String      @id @default(cuid())
   threadId           String
-  thread             EmailThread @relation(fields: [threadId], references: [id])
+  thread             EmailThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
   inReplyToMessageId String?
   referencesHeader   String?
   subject            String
@@ -99,6 +110,9 @@ model EmailDraft {
   externalDraftId    String?
   createdAt          DateTime    @default(now())
   updatedAt          DateTime    @updatedAt
+
+  @@index([threadId])
+  @@index([status])
 }
 
 model SystemLog {
