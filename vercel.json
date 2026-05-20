@@ -9,7 +9,8 @@
     }
   },
   "rewrites": [
-    { "source": "/api/:path*", "destination": "/api/index" }
+    { "source": "/api/:path*", "destination": "/api/index" },
+    { "source": "/((?!api/|assets/).*)", "destination": "/index.html" }
   ],
   "crons": [
     { "path": "/api/internal/cron/renew-watches", "schedule": "0 */6 * * *" }
