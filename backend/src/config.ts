@@ -19,6 +19,7 @@ interface Config {
   jwtSecret: string;
   frontendUrl: string;
   nodeEnv: string;
+  draftCcEmail: string;
 }
 
 export const config: Config = {
@@ -41,4 +42,5 @@ export const config: Config = {
   jwtSecret: process.env.JWT_SECRET ?? 'default-dev-secret-change-in-production',
   frontendUrl: process.env.FRONTEND_URL ?? 'http://localhost:5173',
   nodeEnv: process.env.NODE_ENV ?? 'development',
+  draftCcEmail: process.env.DRAFT_CC_EMAIL ?? 'sofia@archive.com',
 };

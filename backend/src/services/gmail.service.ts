@@ -293,11 +293,25 @@ export async function createDraft(
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
   // Build RFC 2822 email with proper threading headers
-  const headers: string[] = [
-    `To: ${draft.toAddress}`,
-    `Subject: ${draft.subject}`,
-    `Content-Type: text/plain; charset=utf-8`,
-  ];
+  const headers: string[] = [`To: ${draft.toAddress}`];
+
+  // CC the configured address on every AI-drafted email (e.g. sofia@archive.com)
+  // so she stays in the loop on outbound recruiting traffic. Skip if the CC
+  // would be the mailbox owner itself to avoid self-CC loops.
+  const ccAddress = config.draftCcEmail.trim();
+  const ownerAddress = mailbox.emailAddress.trim().toLowerCase();
+  if (ccAddress && ccAddress.toLowerCase() === ownerAddress) {
+    await logEvent(
+      'DRAFT_CC_SELF_SKIPPED',
+      { mailboxId, ownerAddress, ccAddress },
+      'INFO'
+    );
+  } else if (ccAddress) {
+    headers.push(`Cc: ${ccAddress}`);
+  }
+
+  headers.push(`Subject: ${draft.subject}`);
+  headers.push(`Content-Type: text/plain; charset=utf-8`);
 
   // CRITICAL: Set In-Reply-To and References for Superhuman threading
   if (draft.inReplyToMessageId) {
