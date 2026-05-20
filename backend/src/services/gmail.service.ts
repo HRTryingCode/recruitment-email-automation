@@ -4,13 +4,47 @@ import { config } from '../config';
 import { prisma } from '../db/client';
 import { classifyReply, generateDraftReply } from './claude.service';
 import { logEvent } from './monitoring.service';
+import { decrypt, encrypt } from '../lib/crypto';
 import type { Mailbox } from '@prisma/client';
 
+/**
+ * Serialize an OAuth2 / service-account credentials object for storage.
+ * Encrypts at rest with AES-256-GCM (see ../lib/crypto).
+ */
+export function serializeCredentials(creds: Record<string, unknown>): string {
+  return encrypt(JSON.stringify(creds));
+}
+
 function parseCredentials(mailbox: Mailbox): Record<string, unknown> {
-  if (typeof mailbox.credentials === 'string') {
-    try { return JSON.parse(mailbox.credentials) as Record<string, unknown>; } catch { return {}; }
+  const raw = mailbox.credentials;
+  if (typeof raw !== 'string' || raw.length === 0) {
+    return {};
   }
-  return mailbox.credentials as Record<string, unknown>;
+
+  // Try decrypting (current format). Fall back to plaintext JSON for rows
+  // written before encryption was introduced.
+  // TODO: remove plaintext fallback after backfill (re-encrypt all existing
+  // Mailbox.credentials rows and remove this try/catch).
+  try {
+    const plaintext = decrypt(raw);
+    return JSON.parse(plaintext) as Record<string, unknown>;
+  } catch (decryptErr) {
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      console.warn(
+        `[Gmail] Mailbox ${mailbox.id} credentials are stored as plaintext; ` +
+          'they will be re-encrypted on next write. Remove plaintext fallback ' +
+          'after backfilling.'
+      );
+      return parsed;
+    } catch {
+      console.error(
+        `[Gmail] Failed to parse credentials for mailbox ${mailbox.id}:`,
+        decryptErr
+      );
+      return {};
+    }
+  }
 }
 
 function createOAuth2Client(): OAuth2Client {
@@ -52,10 +86,11 @@ export async function handleCallback(code: string, mailboxId?: string): Promise<
   const profile = await gmail.users.getProfile({ userId: 'me' });
   const emailAddress = profile.data.emailAddress ?? '';
 
+  const encryptedCreds = serializeCredentials(tokens as Record<string, unknown>);
   const mailbox = await prisma.mailbox.upsert({
     where: { emailAddress },
     update: {
-      credentials: JSON.stringify(tokens),
+      credentials: encryptedCreds,
       isActive: true,
       updatedAt: new Date(),
     },
@@ -63,7 +98,7 @@ export async function handleCallback(code: string, mailboxId?: string): Promise<
       provider: 'GMAIL',
       emailAddress,
       displayName: emailAddress,
-      credentials: JSON.stringify(tokens),
+      credentials: encryptedCreds,
       isActive: true,
     },
   });
@@ -220,7 +255,7 @@ export async function watchMailbox(mailboxId: string): Promise<void> {
   await logEvent('GMAIL_WATCH_SET', { mailboxId, expiry }, 'INFO');
 }
 
-export async function renewGmailWatches(): Promise<void> {
+export async function renewGmailWatches(): Promise<number> {
   const mailboxes = await prisma.mailbox.findMany({
     where: {
       provider: 'GMAIL',
@@ -228,19 +263,21 @@ export async function renewGmailWatches(): Promise<void> {
     },
   });
 
-  const now = new Date();
   const oneDayFromNow = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
+  let renewed = 0;
   for (const mailbox of mailboxes) {
     if (!mailbox.watchExpiry || mailbox.watchExpiry < oneDayFromNow) {
       try {
         await watchMailbox(mailbox.id);
+        renewed += 1;
         console.log(`[Gmail] Renewed watch for ${mailbox.emailAddress}`);
       } catch (err) {
         console.error(`[Gmail] Failed to renew watch for ${mailbox.emailAddress}:`, err);
       }
     }
   }
+  return renewed;
 }
 
 export async function createServiceAccountClient(emailToImpersonate: string) {

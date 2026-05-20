@@ -11,5 +11,8 @@
   ],
   "routes": [
     { "src": "/(.*)", "dest": "/api/index.ts" }
+  ],
+  "crons": [
+    { "path": "/api/internal/cron/renew-watches", "schedule": "0 */6 * * *" }
   ]
 }

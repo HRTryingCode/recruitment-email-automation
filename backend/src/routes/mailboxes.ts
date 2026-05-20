@@ -1,16 +1,14 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../db/client';
-import { getAuthUrl, handleCallback, watchMailbox, createServiceAccountClient } from '../services/gmail.service';
+import {
+  getAuthUrl,
+  createServiceAccountClient,
+  serializeCredentials,
+} from '../services/gmail.service';
 import { createError } from '../middleware/error';
 import { logEvent } from '../services/monitoring.service';
 
 const router = Router();
-
-function qs(val: unknown): string | undefined {
-  if (typeof val === 'string') return val;
-  if (Array.isArray(val) && typeof val[0] === 'string') return val[0] as string;
-  return undefined;
-}
 
 // GET /api/mailboxes
 router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
@@ -45,33 +43,10 @@ router.post('/gmail/auth', (_req: Request, res: Response, next: NextFunction) =>
   }
 });
 
-// GET /api/mailboxes/gmail/callback
-router.get(
-  '/gmail/callback',
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const code = qs(req.query.code);
-      const state = qs(req.query.state);
-
-      if (!code) {
-        return next(createError('Missing authorization code', 400));
-      }
-
-      const mailbox = await handleCallback(code, state);
-
-      try {
-        await watchMailbox(mailbox.id);
-      } catch (watchErr) {
-        console.warn('[Mailbox] Gmail watch setup failed:', watchErr);
-      }
-
-      const frontendUrl = process.env.FRONTEND_URL ?? 'http://localhost:5173';
-      res.redirect(`${frontendUrl}?mailbox=connected`);
-    } catch (err) {
-      next(err);
-    }
-  }
-);
+// NOTE: GET /api/mailboxes/gmail/callback is registered directly on the
+// Express app (see app.ts) because Google's OAuth redirect cannot carry a JWT.
+// Keeping it out of this router avoids accidentally putting it behind
+// requireAuth.
 
 // POST /api/mailboxes/workspace/connect
 router.post('/workspace/connect', async (req: Request, res: Response, next: NextFunction) => {
@@ -89,11 +64,15 @@ router.post('/workspace/connect', async (req: Request, res: Response, next: Next
         const gmail = await createServiceAccountClient(email);
         await gmail.users.messages.list({ userId: email, maxResults: 1 });
 
+        const encryptedCreds = serializeCredentials({
+          type: 'service_account',
+          impersonating: email,
+        });
         const mailbox = await prisma.mailbox.upsert({
           where: { emailAddress: email },
           update: {
             provider: 'GMAIL',
-            credentials: JSON.stringify({ type: 'service_account', impersonating: email }),
+            credentials: encryptedCreds,
             isActive: true,
             updatedAt: new Date(),
           },
@@ -101,7 +80,7 @@ router.post('/workspace/connect', async (req: Request, res: Response, next: Next
             provider: 'GMAIL',
             emailAddress: email,
             displayName: email,
-            credentials: JSON.stringify({ type: 'service_account', impersonating: email }),
+            credentials: encryptedCreds,
             isActive: true,
           },
         });
