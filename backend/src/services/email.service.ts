@@ -7,7 +7,9 @@ export function getService(mailbox: Mailbox): { sync: () => Promise<void> } {
   switch (provider) {
     case 'GMAIL':
       return {
-        sync: () => gmailSync(mailbox.id),
+        sync: async () => {
+          await gmailSync(mailbox.id);
+        },
       };
     case 'OUTLOOK':
       return {

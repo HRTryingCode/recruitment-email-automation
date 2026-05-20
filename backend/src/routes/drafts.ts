@@ -240,7 +240,7 @@ router.post('/:id/send', async (req: Request, res: Response, next: NextFunction)
     if (candidate) {
       await prisma.candidate.update({
         where: { id: candidate.id },
-        data: { status: 'REPLIED' },
+        data: { status: 'REPLIED', repliedAt: new Date() },
       });
     }
 

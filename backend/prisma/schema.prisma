@@ -47,6 +47,7 @@ model Candidate {
   notes     String?
   mailboxId String?
   mailbox   Mailbox?      @relation(fields: [mailboxId], references: [id], onDelete: SetNull)
+  repliedAt DateTime?
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
   threads   EmailThread[]

@@ -176,6 +176,10 @@ export default function Dashboard({ mailboxId, onSwitchToDrafts }: Props) {
 
   const total = candidates.length;
   const needReply = candidates.filter((c) => c.status === 'INTERESTED').length;
+  const awaitingReply = candidates.filter((c) => {
+    const status = c.replyStatus ?? (c.repliedAt ? 'REPLIED' : c.threads?.length ? 'AWAITING_REPLY' : 'NEW');
+    return status === 'AWAITING_REPLY';
+  }).length;
   const pendingDrafts = allDrafts.filter((d) => d.status === 'PENDING').length;
 
   // "Sent this week" = drafts sent within the last 7 days
@@ -214,7 +218,7 @@ export default function Dashboard({ mailboxId, onSwitchToDrafts }: Props) {
   return (
     <div className="space-y-8">
       {/* Section 3: Metric Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         <MetricCard
           label="Total Candidates"
           value={total}
@@ -227,6 +231,13 @@ export default function Dashboard({ mailboxId, onSwitchToDrafts }: Props) {
           value={needReply}
           icon={AlertCircle}
           color="bg-green-600"
+          loading={loadingCandidates}
+        />
+        <MetricCard
+          label="Awaiting Reply"
+          value={awaitingReply}
+          icon={Clock}
+          color="bg-yellow-600"
           loading={loadingCandidates}
         />
         <MetricCard
