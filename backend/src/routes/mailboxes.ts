@@ -1,10 +1,13 @@
 import { Router, Request, Response, NextFunction } from 'express';
+import crypto from 'crypto';
 import { prisma } from '../db/client';
 import {
   getAuthUrl,
   createServiceAccountClient,
   serializeCredentials,
+  syncMessages,
 } from '../services/gmail.service';
+import { storeOAuthState } from '../lib/oauthState';
 import { createError } from '../middleware/error';
 import { logEvent } from '../services/monitoring.service';
 
@@ -36,7 +39,9 @@ router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
 // POST /api/mailboxes/gmail/auth
 router.post('/gmail/auth', (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const authUrl = getAuthUrl('new');
+    const state = crypto.randomBytes(32).toString('hex');
+    storeOAuthState(state);
+    const authUrl = getAuthUrl(state);
     res.json({ success: true, data: { authUrl } });
   } catch (err) {
     next(err);
@@ -46,7 +51,24 @@ router.post('/gmail/auth', (_req: Request, res: Response, next: NextFunction) =>
 // NOTE: GET /api/mailboxes/gmail/callback is registered directly on the
 // Express app (see app.ts) because Google's OAuth redirect cannot carry a JWT.
 // Keeping it out of this router avoids accidentally putting it behind
-// requireAuth.
+// requireAuth. The state-validation logic lives there as well.
+
+// POST /api/mailboxes/:id/resync
+// Manual full 7-day resync. Protected by the requireAuth middleware applied
+// at the router level (see app.ts: app.use('/api/mailboxes', requireAuth, …)).
+router.post('/:id/resync', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = String(req.params.id);
+    const mailbox = await prisma.mailbox.findUnique({ where: { id } });
+    if (!mailbox) {
+      return next(createError('Mailbox not found', 404));
+    }
+    await syncMessages(id);
+    res.json({ success: true, message: 'Resync triggered' });
+  } catch (err) {
+    next(err);
+  }
+});
 
 // POST /api/mailboxes/workspace/connect
 router.post('/workspace/connect', async (req: Request, res: Response, next: NextFunction) => {

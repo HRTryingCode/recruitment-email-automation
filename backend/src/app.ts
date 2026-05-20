@@ -14,6 +14,7 @@ import healthRouter from './routes/health';
 import authRouter from './routes/auth';
 import internalCronRouter from './routes/internal-cron';
 import { handleCallback, watchMailbox } from './services/gmail.service';
+import { consumeOAuthState } from './lib/oauthState';
 import { createError } from './middleware/error';
 
 const app = express();
@@ -65,6 +66,12 @@ app.get(
       const state = qs(req.query.state);
       if (!code) {
         return next(createError('Missing authorization code', 400));
+      }
+      if (!state) {
+        return next(createError('Missing OAuth state parameter', 400));
+      }
+      if (!consumeOAuthState(state)) {
+        return next(createError('Invalid or expired OAuth state', 400));
       }
       const mailbox = await handleCallback(code, state);
       try {
