@@ -88,7 +88,25 @@ Set needsReview = true when ANY of the following:
 - The classification signal conflicts with the messageType (e.g. INTERESTED but OUT_OF_OFFICE)
 - Confidence in classification or messageType is below ~0.7
 
-Set needsReview = false otherwise — i.e. when you are confident in BOTH classification and messageType.`;
+Set needsReview = false otherwise — i.e. when you are confident in BOTH classification and messageType.
+
+## Role Extraction
+
+You must ALSO try to identify the **role** the candidate is being contacted about — the job title from the recruiter's outreach. This is almost always mentioned somewhere in the thread context, most often inside the candidate's reply where the original outreach is quoted ("On Tue, Mar 5, X wrote: ... I'm reaching out about a Senior Backend Engineer opportunity at Archive...").
+
+Examples of valid roles:
+- "Senior Backend Engineer"
+- "SMB Customer Success Manager"
+- "Head of Product Design"
+- "Founding AE"
+- "Recruiting Lead"
+- "Staff Software Engineer, Platform"
+
+Rules:
+- Look first in the quoted recruiter outreach inside the thread context, then in the candidate's current message body.
+- Keep the role concise (max ~60 characters), title-case, no leading articles ("the", "a").
+- Strip filler like "role", "position", "opportunity" unless it's part of an actual title.
+- If no clear role is mentioned (e.g. a vague "thanks for reaching out" with no quoted context, or a clearly NOT_RECRUITING_RELATED / OUT_OF_OFFICE / forwarded message), return null.`;
 
 export type Classification = 'INTERESTED' | 'NOT_INTERESTED' | 'NEUTRAL';
 
@@ -106,6 +124,7 @@ export interface ClassificationResult {
   needsReview: boolean;
   confidence: number;
   reasoning: string;
+  role: string | null;
 }
 
 export interface DraftReplyResult {
@@ -242,7 +261,25 @@ function safeFallback(reason: string): ClassificationResult {
     needsReview: true,
     confidence: 0,
     reasoning: `Fallback applied: ${reason}`,
+    role: null,
   };
+}
+
+const ROLE_MAX_CHARS = 60;
+
+function coerceRole(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  let trimmed = raw.trim();
+  if (!trimmed || trimmed.toLowerCase() === 'null' || trimmed.toLowerCase() === 'unknown') {
+    return null;
+  }
+  // Strip leading articles
+  trimmed = trimmed.replace(/^(the|a|an)\s+/i, '').trim();
+  if (!trimmed) return null;
+  if (trimmed.length > ROLE_MAX_CHARS) {
+    trimmed = trimmed.slice(0, ROLE_MAX_CHARS).trim();
+  }
+  return trimmed;
 }
 
 function coerceClassificationResult(raw: unknown): ClassificationResult {
@@ -279,12 +316,15 @@ function coerceClassificationResult(raw: unknown): ClassificationResult {
 
   const needsReview = modelSaysReview ?? derivedReview;
 
+  const role = coerceRole(r.role);
+
   return {
     classification,
     messageType,
     needsReview,
     confidence: confidenceNum,
     reasoning,
+    role,
   };
 }
 
@@ -312,10 +352,11 @@ Respond with a JSON object in this EXACT format (no markdown fences, no commenta
   "messageType": "NEW_INQUIRY" | "FOLLOWUP" | "SCHEDULING" | "OUT_OF_OFFICE" | "NOT_RECRUITING_RELATED" | "AMBIGUOUS",
   "needsReview": <boolean>,
   "confidence": <number between 0 and 1>,
-  "reasoning": "<brief explanation, 1-2 sentences>"
+  "reasoning": "<brief explanation, 1-2 sentences>",
+  "role": "<extracted role title or null>"
 }
 
-Classify both the candidate's interest (classification) AND the kind of message it is (messageType) using the rules in the system prompt. Use the prior thread context above to distinguish a NEW_INQUIRY (first candidate reply) from a FOLLOWUP (continuation of an existing back-and-forth).
+Classify both the candidate's interest (classification) AND the kind of message it is (messageType) using the rules in the system prompt. Use the prior thread context above to distinguish a NEW_INQUIRY (first candidate reply) from a FOLLOWUP (continuation of an existing back-and-forth). Extract the role title following the Role Extraction rules above (concise, max ~60 chars, null if not mentioned).
 
 New message body to classify:
 ${emailBody}`,

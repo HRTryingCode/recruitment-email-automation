@@ -41,7 +41,7 @@ router.get('/threads', async (req: Request, res: Response, next: NextFunction) =
         where,
         include: {
           candidate: {
-            select: { id: true, name: true, email: true, status: true },
+            select: { id: true, name: true, email: true, status: true, role: true },
           },
           mailbox: {
             select: { id: true, emailAddress: true, provider: true },
@@ -73,7 +73,7 @@ router.get(
           messages: { orderBy: { receivedAt: 'asc' } },
           drafts: { orderBy: { createdAt: 'desc' } },
           candidate: {
-            select: { id: true, name: true, email: true, status: true },
+            select: { id: true, name: true, email: true, status: true, role: true },
           },
           mailbox: {
             select: { id: true, emailAddress: true, provider: true },

@@ -453,7 +453,7 @@ async function classifyAndDraft(opts: {
     return;
   }
 
-  const { classification, messageType, needsReview, confidence } = classificationResult;
+  const { classification, messageType, needsReview, confidence, role } = classificationResult;
 
   // ---- Routing decisions ----------------------------------------------------
   // NOT_RECRUITING_RELATED: don't pollute the candidate table at all.
@@ -488,12 +488,19 @@ async function classifyAndDraft(opts: {
     ? pickHigherPriorityStatus(existingCandidate.status, desiredStatus)
     : desiredStatus;
 
+  // Only overwrite role on existing candidates when we have a new value and
+  // the row didn't already have one — avoids churning a manually-edited or
+  // earlier-detected role on every follow-up reply.
+  const shouldSetRoleOnUpdate =
+    role !== null && existingCandidate && !existingCandidate.role;
+
   const candidate = await prisma.candidate.upsert({
     where: { email: parsed.fromAddress },
     update: {
       status: finalStatus,
       mailboxId: mailbox.id,
       updatedAt: new Date(),
+      ...(shouldSetRoleOnUpdate ? { role } : {}),
     },
     create: {
       name: parsed.fromName ?? parsed.fromAddress,
@@ -501,8 +508,21 @@ async function classifyAndDraft(opts: {
       status: finalStatus,
       mailboxId: mailbox.id,
       source: 'EMAIL_REPLY',
+      role: role ?? null,
     },
   });
+
+  if (role && (!existingCandidate || !existingCandidate.role)) {
+    await logEvent(
+      'CANDIDATE_ROLE_DETECTED',
+      {
+        mailboxId: mailbox.id,
+        candidateId: candidate.id,
+        role,
+      },
+      'INFO'
+    );
+  }
 
   // Attach the thread to the candidate if not already attached
   if (thread.candidateId !== candidate.id) {
