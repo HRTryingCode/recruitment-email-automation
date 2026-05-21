@@ -414,6 +414,27 @@ async function regenerateDraftById(id: string): Promise<RegenerateOk | Regenerat
     );
   }
 
+  // Observability: log when the freshly-classified role disagrees with the
+  // stored value (either direction — newly null, value→value swap, or
+  // first-detection). The update logic above intentionally keeps the
+  // existing role; this event is purely so we can audit unexpected churn
+  // (e.g. short follow-up replies that strip role from the classifier
+  // output) without changing behavior.
+  const newRole = classificationResult.role ?? null;
+  const oldRole = candidate.role ?? null;
+  if (newRole !== oldRole) {
+    await logEvent(
+      'CANDIDATE_ROLE_CHANGED',
+      {
+        candidateId: candidate.id,
+        from: oldRole,
+        to: newRole,
+        via: 'regenerate',
+      },
+      'INFO'
+    );
+  }
+
   await logEvent('DRAFT_REGENERATED', { draftId: id, mailboxId: mailbox.id }, 'INFO');
 
   return { ok: true, draft: updated, originalMessage, mailboxId: mailbox.id };

@@ -326,6 +326,140 @@ describe('/api/drafts', () => {
       expect(classifyReply).not.toHaveBeenCalled();
       expect(generateDraftReply).not.toHaveBeenCalled();
     });
+
+    it('logs CANDIDATE_ROLE_CHANGED when classifier role differs from stored role', async () => {
+      // Phase AR bug #3: observability for role churn on regen. Candidate
+      // already has role='Backend Engineer'; classifier returns
+      // role='Staff Backend Engineer'. The update logic intentionally keeps
+      // the existing role (don't churn on every follow-up), but we want a
+      // log entry so unexpected swings are auditable.
+      const inboundDate = new Date('2026-04-01T00:00:00Z');
+      const inbound = {
+        id: 'msg-1',
+        externalMessageId: 'gm-1',
+        fromAddress: 'a@example.com',
+        fromName: 'A',
+        subject: 'opportunity',
+        bodyText: 'are you interested?',
+        bodyHtml: null,
+        receivedAt: inboundDate,
+      };
+
+      mockPrisma.emailDraft.findUnique.mockResolvedValueOnce({
+        id: 'draft-1',
+        status: 'PENDING',
+        inReplyToMessageId: null,
+        updatedAt: inboundDate,
+        thread: {
+          ...baseThread,
+          candidate: { ...baseCandidate, role: 'Backend Engineer' },
+          messages: [inbound],
+        },
+      });
+      mockPrisma.emailMessage.findMany.mockResolvedValueOnce([inbound]);
+
+      classifyReply.mockResolvedValueOnce({
+        classification: 'INTERESTED',
+        confidence: 0.9,
+        role: 'Staff Backend Engineer',
+      });
+      generateDraftReply.mockResolvedValueOnce({
+        subject: 'Re: opportunity',
+        bodyText: 'thanks!',
+        bodyHtml: '<p>thanks!</p>',
+      });
+      mockPrisma.emailDraft.update.mockResolvedValueOnce({
+        id: 'draft-1',
+        status: 'PENDING',
+      });
+
+      const res = await request(app)
+        .post('/api/drafts/draft-1/regenerate')
+        .set('Authorization', AUTH);
+
+      expect(res.status).toBe(200);
+
+      // The CANDIDATE_ROLE_DETECTED branch (role && !candidate.role) should
+      // NOT fire — candidate already has a role.
+      const detectedCalls = mockPrisma.systemLog.create.mock.calls.filter(
+        ([arg]) =>
+          (arg as { data: { event: string } }).data.event === 'CANDIDATE_ROLE_DETECTED'
+      );
+      expect(detectedCalls).toHaveLength(0);
+      // Also: we should NOT have updated candidate.role.
+      expect(mockPrisma.candidate.update).not.toHaveBeenCalled();
+
+      // But CANDIDATE_ROLE_CHANGED SHOULD fire with both old and new values.
+      const changedCalls = mockPrisma.systemLog.create.mock.calls.filter(
+        ([arg]) =>
+          (arg as { data: { event: string } }).data.event === 'CANDIDATE_ROLE_CHANGED'
+      );
+      expect(changedCalls).toHaveLength(1);
+      const detailsJson = (changedCalls[0]![0] as {
+        data: { details: string | null };
+      }).data.details;
+      const details = JSON.parse(detailsJson ?? '{}');
+      expect(details).toMatchObject({
+        candidateId: 'cand-1',
+        from: 'Backend Engineer',
+        to: 'Staff Backend Engineer',
+        via: 'regenerate',
+      });
+    });
+
+    it('does NOT log CANDIDATE_ROLE_CHANGED when classifier returns the same role', async () => {
+      const inboundDate = new Date('2026-04-01T00:00:00Z');
+      const inbound = {
+        id: 'msg-1',
+        externalMessageId: 'gm-1',
+        fromAddress: 'a@example.com',
+        fromName: 'A',
+        subject: 'opportunity',
+        bodyText: 'are you interested?',
+        bodyHtml: null,
+        receivedAt: inboundDate,
+      };
+
+      mockPrisma.emailDraft.findUnique.mockResolvedValueOnce({
+        id: 'draft-1',
+        status: 'PENDING',
+        inReplyToMessageId: null,
+        updatedAt: inboundDate,
+        thread: {
+          ...baseThread,
+          candidate: { ...baseCandidate, role: 'Backend Engineer' },
+          messages: [inbound],
+        },
+      });
+      mockPrisma.emailMessage.findMany.mockResolvedValueOnce([inbound]);
+
+      classifyReply.mockResolvedValueOnce({
+        classification: 'INTERESTED',
+        confidence: 0.9,
+        role: 'Backend Engineer',
+      });
+      generateDraftReply.mockResolvedValueOnce({
+        subject: 'Re: opportunity',
+        bodyText: 'thanks!',
+        bodyHtml: '<p>thanks!</p>',
+      });
+      mockPrisma.emailDraft.update.mockResolvedValueOnce({
+        id: 'draft-1',
+        status: 'PENDING',
+      });
+
+      const res = await request(app)
+        .post('/api/drafts/draft-1/regenerate')
+        .set('Authorization', AUTH);
+
+      expect(res.status).toBe(200);
+
+      const changedCalls = mockPrisma.systemLog.create.mock.calls.filter(
+        ([arg]) =>
+          (arg as { data: { event: string } }).data.event === 'CANDIDATE_ROLE_CHANGED'
+      );
+      expect(changedCalls).toHaveLength(0);
+    });
   });
 
   describe('POST /api/drafts/regenerate-pending', () => {
