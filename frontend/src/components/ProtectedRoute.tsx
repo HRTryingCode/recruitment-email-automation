@@ -25,9 +25,9 @@ export default function ProtectedRoute() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
-        <div className="flex items-center gap-3 text-gray-400">
-          <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="flex items-center gap-3 text-fg-muted">
+          <Loader2 className="h-5 w-5 animate-spin text-accent-400" />
           <span className="text-sm">Loading…</span>
         </div>
       </div>

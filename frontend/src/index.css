@@ -4,16 +4,101 @@
 
 @layer base {
   :root {
-    --bg-page: #070709;
-    --bg-card: #0f0f15;
-    --bg-card-elevated: #161620;
-    --border-hairline: rgba(255, 255, 255, 0.06);
-    --border-soft: rgba(255, 255, 255, 0.09);
-    --text-primary: #f4f4f5;
-    --text-secondary: #a1a1aa;
-    --text-tertiary: #71717a;
-    --accent: #9b7dff;
-    --accent-glow: rgba(155, 125, 255, 0.15);
+    /*
+     * Default tokens — used until `applyTheme()` toggles `.dark` / `.light` on
+     * the <html> element. We ship the dark palette here so the very first paint
+     * (before our pre-render script runs) matches what most users will see.
+     */
+    --bg-base: 24 25 31;
+    --bg-surface: 30 31 38;
+    --bg-elevated: 35 37 44;
+    --bg-overlay: 24 25 31;
+
+    --fg-strong: 240 240 245;
+    --fg-default: 220 220 228;
+    --fg-muted: 160 160 175;
+    --fg-subtle: 110 110 125;
+
+    --border-base: 240 240 245;
+
+    --accent-300: 178 154 248;
+    --accent-500: 124 92 245;
+    --accent-700: 92 64 200;
+    --accent-bg: 124 92 245;
+
+    --emerald: 52 211 153;
+    --rose: 251 113 133;
+    --amber: 251 191 36;
+    --sky: 56 189 248;
+
+    --glow-1: 155 125 255 / 0.06;
+    --glow-2: 124 92 245 / 0.04;
+    --grid-line: 255 255 255 / 0.025;
+
+    --scrollbar-thumb: 60 62 71;
+    --scrollbar-thumb-hover: 80 82 92;
+  }
+
+  .light {
+    --bg-base: 250 250 251;
+    --bg-surface: 255 255 255;
+    --bg-elevated: 247 247 250;
+    --bg-overlay: 255 255 255;
+
+    --fg-strong: 15 15 21;
+    --fg-default: 39 39 45;
+    --fg-muted: 88 88 102;
+    --fg-subtle: 144 144 158;
+
+    --border-base: 15 15 21;
+
+    --accent-300: 138 91 247;
+    --accent-500: 109 64 230;
+    --accent-700: 79 41 184;
+    --accent-bg: 109 64 230;
+
+    --emerald: 5 150 105;
+    --rose: 220 38 38;
+    --amber: 217 119 6;
+    --sky: 14 116 144;
+
+    --glow-1: 138 91 247 / 0.10;
+    --glow-2: 109 64 230 / 0.05;
+    --grid-line: 15 15 21 / 0.04;
+
+    --scrollbar-thumb: 220 220 228;
+    --scrollbar-thumb-hover: 175 175 188;
+  }
+
+  .dark {
+    --bg-base: 24 25 31;
+    --bg-surface: 30 31 38;
+    --bg-elevated: 35 37 44;
+    --bg-overlay: 24 25 31;
+
+    --fg-strong: 240 240 245;
+    --fg-default: 220 220 228;
+    --fg-muted: 160 160 175;
+    --fg-subtle: 110 110 125;
+
+    --border-base: 240 240 245;
+
+    --accent-300: 178 154 248;
+    --accent-500: 124 92 245;
+    --accent-700: 92 64 200;
+    --accent-bg: 124 92 245;
+
+    --emerald: 52 211 153;
+    --rose: 251 113 133;
+    --amber: 251 191 36;
+    --sky: 56 189 248;
+
+    --glow-1: 155 125 255 / 0.06;
+    --glow-2: 124 92 245 / 0.04;
+    --grid-line: 255 255 255 / 0.025;
+
+    --scrollbar-thumb: 60 62 71;
+    --scrollbar-thumb-hover: 80 82 92;
   }
 
   * {
@@ -24,17 +109,33 @@
     font-feature-settings: 'cv11', 'ss01', 'ss02';
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    color-scheme: dark;
+  }
+
+  html.light {
+    color-scheme: light;
   }
 
   body {
-    @apply text-ink-100 antialiased;
+    @apply text-fg-default antialiased;
     background:
-      radial-gradient(1200px 600px at 100% -10%, rgba(155, 125, 255, 0.06), transparent 60%),
-      radial-gradient(800px 500px at -10% 100%, rgba(124, 92, 245, 0.04), transparent 60%),
-      var(--bg-page);
+      radial-gradient(
+        1200px 600px at 100% -10%,
+        rgb(var(--glow-1)),
+        transparent 60%
+      ),
+      radial-gradient(
+        800px 500px at -10% 100%,
+        rgb(var(--glow-2)),
+        transparent 60%
+      ),
+      rgb(var(--bg-base));
     background-attachment: fixed;
     font-feature-settings: 'cv11', 'ss01';
     letter-spacing: -0.005em;
+    transition:
+      background-color 200ms ease,
+      color 200ms ease;
   }
 
   ::-webkit-scrollbar {
@@ -47,17 +148,17 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    @apply bg-ink-700 rounded-full;
-    border: 2px solid var(--bg-page);
+    background: rgb(var(--scrollbar-thumb));
+    border-radius: 9999px;
+    border: 2px solid rgb(var(--bg-base));
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    @apply bg-ink-600;
+    background: rgb(var(--scrollbar-thumb-hover));
   }
 
-  /* Focus rings — refined, not the default Tailwind blue */
   :focus-visible {
-    outline: 2px solid var(--accent);
+    outline: 2px solid rgb(var(--accent-500));
     outline-offset: 2px;
     border-radius: 6px;
   }
@@ -70,35 +171,35 @@
 
 @layer components {
   .card {
-    @apply relative rounded-xl border border-white/[0.06] bg-ink-900/70 backdrop-blur-sm;
+    @apply relative rounded-xl border border-line-soft bg-surface-raised backdrop-blur-sm;
   }
 
   .card-hover {
-    @apply transition-all duration-200 hover:border-white/[0.1] hover:bg-ink-800/70;
+    @apply transition-all duration-200 hover:border-line-strong hover:bg-surface-elevated;
   }
 
   .hairline {
-    border-color: var(--border-hairline);
+    border-color: rgb(var(--border-base) / 0.06);
   }
 
-  /* Shimmery loading skeleton */
+  /* Shimmer skeleton uses a translucent foreground over the surface so the
+     contrast works in either theme. */
   .skeleton {
     background: linear-gradient(
       90deg,
-      rgba(255, 255, 255, 0.03) 0%,
-      rgba(255, 255, 255, 0.06) 50%,
-      rgba(255, 255, 255, 0.03) 100%
+      rgb(var(--fg-strong) / 0.04) 0%,
+      rgb(var(--fg-strong) / 0.08) 50%,
+      rgb(var(--fg-strong) / 0.04) 100%
     );
     background-size: 200% 100%;
     animation: shimmer 2s linear infinite;
     border-radius: 6px;
   }
 
-  /* Subtle grid background utility */
   .grid-bg {
     background-image:
-      linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+      linear-gradient(rgb(var(--grid-line)) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(var(--grid-line)) 1px, transparent 1px);
     background-size: 24px 24px;
   }
 }

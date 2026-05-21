@@ -27,12 +27,15 @@ const STATUS_LABELS: Record<string, string> = {
   NEUTRAL: 'Neutral',
 };
 
+// Status badge color tokens. Chromatic statuses use a darker shade in light
+// mode (700) and the original soft shade in dark (300). Neutral/ignored use
+// theme-aware fg-* tokens so they flip automatically.
 const STATUS_TONE_CLASS: Record<string, RegExp> = {
-  INTERESTED: /text-emerald-300/,
-  NEEDS_REVIEW: /text-amber-300/,
-  IGNORED: /text-ink-400/,
-  NOT_INTERESTED: /text-rose-300/,
-  NEUTRAL: /text-ink-200/,
+  INTERESTED: /text-emerald-700/,
+  NEEDS_REVIEW: /text-amber-700/,
+  IGNORED: /text-fg-muted/,
+  NOT_INTERESTED: /text-rose-700/,
+  NEUTRAL: /text-fg-default/,
 };
 
 function makeCandidate(

@@ -7,3 +7,16 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
     /* no-op */
   };
 }
+
+// jsdom doesn't implement ResizeObserver. Radix UI's tooltip/dropdown internals
+// hold a reference to it after click, surfacing async unhandled errors that
+// flip Vitest's exit code even when every test assertion passes.
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  class ResizeObserverStub {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  (globalThis as { ResizeObserver: typeof ResizeObserverStub }).ResizeObserver =
+    ResizeObserverStub;
+}

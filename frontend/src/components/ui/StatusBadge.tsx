@@ -28,60 +28,62 @@ interface VariantStyle {
   label: string;
 }
 
+// Chromatic palettes use a darker text shade in light mode (X-700) for
+// readability on pale chromatic backgrounds, and the original X-300 in dark.
 const VARIANTS: Record<StatusVariant, VariantStyle> = {
   INTERESTED: {
     ring: 'ring-emerald-500/20',
     bg: 'bg-emerald-500/10',
-    text: 'text-emerald-300',
-    dot: 'bg-emerald-400',
+    text: 'text-emerald-700 dark:text-emerald-300',
+    dot: 'bg-emerald-500 dark:bg-emerald-400',
     icon: CheckCircle2,
     label: 'Interested',
   },
   NOT_INTERESTED: {
     ring: 'ring-rose-500/20',
     bg: 'bg-rose-500/10',
-    text: 'text-rose-300',
-    dot: 'bg-rose-400',
+    text: 'text-rose-700 dark:text-rose-300',
+    dot: 'bg-rose-500 dark:bg-rose-400',
     icon: XCircle,
     label: 'Not Interested',
   },
   NEUTRAL: {
-    ring: 'ring-white/[0.08]',
-    bg: 'bg-white/[0.04]',
-    text: 'text-ink-200',
-    dot: 'bg-ink-400',
+    ring: 'ring-fg-strong/[0.08]',
+    bg: 'bg-fg-strong/[0.05]',
+    text: 'text-fg-default',
+    dot: 'bg-fg-muted',
     icon: MinusCircle,
     label: 'Neutral',
   },
   PENDING: {
-    ring: 'ring-amber-500/20',
+    ring: 'ring-amber-500/25',
     bg: 'bg-amber-500/10',
-    text: 'text-amber-300',
-    dot: 'bg-amber-400',
+    text: 'text-amber-700 dark:text-amber-300',
+    dot: 'bg-amber-500 dark:bg-amber-400',
     icon: Clock,
     label: 'Pending',
   },
   REPLIED: {
     ring: 'ring-sky-500/20',
     bg: 'bg-sky-500/10',
-    text: 'text-sky-300',
-    dot: 'bg-sky-400',
+    text: 'text-sky-700 dark:text-sky-300',
+    dot: 'bg-sky-500 dark:bg-sky-400',
     icon: Send,
     label: 'Replied',
   },
   NEEDS_REVIEW: {
     ring: 'ring-amber-500/25',
     bg: 'bg-amber-500/10',
-    text: 'text-amber-300',
-    dot: 'bg-amber-400',
+    text: 'text-amber-700 dark:text-amber-300',
+    dot: 'bg-amber-500 dark:bg-amber-400',
     icon: AlertTriangle,
     label: 'Needs Review',
   },
   IGNORED: {
-    ring: 'ring-white/[0.06]',
-    bg: 'bg-white/[0.03]',
-    text: 'text-ink-400',
-    dot: 'bg-ink-500',
+    ring: 'ring-fg-strong/[0.07]',
+    bg: 'bg-fg-strong/[0.04]',
+    text: 'text-fg-muted',
+    dot: 'bg-fg-subtle',
     icon: EyeOff,
     label: 'Ignored',
   },
@@ -149,7 +151,7 @@ export function ClassificationBadge({
       <Icon className="h-3 w-3" />
       <span>{v.label}</span>
       {confidence !== undefined && (
-        <span className="text-ink-400 tabular-nums font-mono text-[10px]">
+        <span className="text-fg-muted tabular-nums font-mono text-[10px]">
           · {Math.round(confidence * 100)}%
         </span>
       )}
