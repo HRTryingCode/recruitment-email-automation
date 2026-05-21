@@ -8,7 +8,7 @@ import {
   subscribeToTheme,
   type Theme,
 } from '../lib/theme';
-import { Tooltip } from './ui/Tooltip';
+import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 
 interface Props {
   className?: string;
@@ -31,40 +31,43 @@ export default function ThemeToggle({ className }: Props) {
     theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
 
   return (
-    <Tooltip content={label}>
-      <button
-        type="button"
-        onClick={() => {
-          setLocalTheme(next);
-          setTheme(next);
-        }}
-        aria-label={label}
-        aria-pressed={theme === 'dark'}
-        data-theme={theme}
-        className={cn(
-          'group relative flex h-9 w-9 items-center justify-center rounded-full border border-line bg-surface-raised/60 text-fg-muted transition-all hover:border-line-strong hover:bg-surface-elevated hover:text-fg-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/40',
-          className
-        )}
-      >
-        <Sun
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={() => {
+            setLocalTheme(next);
+            setTheme(next);
+          }}
+          aria-label={label}
+          aria-pressed={theme === 'dark'}
+          data-theme={theme}
           className={cn(
-            'h-4 w-4 transition-all duration-300',
-            theme === 'dark'
-              ? 'scale-0 rotate-90 opacity-0'
-              : 'scale-100 rotate-0 opacity-100'
+            'group relative flex size-9 items-center justify-center rounded-full border border-line bg-surface-raised/60 text-fg-muted transition-all hover:border-line-strong hover:bg-surface-elevated hover:text-fg-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/40',
+            className
           )}
-          strokeWidth={2}
-        />
-        <Moon
-          className={cn(
-            'absolute h-4 w-4 transition-all duration-300',
-            theme === 'dark'
-              ? 'scale-100 rotate-0 opacity-100'
-              : 'scale-0 -rotate-90 opacity-0'
-          )}
-          strokeWidth={2}
-        />
-      </button>
+        >
+          <Sun
+            className={cn(
+              'size-4 transition-all duration-300',
+              theme === 'dark'
+                ? 'scale-0 rotate-90 opacity-0'
+                : 'scale-100 rotate-0 opacity-100'
+            )}
+            strokeWidth={2}
+          />
+          <Moon
+            className={cn(
+              'absolute size-4 transition-all duration-300',
+              theme === 'dark'
+                ? 'scale-100 rotate-0 opacity-100'
+                : 'scale-0 -rotate-90 opacity-0'
+            )}
+            strokeWidth={2}
+          />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
     </Tooltip>
   );
 }

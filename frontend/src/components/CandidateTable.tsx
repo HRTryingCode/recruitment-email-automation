@@ -30,7 +30,7 @@ import {
   ArrowDown,
 } from 'lucide-react';
 import { StatusBadge, type StatusVariant } from './ui/StatusBadge';
-import { Tooltip } from './ui/Tooltip';
+import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 
 function ReplyStatusBadge({ candidate }: { candidate: Candidate }) {
   const derived: NonNullable<Candidate['replyStatus']> =
@@ -683,16 +683,19 @@ function IgnoreConfirmButton({
 }) {
   return (
     <AlertDialog.Root>
-      <Tooltip content="Ignore candidate (mute future drafts; reversible)">
-        <AlertDialog.Trigger asChild>
-          <button
-            disabled={disabled}
-            aria-label="Ignore candidate"
-            className="flex h-7 w-7 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-rose-500/15 hover:text-rose-700 dark:hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <EyeOff className="h-3.5 w-3.5" />
-          </button>
-        </AlertDialog.Trigger>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <AlertDialog.Trigger asChild>
+            <button
+              disabled={disabled}
+              aria-label="Ignore candidate"
+              className="flex size-7 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-rose-500/15 hover:text-rose-700 dark:hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <EyeOff className="h-3.5 w-3.5" />
+            </button>
+          </AlertDialog.Trigger>
+        </TooltipTrigger>
+        <TooltipContent>Ignore candidate (mute future drafts; reversible)</TooltipContent>
       </Tooltip>
       <AlertDialog.Portal>
         <AlertDialog.Overlay className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm data-[state=open]:animate-fade-in" />

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
 import { cn, formatTimeAgo } from '../lib/utils';
-import { Tooltip } from './ui/Tooltip';
+import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { ClassificationBadge, StatusBadge, type StatusVariant } from './ui/StatusBadge';
 import {
   Check,
@@ -125,17 +125,20 @@ function DiscardConfirm({
 }) {
   return (
     <AlertDialog.Root>
-      <Tooltip content="Discard draft">
-        <AlertDialog.Trigger asChild>
-          <button
-            disabled={disabled}
-            aria-label="Discard draft"
-            className="flex items-center gap-1.5 rounded-lg bg-rose-500/10 px-3 py-2 text-[13px] font-medium text-rose-700 ring-1 ring-inset ring-rose-500/20 transition-colors hover:bg-rose-500/15 dark:text-rose-300 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <X className="h-3.5 w-3.5" />
-            Discard
-          </button>
-        </AlertDialog.Trigger>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <AlertDialog.Trigger asChild>
+            <button
+              disabled={disabled}
+              aria-label="Discard draft"
+              className="flex items-center gap-1.5 rounded-lg bg-rose-500/10 px-3 py-2 text-[13px] font-medium text-rose-700 ring-1 ring-inset ring-rose-500/20 transition-colors hover:bg-rose-500/15 dark:text-rose-300 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <X className="h-3.5 w-3.5" />
+              Discard
+            </button>
+          </AlertDialog.Trigger>
+        </TooltipTrigger>
+        <TooltipContent>Discard draft</TooltipContent>
       </Tooltip>
       <AlertDialog.Portal>
         <AlertDialog.Overlay className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm data-[state=open]:animate-fade-in" />
@@ -406,22 +409,27 @@ export default function DraftReviewPane({
             <div className="flex items-center gap-2">
               {isPending && (
                 <>
-                  <Tooltip content={approving ? 'Approving…' : 'Approve — saves as Gmail draft (a)'}>
-                    <button
-                      onClick={() => onApprove(draft.id)}
-                      disabled={regenerating || editing || approving}
-                      aria-label="Approve draft"
-                      className={cn(
-                        'flex items-center gap-1.5 rounded-lg bg-emerald-500/15 px-3.5 py-2 text-[13px] font-medium text-emerald-700 ring-1 ring-inset ring-emerald-500/25 transition-colors hover:bg-emerald-500/25 dark:text-emerald-300 dark:hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-50'
-                      )}
-                    >
-                      {approving ? (
-                        <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Check className="h-3.5 w-3.5" />
-                      )}
-                      Approve
-                    </button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        onClick={() => onApprove(draft.id)}
+                        disabled={regenerating || editing || approving}
+                        aria-label="Approve draft"
+                        className={cn(
+                          'flex items-center gap-1.5 rounded-lg bg-emerald-500/15 px-3.5 py-2 text-[13px] font-medium text-emerald-700 ring-1 ring-inset ring-emerald-500/25 transition-colors hover:bg-emerald-500/25 dark:text-emerald-300 dark:hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-50'
+                        )}
+                      >
+                        {approving ? (
+                          <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Check className="h-3.5 w-3.5" />
+                        )}
+                        Approve
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {approving ? 'Approving…' : 'Approve — saves as Gmail draft (a)'}
+                    </TooltipContent>
                   </Tooltip>
                   <DiscardConfirm
                     onConfirm={() => onDiscard(draft.id)}
@@ -458,29 +466,35 @@ export default function DraftReviewPane({
             <div className="flex items-center gap-1">
               {isPending && (
                 <>
-                  <Tooltip
-                    content={regenerating ? 'Regenerating…' : 'Regenerate (r)'}
-                  >
-                    <button
-                      onClick={() => onRegenerate(draft.id)}
-                      disabled={regenerating || editing}
-                      aria-label="Regenerate draft"
-                      className="flex h-9 w-9 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-fg-strong/[0.06] hover:text-fg-strong disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      <RefreshCw
-                        className={cn('h-4 w-4', regenerating && 'animate-spin')}
-                      />
-                    </button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        onClick={() => onRegenerate(draft.id)}
+                        disabled={regenerating || editing}
+                        aria-label="Regenerate draft"
+                        className="flex size-9 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-fg-strong/[0.06] hover:text-fg-strong disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <RefreshCw
+                          className={cn('h-4 w-4', regenerating && 'animate-spin')}
+                        />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {regenerating ? 'Regenerating…' : 'Regenerate (r)'}
+                    </TooltipContent>
                   </Tooltip>
-                  <Tooltip content="Edit body (e)">
-                    <button
-                      onClick={() => setEditing(true)}
-                      disabled={regenerating || editing}
-                      aria-label="Edit draft body"
-                      className="flex h-9 w-9 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-fg-strong/[0.06] hover:text-fg-strong disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        onClick={() => setEditing(true)}
+                        disabled={regenerating || editing}
+                        aria-label="Edit draft body"
+                        className="flex size-9 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-fg-strong/[0.06] hover:text-fg-strong disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>Edit body (e)</TooltipContent>
                   </Tooltip>
                 </>
               )}
