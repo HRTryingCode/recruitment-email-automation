@@ -2,7 +2,10 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { config } from '../config';
 
-const SALT_ROUNDS = 10;
+// OWASP 2024 password storage cheatsheet recommends ≥12 for bcrypt.
+// Existing hashes encode their own cost prefix so verifyPassword still works
+// against rows hashed with the old factor.
+const SALT_ROUNDS = 12;
 const TOKEN_EXPIRES_IN = '7d';
 
 export async function hashPassword(plain: string): Promise<string> {
