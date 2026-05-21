@@ -2,16 +2,43 @@ import { prisma } from '../db/client';
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config';
 
-function safeStringify(value: unknown): string {
+// Keys whose values get fully replaced with [REDACTED] regardless of contents.
+// SystemLog.details is readable by any authenticated user via the internal
+// health/status endpoints, so we strip anything whose key suggests a secret.
+const SECRET_KEY_RE = /(password|token|credential|secret)/i;
+
+// Replace a `stack` string with just the first line (the error message) so
+// downstream readers still get the gist without leaking file paths,
+// dependency versions, or message bodies that v8 sometimes inlines into the
+// stack frame. Returning `…(stack redacted)` makes the redaction visible.
+function redactStack(stack: unknown): string {
+  if (typeof stack !== 'string') return '…(stack redacted)';
+  const firstLine = stack.split('\n', 1)[0]?.trim() ?? '';
+  return firstLine ? `${firstLine} …(stack redacted)` : '…(stack redacted)';
+}
+
+export function safeStringify(value: unknown): string {
   const seen = new WeakSet<object>();
   try {
-    return JSON.stringify(value, (_key, val) => {
+    return JSON.stringify(value, (key, val) => {
+      if (key && SECRET_KEY_RE.test(key)) return '[REDACTED]';
+      if (key === 'stack') return redactStack(val);
       if (typeof val === 'object' && val !== null) {
         if (seen.has(val as object)) return '[Circular]';
         seen.add(val as object);
       }
       if (typeof val === 'bigint') return val.toString();
-      if (val instanceof Error) return { name: val.name, message: val.message, stack: val.stack };
+      if (val instanceof Error) {
+        return {
+          name: val.name,
+          message: val.message,
+          // Pass through unmodified — the `stack` branch above will redact it
+          // when JSON.stringify recurses into this object. Keeping the field
+          // present (rather than dropping it) preserves the shape consumers
+          // expect when reading recentLogs.
+          stack: val.stack,
+        };
+      }
       return val;
     });
   } catch {
