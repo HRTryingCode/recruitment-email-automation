@@ -1,4 +1,3 @@
-import { cn } from '../../lib/utils';
 import {
   CheckCircle2,
   XCircle,
@@ -9,6 +8,8 @@ import {
   EyeOff,
   Sparkles,
 } from 'lucide-react';
+import { Badge } from './badge';
+import { cn } from '@/lib/utils';
 
 export type StatusVariant =
   | 'INTERESTED'
@@ -20,70 +21,64 @@ export type StatusVariant =
   | 'IGNORED';
 
 interface VariantStyle {
-  ring: string;
-  bg: string;
-  text: string;
-  dot: string;
+  className: string;
+  dotClass: string;
   icon: React.ComponentType<{ className?: string }>;
   label: string;
 }
 
-// Chromatic palettes use a darker text shade in light mode (X-700) for
-// readability on pale chromatic backgrounds, and the original X-300 in dark.
+// The shadcn Badge supplies the base shape, focus ring, and motion. The
+// chromatic classes here paint the status colour on top: light-mode uses the
+// darker shade (X-700) so it stays readable on the pale chromatic backdrop,
+// dark-mode keeps the softer X-300. NEUTRAL/IGNORED use theme-aware `fg-*`
+// tokens so they flip automatically.
 const VARIANTS: Record<StatusVariant, VariantStyle> = {
   INTERESTED: {
-    ring: 'ring-emerald-500/20',
-    bg: 'bg-emerald-500/10',
-    text: 'text-emerald-700 dark:text-emerald-300',
-    dot: 'bg-emerald-500 dark:bg-emerald-400',
+    className:
+      'bg-emerald-500/10 text-emerald-700 ring-1 ring-inset ring-emerald-500/20 dark:text-emerald-300 border-transparent',
+    dotClass: 'bg-emerald-500 dark:bg-emerald-400',
     icon: CheckCircle2,
     label: 'Interested',
   },
   NOT_INTERESTED: {
-    ring: 'ring-rose-500/20',
-    bg: 'bg-rose-500/10',
-    text: 'text-rose-700 dark:text-rose-300',
-    dot: 'bg-rose-500 dark:bg-rose-400',
+    className:
+      'bg-rose-500/10 text-rose-700 ring-1 ring-inset ring-rose-500/20 dark:text-rose-300 border-transparent',
+    dotClass: 'bg-rose-500 dark:bg-rose-400',
     icon: XCircle,
     label: 'Not Interested',
   },
   NEUTRAL: {
-    ring: 'ring-fg-strong/[0.08]',
-    bg: 'bg-fg-strong/[0.05]',
-    text: 'text-fg-default',
-    dot: 'bg-fg-muted',
+    className:
+      'bg-fg-strong/[0.05] text-fg-default ring-1 ring-inset ring-fg-strong/[0.08] border-transparent',
+    dotClass: 'bg-fg-muted',
     icon: MinusCircle,
     label: 'Neutral',
   },
   PENDING: {
-    ring: 'ring-amber-500/25',
-    bg: 'bg-amber-500/10',
-    text: 'text-amber-700 dark:text-amber-300',
-    dot: 'bg-amber-500 dark:bg-amber-400',
+    className:
+      'bg-amber-500/10 text-amber-700 ring-1 ring-inset ring-amber-500/25 dark:text-amber-300 border-transparent',
+    dotClass: 'bg-amber-500 dark:bg-amber-400',
     icon: Clock,
     label: 'Pending',
   },
   REPLIED: {
-    ring: 'ring-sky-500/20',
-    bg: 'bg-sky-500/10',
-    text: 'text-sky-700 dark:text-sky-300',
-    dot: 'bg-sky-500 dark:bg-sky-400',
+    className:
+      'bg-sky-500/10 text-sky-700 ring-1 ring-inset ring-sky-500/20 dark:text-sky-300 border-transparent',
+    dotClass: 'bg-sky-500 dark:bg-sky-400',
     icon: Send,
     label: 'Replied',
   },
   NEEDS_REVIEW: {
-    ring: 'ring-amber-500/25',
-    bg: 'bg-amber-500/10',
-    text: 'text-amber-700 dark:text-amber-300',
-    dot: 'bg-amber-500 dark:bg-amber-400',
+    className:
+      'bg-amber-500/10 text-amber-700 ring-1 ring-inset ring-amber-500/25 dark:text-amber-300 border-transparent',
+    dotClass: 'bg-amber-500 dark:bg-amber-400',
     icon: AlertTriangle,
     label: 'Needs Review',
   },
   IGNORED: {
-    ring: 'ring-fg-strong/[0.07]',
-    bg: 'bg-fg-strong/[0.04]',
-    text: 'text-fg-muted',
-    dot: 'bg-fg-subtle',
+    className:
+      'bg-fg-strong/[0.04] text-fg-muted ring-1 ring-inset ring-fg-strong/[0.07] border-transparent',
+    dotClass: 'bg-fg-subtle',
     icon: EyeOff,
     label: 'Ignored',
   },
@@ -105,23 +100,30 @@ export function StatusBadge({
   const v = VARIANTS[status] ?? VARIANTS.NEUTRAL;
   const Icon = v.icon;
   return (
-    <span
+    <Badge
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-full font-medium ring-1 ring-inset',
-        v.bg,
-        v.text,
-        v.ring,
-        size === 'sm' ? 'px-2 py-0.5 text-[11px]' : 'px-2.5 py-1 text-xs',
+        // Override shadcn defaults (h-5 fixed, taupe bg) — the chromatic class
+        // owns the surface colour and we pick the size locally.
+        'h-auto',
+        v.className,
+        size === 'sm'
+          ? 'px-2 py-0.5 text-[11px]'
+          : 'px-2.5 py-1 text-xs',
         className
       )}
     >
       {withIcon ? (
-        <Icon className={cn(size === 'sm' ? 'h-3 w-3' : 'h-3.5 w-3.5')} />
+        <Icon
+          className={cn(
+            'flex-shrink-0',
+            size === 'sm' ? '!size-3' : '!size-3.5'
+          )}
+        />
       ) : (
-        <span className={cn('h-1.5 w-1.5 rounded-full', v.dot)} />
+        <span className={cn('size-1.5 rounded-full', v.dotClass)} />
       )}
       {v.label}
-    </span>
+    </Badge>
   );
 }
 
@@ -139,22 +141,20 @@ export function ClassificationBadge({
   const v = VARIANTS[classification];
   const Icon = classification === 'NEUTRAL' ? Sparkles : v.icon;
   return (
-    <span
+    <Badge
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset',
-        v.bg,
-        v.text,
-        v.ring,
+        'h-auto px-2 py-0.5 text-[11px]',
+        v.className,
         className
       )}
     >
-      <Icon className="h-3 w-3" />
+      <Icon className="!size-3 flex-shrink-0" />
       <span>{v.label}</span>
       {confidence !== undefined && (
         <span className="text-fg-muted tabular-nums font-mono text-[10px]">
           · {Math.round(confidence * 100)}%
         </span>
       )}
-    </span>
+    </Badge>
   );
 }

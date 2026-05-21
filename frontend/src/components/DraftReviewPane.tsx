@@ -1,8 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
-import * as AlertDialog from '@radix-ui/react-alert-dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from './ui/alert-dialog';
 import { cn, formatTimeAgo } from '../lib/utils';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { ClassificationBadge, StatusBadge, type StatusVariant } from './ui/StatusBadge';
+import { Button } from './ui/button';
 import {
   Check,
   X,
@@ -124,10 +135,10 @@ function DiscardConfirm({
   disabled: boolean;
 }) {
   return (
-    <AlertDialog.Root>
+    <AlertDialog>
       <Tooltip>
         <TooltipTrigger asChild>
-          <AlertDialog.Trigger asChild>
+          <AlertDialogTrigger asChild>
             <button
               disabled={disabled}
               aria-label="Discard draft"
@@ -136,38 +147,29 @@ function DiscardConfirm({
               <X className="h-3.5 w-3.5" />
               Discard
             </button>
-          </AlertDialog.Trigger>
+          </AlertDialogTrigger>
         </TooltipTrigger>
         <TooltipContent>Discard draft</TooltipContent>
       </Tooltip>
-      <AlertDialog.Portal>
-        <AlertDialog.Overlay className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm data-[state=open]:animate-fade-in" />
-        <AlertDialog.Content className="fixed left-1/2 top-1/2 z-[60] w-[440px] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-line bg-surface-elevated/95 p-6 shadow-2xl backdrop-blur-xl data-[state=open]:animate-fade-in">
-          <AlertDialog.Title className="font-display text-[16px] font-semibold text-fg-strong">
-            Discard draft?
-          </AlertDialog.Title>
-          <AlertDialog.Description className="mt-2 text-[13.5px] leading-relaxed text-fg-muted">
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Discard draft?</AlertDialogTitle>
+          <AlertDialogDescription>
             The draft will not be sent. New emails from this candidate will
             still generate drafts unless you ignore them.
-          </AlertDialog.Description>
-          <div className="mt-6 flex justify-end gap-2">
-            <AlertDialog.Cancel asChild>
-              <button className="rounded-lg bg-fg-strong/[0.05] px-4 py-2 text-[13px] font-medium text-fg-default transition-colors hover:bg-fg-strong/[0.09]">
-                Cancel
-              </button>
-            </AlertDialog.Cancel>
-            <AlertDialog.Action asChild>
-              <button
-                onClick={onConfirm}
-                className="rounded-lg bg-rose-500 px-4 py-2 text-[13px] font-medium text-white transition-colors hover:bg-rose-400"
-              >
-                Discard draft
-              </button>
-            </AlertDialog.Action>
-          </div>
-        </AlertDialog.Content>
-      </AlertDialog.Portal>
-    </AlertDialog.Root>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            onClick={onConfirm}
+          >
+            Discard draft
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
@@ -370,21 +372,21 @@ export default function DraftReviewPane({
                       autoFocus
                     />
                     <div className="flex gap-2">
-                      <button
+                      <Button
                         onClick={handleSaveEdit}
-                        className="rounded-lg bg-accent-500 px-3.5 py-2 text-[13px] font-medium text-white transition-colors hover:bg-accent-400"
+                        className="bg-accent-500 text-white hover:bg-accent-400"
                       >
                         Save changes
-                      </button>
-                      <button
+                      </Button>
+                      <Button
+                        variant="secondary"
                         onClick={() => {
                           setEditing(false);
                           setEditedBody(draft.bodyText);
                         }}
-                        className="rounded-lg bg-fg-strong/[0.05] px-3.5 py-2 text-[13px] font-medium text-fg-default transition-colors hover:bg-fg-strong/[0.09]"
                       >
                         Cancel
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 ) : (

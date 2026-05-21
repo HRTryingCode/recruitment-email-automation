@@ -11,6 +11,8 @@ import EmailDrafts from '../components/EmailDrafts';
 import CandidateTable from '../components/CandidateTable';
 import MailboxFilter from '../components/MailboxFilter';
 import ThemeToggle from '../components/ThemeToggle';
+import { Button } from '../components/ui/button';
+import { Badge } from '../components/ui/badge';
 import { cn } from '../lib/utils';
 import {
   Plus,
@@ -261,13 +263,14 @@ export default function Index() {
               selectedId={selectedMailboxId}
               onChange={setSelectedMailboxId}
             />
-            <button
+            <Button
+              size="sm"
               onClick={handleAddMailbox}
-              className="group flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-[13px] font-medium text-white shadow-glow transition-all hover:bg-accent-400 active:scale-[0.98]"
+              className="rounded-lg bg-accent-500 px-3 py-1.5 text-[13px] font-medium text-white shadow-glow hover:bg-accent-400"
             >
-              <Plus className="h-3.5 w-3.5" />
+              <Plus data-icon="inline-start" />
               <span className="hidden sm:inline">Add Mailbox</span>
-            </button>
+            </Button>
 
             <ThemeToggle />
 
@@ -357,16 +360,16 @@ export default function Index() {
                   />
                   <span>{tab.label}</span>
                   {tab.badge !== undefined && tab.badge > 0 && (
-                    <span
+                    <Badge
                       className={cn(
-                        'ml-0.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[10px] font-bold tabular-nums leading-none transition-colors',
+                        'ml-0.5 h-[18px] min-w-[18px] px-1 text-[10px] font-bold tabular-nums leading-none border-transparent',
                         isActive
                           ? 'bg-accent-500 text-white'
                           : 'bg-amber-500/15 text-amber-700 ring-1 ring-inset ring-amber-500/25 dark:text-amber-300'
                       )}
                     >
                       {tab.badge}
-                    </span>
+                    </Badge>
                   )}
                 </Tabs.Trigger>
               );

@@ -4,6 +4,8 @@ import axios from 'axios';
 import { Sparkles } from 'lucide-react';
 import { loginWithGoogle } from '../lib/api';
 import { setToken, setUser } from '../lib/auth';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
+import { Alert, AlertDescription } from '../components/ui/alert';
 
 const GOOGLE_CLIENT_ID =
   '403302601606-m9l02nom1med5ok7bh6rign6a3hk01o3.apps.googleusercontent.com';
@@ -95,30 +97,38 @@ export default function Login() {
           </div>
         </div>
 
-        <div className="overflow-hidden rounded-2xl border border-line bg-surface-raised/70 p-8 shadow-2xl backdrop-blur-xl">
-          <h2 className="font-display text-2xl font-semibold tracking-tight text-fg-strong">
-            Welcome back
-          </h2>
-          <p className="mt-2 text-[13.5px] leading-relaxed text-fg-muted">
-            Sign in with your Archive Google account to continue.
-          </p>
-
-          <div className="mt-8 flex justify-center">
-            <div ref={btnRef} />
-          </div>
-
-          {!gisReady && (
-            <p className="mt-4 text-center text-[12px] text-fg-subtle">
-              Loading Google sign-in…
-            </p>
-          )}
-
-          {error && (
-            <div className="mt-5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 text-[13px] text-rose-700 dark:text-rose-300">
-              {error}
+        <Card className="border border-line bg-surface-raised/70 backdrop-blur-xl shadow-2xl">
+          <CardHeader>
+            <CardTitle>
+              <h2 className="font-display text-2xl font-semibold tracking-tight text-fg-strong">
+                Welcome back
+              </h2>
+            </CardTitle>
+            <CardDescription className="text-[13.5px] leading-relaxed text-fg-muted">
+              Sign in with your Archive Google account to continue.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-5">
+            <div className="flex justify-center">
+              <div ref={btnRef} />
             </div>
-          )}
-        </div>
+
+            {!gisReady && (
+              <p className="text-center text-[12px] text-fg-subtle">
+                Loading Google sign-in…
+              </p>
+            )}
+
+            {error && (
+              <Alert
+                variant="destructive"
+                className="border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-300"
+              >
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+          </CardContent>
+        </Card>
 
         <p className="mt-6 text-center text-[12px] text-fg-subtle">
           Restricted to <span className="font-mono text-fg-muted">@archive.com</span> accounts.

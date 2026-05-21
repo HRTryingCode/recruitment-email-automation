@@ -12,6 +12,8 @@ import {
   type MailboxSyncHealth,
 } from '../lib/api';
 import { cn } from '../lib/utils';
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './ui/empty';
+import { Skeleton } from './ui/skeleton';
 import {
   toastSuccess,
   toastError,
@@ -99,7 +101,7 @@ function ActionPill({
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
           {loading ? (
-            <div className="h-8 w-12 skeleton" />
+            <Skeleton className="h-8 w-12" />
           ) : (
             <span
               className={cn(
@@ -351,7 +353,7 @@ function MailboxHealthAccordion({
       {open && (
         <div id="mailbox-health-detail" className="border-t border-line">
           {loading ? (
-            <div className="h-24 skeleton" />
+            <Skeleton className="h-24 rounded-none" />
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-[13px]">
@@ -491,21 +493,25 @@ function EmptyState({
   compact?: boolean;
 }) {
   return (
-    <div
+    <Empty
       className={cn(
-        'flex flex-col items-center justify-center rounded-xl border border-dashed border-line-strong bg-surface-raised/40 px-6 text-center',
+        'rounded-xl border border-dashed border-line-strong bg-surface-raised/40 px-6',
         compact ? 'py-8' : 'py-12'
       )}
     >
-      <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-2xl bg-fg-strong/[0.04] text-fg-muted ring-1 ring-inset ring-fg-strong/[0.06]">
-        <Icon className="h-5 w-5" />
-      </div>
-      <p className="font-display text-[14.5px] font-medium text-fg-strong">{title}</p>
-      <p className="mt-1.5 max-w-xs text-[12.5px] leading-relaxed text-fg-muted">
-        {description}
-      </p>
-      {action && <div className="mt-4">{action}</div>}
-    </div>
+      <EmptyHeader>
+        <EmptyMedia variant="icon" className="bg-fg-strong/[0.04] text-fg-muted">
+          <Icon className="size-5" />
+        </EmptyMedia>
+        <EmptyTitle className="font-display text-[14.5px] font-medium text-fg-strong">
+          {title}
+        </EmptyTitle>
+        <EmptyDescription className="max-w-xs text-[12.5px] leading-relaxed text-fg-muted">
+          {description}
+        </EmptyDescription>
+      </EmptyHeader>
+      {action ? <div>{action}</div> : null}
+    </Empty>
   );
 }
 
@@ -697,7 +703,7 @@ export default function Dashboard({
         {loadingDrafts ? (
           <div className="space-y-1 rounded-xl border border-line bg-surface-raised/60">
             {[1, 2, 3].map((i) => (
-              <div key={i} className="h-14 skeleton" />
+              <Skeleton key={i} className="h-14 rounded-none" />
             ))}
           </div>
         ) : triageDrafts.length === 0 ? (
@@ -735,7 +741,7 @@ export default function Dashboard({
         {loadingMailboxes ? (
           <div className="space-y-1 rounded-xl border border-line bg-surface-raised/60">
             {[1, 2, 3].map((i) => (
-              <div key={i} className="h-14 skeleton" />
+              <Skeleton key={i} className="h-14 rounded-none" />
             ))}
           </div>
         ) : mailboxes.length === 0 ? (
