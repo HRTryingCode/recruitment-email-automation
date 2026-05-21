@@ -4,6 +4,7 @@ import { createError } from '../middleware/error';
 import { createDraft, sendDraft as gmailSendDraft } from '../services/gmail.service';
 import { classifyReply, generateDraftReply } from '../services/claude.service';
 import { logEvent } from '../services/monitoring.service';
+import { serializeEmailMessages } from '../lib/emailMessageSerializer';
 import { z } from 'zod';
 
 const router = Router();
@@ -211,7 +212,15 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
       draft.inReplyToMessageId
     );
 
-    res.json({ success: true, data: { ...draft, originalMessage } });
+    const data = {
+      ...draft,
+      thread: {
+        ...draft.thread,
+        messages: serializeEmailMessages(draft.thread.messages),
+      },
+      originalMessage,
+    };
+    res.json({ success: true, data });
   } catch (err) {
     next(err);
   }
