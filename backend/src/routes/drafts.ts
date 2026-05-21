@@ -270,7 +270,6 @@ async function regenerateDraftById(id: string): Promise<RegenerateOk | Regenerat
     include: {
       thread: {
         include: {
-          messages: { orderBy: { receivedAt: 'desc' } },
           candidate: true,
           mailbox: true,
         },
@@ -290,8 +289,17 @@ async function regenerateDraftById(id: string): Promise<RegenerateOk | Regenerat
     return { ok: false, status: 400, message: 'Thread has no candidate' };
   }
 
+  // Re-fetch the thread's messages immediately before calling Claude so a new
+  // inbound that landed after the draft was created is reflected. Capped at
+  // the most recent 8 to keep prompt size predictable.
+  const recentMessages = await prisma.emailMessage.findMany({
+    where: { threadId: thread.id },
+    orderBy: { receivedAt: 'desc' },
+    take: 8,
+  });
+
   const originalMessage = pickOriginalMessage(
-    thread.messages,
+    recentMessages,
     mailbox,
     draft.inReplyToMessageId
   );
@@ -299,11 +307,33 @@ async function regenerateDraftById(id: string): Promise<RegenerateOk | Regenerat
     return { ok: false, status: 400, message: 'No inbound message to reply to' };
   }
 
+  // Telemetry: if the chosen inbound is newer than the draft's last update,
+  // the regenerated reply diverges from the prior one for a real reason
+  // (new context) rather than classifier drift. Log the delta so we can tell
+  // the two apart when investigating "why did the regen change so much?".
+  const mailboxAddr = mailbox.emailAddress.toLowerCase();
+  const latestInbound = recentMessages
+    .filter((m) => m.fromAddress.toLowerCase() !== mailboxAddr)
+    .reduce<typeof recentMessages[number] | null>(
+      (acc, m) => (acc === null || m.receivedAt > acc.receivedAt ? m : acc),
+      null
+    );
+  if (latestInbound && latestInbound.receivedAt.getTime() > draft.updatedAt.getTime()) {
+    await logEvent(
+      'DRAFT_REGEN_NEW_CONTEXT',
+      {
+        draftId: id,
+        deltaMs: latestInbound.receivedAt.getTime() - draft.updatedAt.getTime(),
+      },
+      'INFO'
+    );
+  }
+
   // Re-classify the inbound message so the draft's classification/confidence
   // reflect the current classifier prompt. previousMessages = thread history
   // strictly before the inbound, oldest → newest (same shape sync uses).
   const inboundTs = originalMessage.receivedAt.getTime();
-  const previousMessages = thread.messages
+  const previousMessages = recentMessages
     .filter((m) => m.receivedAt.getTime() < inboundTs)
     .sort((a, b) => a.receivedAt.getTime() - b.receivedAt.getTime())
     .map((m) => ({
@@ -319,7 +349,7 @@ async function regenerateDraftById(id: string): Promise<RegenerateOk | Regenerat
     { subject: thread.subject, previousMessages }
   );
 
-  const allMessagesAsc = thread.messages
+  const allMessagesAsc = recentMessages
     .slice()
     .sort((a, b) => a.receivedAt.getTime() - b.receivedAt.getTime())
     .map((m) => ({

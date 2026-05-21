@@ -161,6 +161,19 @@ router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => 
       return next(createError('Candidate not found', 404));
     }
 
+    // Guard against email collisions explicitly so the caller gets a 409 with
+    // a clear message instead of Prisma's opaque P2002 surfacing as a 500.
+    if (parsed.data.email && parsed.data.email !== candidate.email) {
+      const existing = await prisma.candidate.findUnique({
+        where: { email: parsed.data.email },
+      });
+      if (existing && existing.id !== id) {
+        return next(
+          createError('Another candidate already uses this email', 409)
+        );
+      }
+    }
+
     const updated = await prisma.candidate.update({
       where: { id },
       data: parsed.data,
