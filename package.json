@@ -4,7 +4,8 @@
   "private": true,
   "workspaces": [
     "backend",
-    "frontend"
+    "frontend",
+    "e2e"
   ],
   "scripts": {
     "dev:backend": "npm run dev --workspace=backend",
@@ -12,5 +13,8 @@
     "build": "npm run build --workspace=backend && npm run build --workspace=frontend",
     "install:all": "npm install",
     "postinstall": "npm run db:generate --workspace=backend"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0"
   }
 }

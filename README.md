@@ -158,6 +158,24 @@ cd backend && npm run seed
 npm run build
 ```
 
+## End-to-end tests
+
+Playwright smoke tests live in [`e2e/`](e2e/) and run against a deployed
+environment (production by default). To run them locally:
+
+```bash
+cd e2e
+npm install
+npx playwright install chromium
+npm test
+
+# Optional: point at a different environment
+E2E_BASE_URL=https://staging.example.com npm test
+```
+
+The same suite runs automatically in CI after the backend and frontend jobs
+(see `.github/workflows/test.yml`).
+
 ## Further reading
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — per-module narrative, data-flow diagrams, decision log.
