@@ -30,9 +30,16 @@ app.set('trust proxy', 1);
 // Security middleware
 app.use(helmet());
 
+// Strict CORS: reject any Origin not in ALLOWED_ORIGINS. Requests without an
+// Origin header (same-origin browser fetches, curl, server-to-server) bypass
+// the check — CORS only protects cross-origin browser flows.
 app.use(
   cors({
-    origin: config.frontendUrl,
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      if (config.allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error(`CORS: origin ${origin} not allowed`));
+    },
     credentials: true,
   })
 );
