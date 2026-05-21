@@ -354,11 +354,15 @@ describe('/api/drafts', () => {
         id: 'd-pending-1',
         status: 'PENDING',
         inReplyToMessageId: null,
+        updatedAt: new Date('2026-04-01T00:00:00Z'),
         thread: {
           ...baseThread,
           messages: [inbound],
         },
       });
+      // Phase AA #18: regenerateDraftById re-fetches thread messages just
+      // before calling Claude so the regen reflects any new inbound.
+      mockPrisma.emailMessage.findMany.mockResolvedValueOnce([inbound]);
       classifyReply.mockResolvedValueOnce({
         classification: 'INTERESTED',
         confidence: 0.9,
@@ -379,6 +383,7 @@ describe('/api/drafts', () => {
         id: 'd-pending-2',
         status: 'APPROVED',
         inReplyToMessageId: null,
+        updatedAt: new Date('2026-04-01T00:00:00Z'),
         thread: { ...baseThread, messages: [inbound] },
       });
 
