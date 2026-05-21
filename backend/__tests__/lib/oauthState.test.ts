@@ -1,56 +1,116 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 
+import { buildPrismaMock, resetPrismaMock, type MockPrisma } from '../_setup/mockPrisma';
+
+vi.mock('../../src/db/client', () => {
+  const prisma = buildPrismaMock();
+  return { prisma, default: prisma };
+});
+
+import { prisma as injectedPrisma } from '../../src/db/client';
 import { storeOAuthState, consumeOAuthState } from '../../src/lib/oauthState';
 
+const mockPrisma = injectedPrisma as unknown as MockPrisma;
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
-describe('lib/oauthState', () => {
+describe('lib/oauthState (Prisma-backed)', () => {
   beforeEach(() => {
-    // The store is module-level; isolate each test by using unique tokens.
-    vi.useRealTimers();
+    resetPrismaMock(mockPrisma);
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
+  describe('storeOAuthState', () => {
+    it('reaps stale rows then inserts the new state', async () => {
+      await storeOAuthState('tok-1');
+
+      expect(mockPrisma.oAuthState.deleteMany).toHaveBeenCalledTimes(1);
+      const reaperArgs = mockPrisma.oAuthState.deleteMany.mock.calls[0]?.[0] as {
+        where: { createdAt: { lt: Date } };
+      };
+      expect(reaperArgs.where.createdAt.lt).toBeInstanceOf(Date);
+      // Reaper cutoff is ~now - TTL; allow a generous slop for slow CI.
+      const expectedCutoff = Date.now() - OAUTH_STATE_TTL_MS;
+      expect(reaperArgs.where.createdAt.lt.getTime()).toBeGreaterThan(expectedCutoff - 5_000);
+      expect(reaperArgs.where.createdAt.lt.getTime()).toBeLessThan(expectedCutoff + 5_000);
+
+      expect(mockPrisma.oAuthState.create).toHaveBeenCalledWith({ data: { state: 'tok-1' } });
+    });
+
+    it('still inserts when the reaper deleteMany fails (non-fatal)', async () => {
+      mockPrisma.oAuthState.deleteMany.mockRejectedValueOnce(new Error('boom'));
+      await expect(storeOAuthState('tok-2')).resolves.toBeUndefined();
+      expect(mockPrisma.oAuthState.create).toHaveBeenCalledWith({ data: { state: 'tok-2' } });
+    });
   });
 
-  it('consumes a stored state exactly once', () => {
-    const token = `tok-${Math.random()}`;
-    storeOAuthState(token);
-    expect(consumeOAuthState(token)).toBe(true);
-    // Second consume is a no-op — protects against replay.
-    expect(consumeOAuthState(token)).toBe(false);
-  });
+  describe('consumeOAuthState', () => {
+    it('returns true and marks consumedAt on a fresh, unconsumed row', async () => {
+      mockPrisma.oAuthState.findUnique.mockResolvedValueOnce({
+        state: 'tok-3',
+        mailboxId: null,
+        createdAt: new Date(Date.now() - 1_000),
+        consumedAt: null,
+      });
 
-  it('returns false for an unknown token', () => {
-    expect(consumeOAuthState(`never-stored-${Math.random()}`)).toBe(false);
-  });
+      const result = await consumeOAuthState('tok-3');
 
-  it('treats expired tokens as invalid', () => {
-    vi.useFakeTimers();
-    const token = `tok-${Math.random()}`;
-    storeOAuthState(token);
-    // Jump past the TTL.
-    vi.advanceTimersByTime(OAUTH_STATE_TTL_MS + 1);
-    expect(consumeOAuthState(token)).toBe(false);
-  });
+      expect(result).toBe(true);
+      expect(mockPrisma.oAuthState.update).toHaveBeenCalledTimes(1);
+      const updateArgs = mockPrisma.oAuthState.update.mock.calls[0]?.[0] as {
+        where: { state: string };
+        data: { consumedAt: Date };
+      };
+      expect(updateArgs.where).toEqual({ state: 'tok-3' });
+      expect(updateArgs.data.consumedAt).toBeInstanceOf(Date);
+    });
 
-  it('still accepts a token consumed just before TTL elapses', () => {
-    vi.useFakeTimers();
-    const token = `tok-${Math.random()}`;
-    storeOAuthState(token);
-    vi.advanceTimersByTime(OAUTH_STATE_TTL_MS - 1);
-    expect(consumeOAuthState(token)).toBe(true);
-  });
+    it('returns false for an unknown state', async () => {
+      mockPrisma.oAuthState.findUnique.mockResolvedValueOnce(null);
+      expect(await consumeOAuthState('never-stored')).toBe(false);
+      expect(mockPrisma.oAuthState.update).not.toHaveBeenCalled();
+    });
 
-  it('isolates tokens — consuming one does not affect another', () => {
-    const a = `tok-a-${Math.random()}`;
-    const b = `tok-b-${Math.random()}`;
-    storeOAuthState(a);
-    storeOAuthState(b);
-    expect(consumeOAuthState(a)).toBe(true);
-    expect(consumeOAuthState(b)).toBe(true);
-    expect(consumeOAuthState(a)).toBe(false);
-    expect(consumeOAuthState(b)).toBe(false);
+    it('rejects a state that has already been consumed (replay protection)', async () => {
+      mockPrisma.oAuthState.findUnique.mockResolvedValueOnce({
+        state: 'tok-4',
+        mailboxId: null,
+        createdAt: new Date(Date.now() - 1_000),
+        consumedAt: new Date(Date.now() - 500),
+      });
+
+      expect(await consumeOAuthState('tok-4')).toBe(false);
+      expect(mockPrisma.oAuthState.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects a state older than the 10-minute TTL', async () => {
+      mockPrisma.oAuthState.findUnique.mockResolvedValueOnce({
+        state: 'tok-5',
+        mailboxId: null,
+        createdAt: new Date(Date.now() - (OAUTH_STATE_TTL_MS + 1_000)),
+        consumedAt: null,
+      });
+
+      expect(await consumeOAuthState('tok-5')).toBe(false);
+      expect(mockPrisma.oAuthState.update).not.toHaveBeenCalled();
+    });
+
+    it('two consumes of the same state: happy path then replay rejection', async () => {
+      // First call: unconsumed → returns true and the route would mark consumedAt.
+      mockPrisma.oAuthState.findUnique.mockResolvedValueOnce({
+        state: 'tok-6',
+        mailboxId: null,
+        createdAt: new Date(Date.now() - 1_000),
+        consumedAt: null,
+      });
+      expect(await consumeOAuthState('tok-6')).toBe(true);
+
+      // Second call: the row now has consumedAt set → reject.
+      mockPrisma.oAuthState.findUnique.mockResolvedValueOnce({
+        state: 'tok-6',
+        mailboxId: null,
+        createdAt: new Date(Date.now() - 1_000),
+        consumedAt: new Date(),
+      });
+      expect(await consumeOAuthState('tok-6')).toBe(false);
+    });
   });
 });

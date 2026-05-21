@@ -39,10 +39,10 @@ router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
 });
 
 // POST /api/mailboxes/gmail/auth
-router.post('/gmail/auth', (_req: Request, res: Response, next: NextFunction) => {
+router.post('/gmail/auth', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const state = crypto.randomBytes(32).toString('hex');
-    storeOAuthState(state);
+    await storeOAuthState(state);
     const authUrl = getAuthUrl(state);
     res.json({ success: true, data: { authUrl } });
   } catch (err) {
