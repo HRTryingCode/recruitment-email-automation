@@ -134,10 +134,14 @@ The current sync state of every mailbox is exposed at
 
 ## Security model
 
+- **Single-tenant.** This is a shared inbox for Archive: every authenticated `@archive.com` user sees and can act on every candidate, draft, and mailbox. There is no per-user data filtering. If you fork this for a multi-tenant deployment, add per-user (or per-org) filtering to every list/get endpoint — see [docs/OPERATIONS.md#single-tenant-by-design](docs/OPERATIONS.md#single-tenant-by-design) for the migration steps.
 - **App users** (recruiters logging into the dashboard) sign in with Google. The backend (`backend/src/routes/auth.ts`) verifies the Google ID token and rejects anything that isn't `@archive.com`. On success it issues a 7-day JWT signed with `JWT_SECRET`.
+- **RBAC.** `User.role` has two values: `recruiter` (default) and `admin`. The `requireAdmin` middleware gates bulk / destructive endpoints — mailbox resync, refresh-profile, refresh-all-profiles, delete-mailbox, regenerate-pending drafts, backfill-roles. See [docs/OPERATIONS.md#rbac-recruiter-vs-admin](docs/OPERATIONS.md#rbac-recruiter-vs-admin).
 - **Mailbox access** is per-recruiter Gmail OAuth, not domain-wide delegation. Each connected mailbox stores its own OAuth refresh token. (A Workspace service-account path exists in `gmail.service.ts` but is unused in production — see [docs/ARCHITECTURE.md#decision-log](docs/ARCHITECTURE.md#decision-log).)
 - **Refresh tokens** are encrypted at rest with **AES-256-GCM** keyed by `ENCRYPTION_KEY` (`backend/src/lib/crypto.ts`). The `Mailbox.credentials` column never stores plaintext OAuth material.
-- **Cron endpoints** (`/api/internal/cron/*`) are authenticated via the `CRON_SECRET` bearer header, not JWT. The webhook (`/api/webhooks/gmail`) is intentionally public so Pub/Sub can reach it; it validates the Pub/Sub payload shape before doing work.
+- **CSP.** Helmet sends a tuned Content-Security-Policy that locks scripts and connections to self-origin plus Google Sign-In endpoints. See `backend/src/app.ts` for the directive list.
+- **Rate limits.** Global 500/15min on `/api/*`, plus a stricter 20/min on `/api/auth/*` to cap brute-force attempts on login and the Google ID-token exchange.
+- **Cron endpoints** (`/api/internal/cron/*`) are authenticated via the `CRON_SECRET` bearer header, not JWT. The webhook (`/api/webhooks/gmail`) is intentionally public so Pub/Sub can reach it; on Vercel `PUBSUB_AUDIENCE` is required at boot so the handler can verify Google's OIDC token. Without that env var the server refuses to start.
 
 ## Useful commands
 

@@ -71,6 +71,18 @@ function validateEnv(): void {
     );
   }
 
+  // On Vercel, the Pub/Sub webhook MUST be JWT-verified — otherwise anyone
+  // who knows the public webhook URL can trigger Gmail history fetches. Local
+  // dev is allowed to leave it unset (the verifier becomes a no-op).
+  if (
+    process.env.VERCEL &&
+    (!process.env.PUBSUB_AUDIENCE || process.env.PUBSUB_AUDIENCE === '')
+  ) {
+    problems.push(
+      `PUBSUB_AUDIENCE is required on Vercel — without it the Gmail webhook accepts unsigned POSTs (see backend/src/routes/webhooks.ts).`
+    );
+  }
+
   const encKey = process.env.ENCRYPTION_KEY;
   if (encKey) {
     let decodedLen = 0;

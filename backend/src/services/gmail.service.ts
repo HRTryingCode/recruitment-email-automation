@@ -392,7 +392,8 @@ async function classifyAndDraft(opts: {
         mailboxId: mailbox.id,
         candidateId: ignoredCandidate.id,
         messageId: parsed.externalMessageId,
-        fromAddress: parsed.fromAddress,
+        // Intentionally omit fromAddress — that's candidate.email PII;
+        // candidateId is the queryable id.
       },
       'INFO'
     );
@@ -474,7 +475,9 @@ async function classifyAndDraft(opts: {
       {
         mailboxId: mailbox.id,
         messageId: parsed.externalMessageId,
-        fromAddress: parsed.fromAddress,
+        // Intentionally omit fromAddress — it's the candidate's email
+        // (effectively candidate.email pre-creation). messageId + mailboxId
+        // is enough to reconstruct the message if a recruiter needs to look.
         confidence,
       },
       'INFO'

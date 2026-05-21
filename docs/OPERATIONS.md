@@ -236,3 +236,122 @@ RPS):
 
 The dominant variable cost is Claude. If draft volume jumps, the place to
 optimize is the prompt size in `claude.service.ts`, not the infra.
+
+## Security model
+
+### Single-tenant by design
+
+This is a **single-tenant** app: every authenticated `@archive.com` user sees
+and can act on every candidate, draft, and mailbox. There is no per-user
+filtering on list/read/write endpoints and the data model has no `ownerUserId`
+or org column. The current `requireAuth` middleware confirms the caller is a
+real Archive employee; **it intentionally does not gate access to data that
+belongs to other recruiters at Archive.**
+
+If you ever fork this for a multi-tenant deployment (multiple companies, or
+even isolating per-recruiter visibility inside Archive), you must:
+
+1. Add an `orgId` / `ownerUserId` column to `Mailbox` (and through to
+   `Candidate`, `EmailThread`, `EmailMessage`, `EmailDraft`).
+2. Backfill ownership for existing rows.
+3. Add `where: { ownerUserId: req.userId }` (or org-scoped equivalent) to
+   every list/get/update/delete query.
+4. Add tests that prove cross-tenant reads return 404 — the easiest mistake
+   here is omitting the filter on a new route.
+
+Until that work happens, treat the app as a shared inbox.
+
+### RBAC: recruiter vs admin
+
+Two roles live on `User.role`:
+
+- **`recruiter`** (default for new sign-ins): can list/get candidates, drafts,
+  threads, and mailboxes; can approve/discard individual drafts; can ignore
+  candidates. Sees everything in the shared tenant.
+- **`admin`**: everything `recruiter` can do, plus the bulk / destructive
+  endpoints guarded by `requireAdmin`:
+  - `POST /api/mailboxes/:id/resync`
+  - `POST /api/mailboxes/:id/refresh-profile`
+  - `POST /api/mailboxes/refresh-all-profiles`
+  - `DELETE /api/mailboxes/:id`
+  - `POST /api/drafts/regenerate-pending`
+  - `POST /api/candidates/backfill-roles`
+
+Migration `6_user_role` adds the column and promotes `andriy@archive.com` to
+admin via a one-time data migration. The Google sign-in path also re-asserts
+that promotion as a belt-and-braces (in case the row didn't exist when the
+migration ran). To promote another user, update the row directly:
+
+```sql
+UPDATE "User" SET role = 'admin' WHERE email = 'someone@archive.com';
+```
+
+There is no UI for managing roles — this is intentional. The set of admins
+should be small and rotate through SQL when needed.
+
+### JWT expiry
+
+App-user JWTs are signed with `JWT_SECRET` and expire **7 days** after issue
+(`TOKEN_EXPIRES_IN` in `backend/src/services/auth.service.ts`). There is no
+refresh-token rotation: when the token expires, the dashboard's API calls
+return 401, the frontend clears local state, and the user re-authenticates
+via Google Sign-In. If longer sessions are needed (e.g. for a kiosk-style
+deployment), implement a refresh-token endpoint that re-issues a JWT when
+the user presents a still-valid refresh token. Don't lengthen the JWT TTL
+itself — short-lived bearer tokens are the entire reason we don't store a
+revocation list.
+
+### OAuth state storage (known limitation)
+
+`backend/src/lib/oauthState.ts` keeps OAuth state tokens in a process-local
+`Map` with a 10-minute TTL. On Vercel's serverless runtime, each invocation
+can land on a different cold-start instance, so the state issued at
+`/api/mailboxes/gmail/auth` may not be present when Google redirects back to
+`/api/mailboxes/gmail/callback` seconds later. In practice warm-start reuse
+keeps this working ~95% of the time; cold-start mismatches surface as
+"Invalid or expired OAuth state" and the user retries.
+
+The production-grade fix is to move state into Redis / Upstash KV so all
+invocations share the same store. That migration was deliberately left out
+of the Phase AO security batch because it's a non-trivial integration
+(new dependency, new env vars, new failure mode). Track it as a follow-up;
+do **not** add Redis until the failure mode actually hurts users at scale.
+
+### Content-Security-Policy (CSP)
+
+Helmet emits a tuned CSP on every `/api/*` response (`backend/src/app.ts`):
+self-origin defaults, plus `https://accounts.google.com`,
+`https://apis.google.com`, and `https://www.googleapis.com` for Google Sign-In.
+`styleSrc` keeps `'unsafe-inline'` because both Vite and Radix emit inline
+styles.
+
+**Static assets are not covered.** The dashboard HTML + JS bundles ship from
+Vercel's static layer (see `vercel.json` `outputDirectory`), which does not
+inherit Express headers. Extending CSP to those responses is a known follow-up;
+the blocker is the inline `<script>` in `frontend/index.html` that pre-applies
+the dark/light theme before first paint. To do it safely:
+
+1. Compute the SHA-256 of the inline script body and add
+   `'sha256-…'` to `scriptSrc` in a `vercel.json` `headers` block.
+2. Re-compute the hash whenever the bootstrap script changes (consider moving
+   it to an external file to skip this step entirely).
+
+Adding `'unsafe-inline'` to `scriptSrc` would technically work but defeats the
+point of CSP for XSS protection — don't take that shortcut without an
+explicit decision in the PR description.
+
+### Pub/Sub webhook authentication
+
+`POST /api/webhooks/gmail` is publicly reachable (Google needs to POST to it).
+When `PUBSUB_AUDIENCE` is set, the handler verifies the OIDC token in the
+`Authorization: Bearer …` header against that audience and rejects anything
+unsigned. **On Vercel, `PUBSUB_AUDIENCE` is required at boot** — the config
+validator in `backend/src/config.ts` refuses to start the server if it's
+missing on a Vercel deployment. Locally, leaving it unset is allowed (the
+verifier becomes a no-op) so dev boxes can curl test payloads.
+
+To configure: in GCP, set the push subscription's authentication service
+account and OIDC token audience to the URL of the webhook (e.g.
+`https://recruiting-email-automation-api.vercel.app/api/webhooks/gmail`),
+then set `PUBSUB_AUDIENCE` to that same URL in Vercel.
+

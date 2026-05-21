@@ -10,6 +10,7 @@ import {
 } from '../services/gmail.service';
 import { storeOAuthState } from '../lib/oauthState';
 import { createError } from '../middleware/error';
+import { requireAdmin } from '../middleware/requireAdmin';
 import { logEvent } from '../services/monitoring.service';
 
 const router = Router();
@@ -55,9 +56,10 @@ router.post('/gmail/auth', (_req: Request, res: Response, next: NextFunction) =>
 // requireAuth. The state-validation logic lives there as well.
 
 // POST /api/mailboxes/:id/resync
-// Manual full 7-day resync. Protected by the requireAuth middleware applied
-// at the router level (see app.ts: app.use('/api/mailboxes', requireAuth, …)).
-router.post('/:id/resync', async (req: Request, res: Response, next: NextFunction) => {
+// Manual full 7-day resync. requireAuth runs at the router level (see app.ts);
+// requireAdmin layered here because resync is expensive enough that we don't
+// want any recruiter triggering it accidentally — only operators.
+router.post('/:id/resync', requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = String(req.params.id);
     const mailbox = await prisma.mailbox.findUnique({ where: { id } });
@@ -150,6 +152,7 @@ router.post('/workspace/connect', async (req: Request, res: Response, next: Next
 // timeout (we hit Google userinfo for each).
 router.post(
   '/refresh-all-profiles',
+  requireAdmin,
   async (_req: Request, res: Response, next: NextFunction) => {
     try {
       const mailboxes = await prisma.mailbox.findMany({
@@ -247,6 +250,7 @@ router.post(
 // if neither source produces a usable name.
 router.post(
   '/:id/refresh-profile',
+  requireAdmin,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const id = String(req.params.id);
@@ -294,7 +298,7 @@ router.post(
 );
 
 // DELETE /api/mailboxes/:id
-router.delete('/:id', async (req: Request, res: Response, next: NextFunction) => {
+router.delete('/:id', requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = String(req.params.id);
     const mailbox = await prisma.mailbox.findUnique({ where: { id } });

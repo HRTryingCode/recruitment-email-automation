@@ -73,6 +73,18 @@ export function buildPrismaMock(): MockPrisma {
   // Resolve by default so we don't have to program it per-test.
   mock.systemLog.create.mockResolvedValue({});
 
+  // requireAdmin (added in Phase AO) calls user.findUnique to verify the role
+  // of the authenticated user. Default to an admin so existing integration
+  // tests for admin-only endpoints (mailbox resync, refresh-all-profiles,
+  // regenerate-pending, etc.) don't all have to opt in. Tests that exercise
+  // the 401 / 403 paths can still override with `mockResolvedValueOnce(null)`
+  // or `mockResolvedValueOnce({ role: 'recruiter' })`, since once-mocks take
+  // precedence over the default.
+  mock.user.findUnique.mockResolvedValue({
+    id: 'test-user-1',
+    role: 'admin',
+  });
+
   return mock;
 }
 
@@ -92,4 +104,8 @@ export function resetPrismaMock(p: MockPrisma): void {
   }
   // Re-seed safe defaults that beforeEach assumes.
   p.systemLog.create.mockResolvedValue({});
+  p.user.findUnique.mockResolvedValue({
+    id: 'test-user-1',
+    role: 'admin',
+  });
 }

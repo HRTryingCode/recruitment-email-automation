@@ -35,6 +35,7 @@ function publicUser(user: {
   email: string;
   name: string | null;
   avatarUrl?: string | null;
+  role?: string;
   createdAt: Date;
 }) {
   return {
@@ -42,6 +43,7 @@ function publicUser(user: {
     email: user.email,
     name: user.name,
     avatarUrl: user.avatarUrl ?? null,
+    role: user.role ?? 'recruiter',
     createdAt: user.createdAt,
   };
 }
@@ -148,6 +150,12 @@ router.post(
       const name = payload.name ?? null;
       const avatarUrl = payload.picture ?? null;
 
+      // Belt-and-braces with the 6_user_role data migration: if the founding
+      // operator signs in on a fresh DB (where the migration's UPDATE was a
+      // no-op because the row didn't exist yet), make sure they land with the
+      // admin role rather than the default `recruiter`.
+      const isFoundingAdmin = email === 'andriy@archive.com';
+
       const existing = await prisma.user.findUnique({ where: { email } });
       let user;
       if (existing) {
@@ -157,6 +165,9 @@ router.post(
             googleId: existing.googleId ?? googleId,
             avatarUrl: existing.avatarUrl ?? avatarUrl,
             name: existing.name ?? name,
+            ...(isFoundingAdmin && existing.role !== 'admin'
+              ? { role: 'admin' }
+              : {}),
           },
         });
       } else {
@@ -166,6 +177,7 @@ router.post(
             googleId,
             avatarUrl,
             name,
+            ...(isFoundingAdmin ? { role: 'admin' } : {}),
           },
         });
       }
