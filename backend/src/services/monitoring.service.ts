@@ -67,12 +67,19 @@ export async function checkHealth(): Promise<HealthStatus> {
     dbConnected = false;
   }
 
-  // Check Claude API
+  // Check Claude API — key shape and client init.
+  // We don't make an actual API call to keep health checks fast and cheap;
+  // instead we validate the key has the expected sk-ant-* shape and that
+  // the SDK can instantiate. Real reachability is exercised by every draft
+  // generation, which will surface failure via the SystemLog WARN path.
   let claudeAvailable = false;
   try {
-    const client = new Anthropic({ apiKey: config.anthropicApiKey });
-    // Just verify the key is set and client initializes
-    claudeAvailable = !!config.anthropicApiKey && !!client;
+    const key = config.anthropicApiKey;
+    const keyShapeOk = typeof key === 'string' && /^sk-ant-/.test(key) && key.length > 30;
+    if (keyShapeOk) {
+      const client = new Anthropic({ apiKey: key });
+      claudeAvailable = !!client;
+    }
   } catch {
     claudeAvailable = false;
   }
