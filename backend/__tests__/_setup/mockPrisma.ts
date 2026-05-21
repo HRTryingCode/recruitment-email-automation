@@ -22,7 +22,7 @@ type MockedMethods<T extends string> = Record<T, Mock>;
 
 export interface MockPrisma {
   user: MockedMethods<'findUnique' | 'findMany' | 'create' | 'update'>;
-  mailbox: MockedMethods<'findUnique' | 'findMany' | 'update'>;
+  mailbox: MockedMethods<'findUnique' | 'findMany' | 'update' | 'upsert'>;
   candidate: MockedMethods<
     'findUnique' | 'findMany' | 'count' | 'create' | 'update' | 'updateMany'
   >;
@@ -30,7 +30,7 @@ export interface MockPrisma {
     'findUnique' | 'findMany' | 'count' | 'create' | 'update' | 'updateMany'
   >;
   emailThread: MockedMethods<'findUnique' | 'findMany' | 'update'>;
-  emailMessage: MockedMethods<'findUnique' | 'findMany'>;
+  emailMessage: MockedMethods<'findUnique' | 'findFirst' | 'findMany' | 'count'>;
   systemLog: MockedMethods<'create' | 'findMany'>;
   $transaction: Mock;
   $queryRaw: Mock;
@@ -45,7 +45,7 @@ function methods<T extends string>(...names: T[]): MockedMethods<T> {
 export function buildPrismaMock(): MockPrisma {
   const mock: MockPrisma = {
     user: methods('findUnique', 'findMany', 'create', 'update'),
-    mailbox: methods('findUnique', 'findMany', 'update'),
+    mailbox: methods('findUnique', 'findMany', 'update', 'upsert'),
     candidate: methods(
       'findUnique',
       'findMany',
@@ -63,7 +63,7 @@ export function buildPrismaMock(): MockPrisma {
       'updateMany'
     ),
     emailThread: methods('findUnique', 'findMany', 'update'),
-    emailMessage: methods('findUnique', 'findMany'),
+    emailMessage: methods('findUnique', 'findFirst', 'findMany', 'count'),
     systemLog: methods('create', 'findMany'),
     $transaction: vi.fn(),
     $queryRaw: vi.fn(),
