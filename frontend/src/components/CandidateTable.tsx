@@ -1,58 +1,63 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import * as AlertDialog from '@radix-ui/react-alert-dialog';
 import {
   fetchCandidates,
   fetchMessages,
   updateCandidate,
   ignoreCandidate,
+  unignoreCandidate,
   type Candidate,
   type EmailThread,
 } from '../lib/api';
 import { cn, formatTimeAgo } from '../lib/utils';
-import { ChevronDown, ChevronUp, RefreshCw, Mail, Building2, EyeOff } from 'lucide-react';
-
-const STATUS_COLORS: Record<Candidate['status'], string> = {
-  INTERESTED: 'bg-green-900/60 text-green-300 border border-green-700',
-  NOT_INTERESTED: 'bg-red-900/60 text-red-300 border border-red-700',
-  NEUTRAL: 'bg-gray-800 text-gray-300 border border-gray-600',
-  PENDING: 'bg-yellow-900/60 text-yellow-300 border border-yellow-700',
-  REPLIED: 'bg-blue-900/60 text-blue-300 border border-blue-700',
-  NEEDS_REVIEW: 'bg-amber-900/60 text-amber-300 border border-amber-600',
-  IGNORED: 'bg-gray-900/60 text-gray-500 border border-gray-700',
-};
-
-const STATUS_LABELS: Record<Candidate['status'], string> = {
-  INTERESTED: 'Interested',
-  NOT_INTERESTED: 'Not Interested',
-  NEUTRAL: 'Neutral',
-  PENDING: 'Pending',
-  REPLIED: 'Replied',
-  NEEDS_REVIEW: 'Needs Review',
-  IGNORED: 'Ignored',
-};
+import {
+  toastSuccess,
+  toastError,
+  extractApiErrorMessage,
+} from '../lib/toast';
+import {
+  ChevronDown,
+  ChevronUp,
+  RefreshCw,
+  Mail,
+  Building2,
+  EyeOff,
+  Eye,
+  Users,
+} from 'lucide-react';
+import { StatusBadge, type StatusVariant } from './ui/StatusBadge';
 
 function ReplyStatusBadge({ candidate }: { candidate: Candidate }) {
   const derived: NonNullable<Candidate['replyStatus']> =
     candidate.replyStatus ??
-    (candidate.repliedAt ? 'REPLIED' : candidate.threads?.length ? 'AWAITING_REPLY' : 'NEW');
+    (candidate.repliedAt
+      ? 'REPLIED'
+      : candidate.threads?.length
+        ? 'AWAITING_REPLY'
+        : 'NEW');
 
-  if (derived === 'REPLIED') {
-    return (
-      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-900/60 text-green-300 border border-green-700">
-        Replied
-      </span>
-    );
-  }
-  if (derived === 'AWAITING_REPLY') {
-    return (
-      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-900/60 text-yellow-300 border border-yellow-700">
-        Awaiting Reply
-      </span>
-    );
-  }
+  const styles = {
+    REPLIED:
+      'bg-emerald-500/10 text-emerald-300 ring-emerald-500/20',
+    AWAITING_REPLY: 'bg-amber-500/10 text-amber-300 ring-amber-500/20',
+    NEW: 'bg-white/[0.04] text-ink-300 ring-white/[0.06]',
+  }[derived];
+
+  const label = {
+    REPLIED: 'Replied',
+    AWAITING_REPLY: 'Awaiting',
+    NEW: 'New',
+  }[derived];
+
   return (
-    <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-800 text-gray-400 border border-gray-600">
-      New
+    <span
+      className={cn(
+        'inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset',
+        styles
+      )}
+    >
+      {label}
     </span>
   );
 }
@@ -66,9 +71,9 @@ function ThreadView({ threadId }: { threadId: string }) {
 
   if (isLoading) {
     return (
-      <div className="p-4 space-y-2">
+      <div className="space-y-2 p-4">
         {[1, 2].map((i) => (
-          <div key={i} className="h-16 bg-gray-800 animate-pulse rounded" />
+          <div key={i} className="h-16 skeleton rounded-lg" />
         ))}
       </div>
     );
@@ -78,19 +83,26 @@ function ThreadView({ threadId }: { threadId: string }) {
   const messages = thread?.messages ?? [];
 
   return (
-    <div className="p-4 space-y-3 max-h-64 overflow-y-auto">
+    <div className="max-h-72 space-y-2.5 overflow-y-auto p-4">
       {messages.length === 0 ? (
-        <p className="text-gray-500 text-sm">No messages yet</p>
+        <p className="text-[13px] text-ink-500">No messages yet</p>
       ) : (
         messages.map((msg) => (
-          <div key={msg.id} className="bg-gray-800/60 rounded-lg p-3">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-sm font-medium text-gray-200">
+          <div
+            key={msg.id}
+            className="rounded-lg border border-white/[0.05] bg-ink-950/40 p-3"
+          >
+            <div className="mb-1 flex items-center justify-between">
+              <span className="text-[13px] font-medium text-ink-100">
                 {msg.fromName ?? msg.fromAddress}
               </span>
-              <span className="text-xs text-gray-500">{formatTimeAgo(msg.receivedAt)}</span>
+              <span className="font-mono text-[11px] tabular-nums text-ink-500">
+                {formatTimeAgo(msg.receivedAt)}
+              </span>
             </div>
-            <p className="text-xs text-gray-400 line-clamp-3">{msg.bodyText}</p>
+            <p className="line-clamp-3 text-[12.5px] leading-relaxed text-ink-300">
+              {msg.bodyText}
+            </p>
           </div>
         ))
       )}
@@ -127,224 +139,353 @@ export default function CandidateTable({ mailboxId }: Props) {
     mutationFn: ({ id, status }: { id: string; status: Candidate['status'] }) =>
       updateCandidate(id, { status }),
     onSuccess: () => {
+      toastSuccess('Status updated');
       void queryClient.invalidateQueries({ queryKey: ['candidates'] });
+    },
+    onError: (err) => {
+      toastError(
+        'Could not update status',
+        extractApiErrorMessage(err, 'Please try again.')
+      );
     },
   });
 
   const ignoreMutation = useMutation({
     mutationFn: (id: string) => ignoreCandidate(id),
-    onSuccess: () => {
+    onSuccess: (_res, _id) => {
+      toastSuccess(
+        'Candidate ignored',
+        "We won't generate new drafts and any pending ones were discarded."
+      );
       void queryClient.invalidateQueries({ queryKey: ['candidates'] });
       void queryClient.invalidateQueries({ queryKey: ['drafts'] });
     },
+    onError: (err) => {
+      toastError(
+        'Could not ignore candidate',
+        extractApiErrorMessage(err, 'Please try again.')
+      );
+    },
   });
 
-  const handleIgnore = (candidate: Candidate) => {
-    const confirmed = window.confirm(
-      `Ignore ${candidate.name}? They will be hidden from the dashboard and any pending drafts will be discarded.`
-    );
-    if (!confirmed) return;
-    ignoreMutation.mutate(candidate.id);
-  };
+  const unignoreMutation = useMutation({
+    mutationFn: (id: string) => unignoreCandidate(id),
+    onSuccess: () => {
+      toastSuccess('Candidate restored', 'They will appear in the dashboard again.');
+      void queryClient.invalidateQueries({ queryKey: ['candidates'] });
+      void queryClient.invalidateQueries({ queryKey: ['drafts'] });
+    },
+    onError: (err) => {
+      toastError(
+        'Could not restore candidate',
+        extractApiErrorMessage(err, 'Please try again.')
+      );
+    },
+  });
 
   const candidates = data?.data ?? [];
 
   if (error) {
     return (
-      <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 text-center">
-        <p className="text-red-400 mb-3">Failed to load candidates</p>
+      <div className="rounded-xl border border-white/[0.06] bg-ink-900/60 p-10 text-center">
+        <p className="mb-3 text-rose-300">Failed to load candidates</p>
         <button
           onClick={() => refetch()}
-          className="flex items-center gap-2 mx-auto text-sm text-gray-400 hover:text-white"
+          className="mx-auto flex items-center gap-2 rounded-lg bg-white/[0.04] px-3 py-1.5 text-[13px] text-ink-200 transition-colors hover:bg-white/[0.08]"
         >
-          <RefreshCw className="w-4 h-4" /> Retry
+          <RefreshCw className="h-4 w-4" /> Retry
         </button>
       </div>
     );
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      <div className="flex items-baseline justify-between gap-4">
+        <div>
+          <h1 className="font-display text-2xl font-semibold tracking-tight text-white sm:text-[28px]">
+            Candidates
+          </h1>
+          <p className="mt-1 text-[13.5px] text-ink-400">
+            Every candidate detected across connected mailboxes.
+          </p>
+        </div>
+      </div>
+
       {/* Filters */}
       <div className="flex items-center gap-3">
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          className="bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
-        >
-          <option value="">Active (default)</option>
-          <option value="__ALL__">All (incl. ignored)</option>
-          <option value="PENDING">Pending</option>
-          <option value="INTERESTED">Interested</option>
-          <option value="NOT_INTERESTED">Not Interested</option>
-          <option value="NEUTRAL">Neutral</option>
-          <option value="REPLIED">Replied</option>
-          <option value="NEEDS_REVIEW">Needs Review</option>
-          <option value="IGNORED">Ignored</option>
-        </select>
-        <span className="text-gray-500 text-sm">
+        <div className="relative">
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="appearance-none rounded-lg border border-white/[0.06] bg-ink-900/60 py-1.5 pl-3 pr-9 text-[13px] text-ink-200 transition-colors hover:border-white/[0.12] focus:border-accent-400 focus:outline-none"
+          >
+            <option value="">Active candidates</option>
+            <option value="__ALL__">All (incl. ignored)</option>
+            <option value="PENDING">Pending</option>
+            <option value="INTERESTED">Interested</option>
+            <option value="NOT_INTERESTED">Not Interested</option>
+            <option value="NEUTRAL">Neutral</option>
+            <option value="REPLIED">Replied</option>
+            <option value="NEEDS_REVIEW">Needs Review</option>
+            <option value="IGNORED">Ignored</option>
+          </select>
+          <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-400" />
+        </div>
+        <span className="font-mono text-[12px] tabular-nums text-ink-500">
           {data?.meta.total ?? 0} candidates
         </span>
       </div>
 
       {/* Table */}
-      <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+      <div className="overflow-hidden rounded-xl border border-white/[0.06] bg-ink-900/60">
         <table className="w-full">
           <thead>
-            <tr className="border-b border-gray-800">
-              <th className="text-left px-4 py-3 text-xs font-medium text-gray-400 uppercase tracking-wider">
-                Name
-              </th>
-              <th className="text-left px-4 py-3 text-xs font-medium text-gray-400 uppercase tracking-wider">
-                Email
-              </th>
-              <th className="text-left px-4 py-3 text-xs font-medium text-gray-400 uppercase tracking-wider hidden md:table-cell">
+            <tr className="border-b border-white/[0.06] text-[11px] font-medium uppercase tracking-[0.08em] text-ink-400">
+              <th className="px-4 py-3 text-left">Name</th>
+              <th className="px-4 py-3 text-left">Email</th>
+              <th className="hidden px-4 py-3 text-left md:table-cell">
                 Company
               </th>
-              <th className="text-left px-4 py-3 text-xs font-medium text-gray-400 uppercase tracking-wider">
-                Status
+              <th className="px-4 py-3 text-left">Status</th>
+              <th className="px-4 py-3 text-left">Reply</th>
+              <th className="hidden px-4 py-3 text-left lg:table-cell">
+                Last activity
               </th>
-              <th className="text-left px-4 py-3 text-xs font-medium text-gray-400 uppercase tracking-wider">
-                Reply
-              </th>
-              <th className="text-left px-4 py-3 text-xs font-medium text-gray-400 uppercase tracking-wider hidden lg:table-cell">
-                Last Activity
-              </th>
-              <th className="text-left px-4 py-3 text-xs font-medium text-gray-400 uppercase tracking-wider">
-                Actions
-              </th>
+              <th className="px-4 py-3 text-left">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-800">
+          <tbody className="divide-y divide-white/[0.04]">
             {isLoading
               ? Array.from({ length: 5 }).map((_, i) => (
                   <tr key={i}>
                     {Array.from({ length: 7 }).map((_, j) => (
                       <td key={j} className="px-4 py-3">
-                        <div className="h-4 bg-gray-800 animate-pulse rounded" />
+                        <div className="h-4 skeleton" />
                       </td>
                     ))}
                   </tr>
                 ))
               : candidates.map((candidate) => (
-                  <>
-                    <tr
-                      key={candidate.id}
-                      className="hover:bg-gray-800/40 cursor-pointer transition-colors"
-                      onClick={() =>
-                        setExpandedId(
-                          expandedId === candidate.id ? null : candidate.id
-                        )
-                      }
-                    >
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          {expandedId === candidate.id ? (
-                            <ChevronUp className="w-4 h-4 text-gray-500" />
-                          ) : (
-                            <ChevronDown className="w-4 h-4 text-gray-500" />
-                          )}
-                          <span className="text-white font-medium text-sm">
-                            {candidate.name}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1.5 text-gray-300 text-sm">
-                          <Mail className="w-3.5 h-3.5 text-gray-500 flex-shrink-0" />
-                          {candidate.email}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 hidden md:table-cell">
-                        {candidate.company ? (
-                          <div className="flex items-center gap-1.5 text-gray-400 text-sm">
-                            <Building2 className="w-3.5 h-3.5 flex-shrink-0" />
-                            {candidate.company}
-                          </div>
-                        ) : (
-                          <span className="text-gray-600 text-sm">—</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={cn(
-                            'px-2 py-0.5 rounded-full text-xs font-medium',
-                            STATUS_COLORS[candidate.status]
-                          )}
-                        >
-                          {STATUS_LABELS[candidate.status]}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <ReplyStatusBadge candidate={candidate} />
-                      </td>
-                      <td className="px-4 py-3 hidden lg:table-cell">
-                        <span className="text-gray-400 text-sm">
-                          {candidate.threads?.[0]
-                            ? formatTimeAgo(candidate.threads[0].lastMessageAt)
-                            : formatTimeAgo(candidate.updatedAt)}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-center gap-2">
-                          <select
-                            value={candidate.status}
-                            onChange={(e) =>
-                              updateMutation.mutate({
-                                id: candidate.id,
-                                status: e.target.value as Candidate['status'],
-                              })
-                            }
-                            className="bg-gray-800 border border-gray-700 text-gray-300 text-xs rounded px-2 py-1 focus:outline-none"
-                          >
-                            <option value="PENDING">Pending</option>
-                            <option value="INTERESTED">Interested</option>
-                            <option value="NOT_INTERESTED">Not Interested</option>
-                            <option value="NEUTRAL">Neutral</option>
-                            <option value="REPLIED">Replied</option>
-                            <option value="NEEDS_REVIEW">Needs Review</option>
-                            <option value="IGNORED">Ignored</option>
-                          </select>
-                          {candidate.status !== 'IGNORED' && (
-                            <button
-                              onClick={() => handleIgnore(candidate)}
-                              disabled={
-                                ignoreMutation.isPending &&
-                                ignoreMutation.variables === candidate.id
-                              }
-                              title="Ignore candidate (mute future drafts; reversible)"
-                              aria-label="Ignore candidate"
-                              className="p-1.5 rounded-md text-gray-500 hover:bg-red-900/40 hover:text-red-400 transition-colors disabled:opacity-50"
-                            >
-                              <EyeOff className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                    {expandedId === candidate.id &&
-                      candidate.threads &&
-                      candidate.threads.length > 0 && (
-                        <tr key={`${candidate.id}-expanded`}>
-                          <td
-                            colSpan={7}
-                            className="bg-gray-950/50 border-b border-gray-800"
-                          >
-                            <ThreadView threadId={candidate.threads[0].id} />
-                          </td>
-                        </tr>
-                      )}
-                  </>
+                  <CandidateRow
+                    key={candidate.id}
+                    candidate={candidate}
+                    expanded={expandedId === candidate.id}
+                    onToggle={() =>
+                      setExpandedId(
+                        expandedId === candidate.id ? null : candidate.id
+                      )
+                    }
+                    onChangeStatus={(status) =>
+                      updateMutation.mutate({ id: candidate.id, status })
+                    }
+                    onIgnore={() => ignoreMutation.mutate(candidate.id)}
+                    onUnignore={() => unignoreMutation.mutate(candidate.id)}
+                    ignoring={
+                      ignoreMutation.isPending &&
+                      ignoreMutation.variables === candidate.id
+                    }
+                    unignoring={
+                      unignoreMutation.isPending &&
+                      unignoreMutation.variables === candidate.id
+                    }
+                  />
                 ))}
           </tbody>
         </table>
 
         {!isLoading && candidates.length === 0 && (
-          <div className="text-center py-12 text-gray-500">
-            No candidates found
+          <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
+            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-white/[0.04] text-ink-300 ring-1 ring-inset ring-white/[0.06]">
+              <Users className="h-5 w-5" />
+            </div>
+            <p className="font-display text-[15px] font-medium text-ink-100">
+              No candidates found
+            </p>
+            <p className="mt-1.5 max-w-sm text-[13px] leading-relaxed text-ink-400">
+              {statusFilter
+                ? 'Try a different filter — or wait for new emails to be classified.'
+                : 'Candidates show up here as soon as their first email is processed.'}
+            </p>
           </div>
         )}
       </div>
     </div>
+  );
+}
+
+interface CandidateRowProps {
+  candidate: Candidate;
+  expanded: boolean;
+  onToggle: () => void;
+  onChangeStatus: (status: Candidate['status']) => void;
+  onIgnore: () => void;
+  onUnignore: () => void;
+  ignoring: boolean;
+  unignoring: boolean;
+}
+
+function CandidateRow({
+  candidate,
+  expanded,
+  onToggle,
+  onChangeStatus,
+  onIgnore,
+  onUnignore,
+  ignoring,
+  unignoring,
+}: CandidateRowProps) {
+  return (
+    <>
+      <tr
+        className="group cursor-pointer transition-colors hover:bg-white/[0.02]"
+        onClick={onToggle}
+      >
+        <td className="px-4 py-3">
+          <div className="flex items-center gap-2">
+            {expanded ? (
+              <ChevronUp className="h-3.5 w-3.5 text-ink-400" />
+            ) : (
+              <ChevronDown className="h-3.5 w-3.5 text-ink-500 group-hover:text-ink-300" />
+            )}
+            <span className="text-[13.5px] font-medium text-white">
+              {candidate.name}
+            </span>
+          </div>
+        </td>
+        <td className="px-4 py-3">
+          <div className="flex items-center gap-1.5 text-[13px] text-ink-200">
+            <Mail className="h-3.5 w-3.5 flex-shrink-0 text-ink-500" />
+            <span className="truncate">{candidate.email}</span>
+          </div>
+        </td>
+        <td className="hidden px-4 py-3 md:table-cell">
+          {candidate.company ? (
+            <div className="flex items-center gap-1.5 text-[13px] text-ink-300">
+              <Building2 className="h-3.5 w-3.5 flex-shrink-0 text-ink-500" />
+              {candidate.company}
+            </div>
+          ) : (
+            <span className="text-[13px] text-ink-600">—</span>
+          )}
+        </td>
+        <td className="px-4 py-3">
+          <StatusBadge status={candidate.status as StatusVariant} />
+        </td>
+        <td className="px-4 py-3">
+          <ReplyStatusBadge candidate={candidate} />
+        </td>
+        <td className="hidden px-4 py-3 lg:table-cell">
+          <span className="font-mono text-[12px] tabular-nums text-ink-400">
+            {candidate.threads?.[0]
+              ? formatTimeAgo(candidate.threads[0].lastMessageAt)
+              : formatTimeAgo(candidate.updatedAt)}
+          </span>
+        </td>
+        <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center gap-1.5">
+            <div className="relative">
+              <select
+                value={candidate.status}
+                onChange={(e) =>
+                  onChangeStatus(e.target.value as Candidate['status'])
+                }
+                className="appearance-none rounded-md border border-white/[0.06] bg-ink-950/60 px-2 py-1 pr-6 text-[11.5px] text-ink-200 focus:border-accent-400 focus:outline-none"
+              >
+                <option value="PENDING">Pending</option>
+                <option value="INTERESTED">Interested</option>
+                <option value="NOT_INTERESTED">Not Interested</option>
+                <option value="NEUTRAL">Neutral</option>
+                <option value="REPLIED">Replied</option>
+                <option value="NEEDS_REVIEW">Needs Review</option>
+                <option value="IGNORED">Ignored</option>
+              </select>
+              <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-ink-500" />
+            </div>
+            {candidate.status !== 'IGNORED' ? (
+              <IgnoreConfirmButton
+                candidateName={candidate.name}
+                onConfirm={onIgnore}
+                disabled={ignoring}
+              />
+            ) : (
+              <button
+                onClick={onUnignore}
+                disabled={unignoring}
+                title="Restore candidate (re-enables draft generation)"
+                aria-label="Restore candidate"
+                className="flex h-7 w-7 items-center justify-center rounded-md text-ink-400 transition-colors hover:bg-white/[0.06] hover:text-ink-100 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Eye className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        </td>
+      </tr>
+      {expanded &&
+        candidate.threads &&
+        candidate.threads.length > 0 && (
+          <tr>
+            <td
+              colSpan={7}
+              className="border-b border-white/[0.04] bg-ink-950/40"
+            >
+              <ThreadView threadId={candidate.threads[0].id} />
+            </td>
+          </tr>
+        )}
+    </>
+  );
+}
+
+function IgnoreConfirmButton({
+  candidateName,
+  onConfirm,
+  disabled,
+}: {
+  candidateName: string;
+  onConfirm: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <AlertDialog.Root>
+      <AlertDialog.Trigger asChild>
+        <button
+          disabled={disabled}
+          title="Ignore candidate (mute future drafts; reversible)"
+          aria-label="Ignore candidate"
+          className="flex h-7 w-7 items-center justify-center rounded-md text-ink-400 transition-colors hover:bg-rose-500/15 hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <EyeOff className="h-3.5 w-3.5" />
+        </button>
+      </AlertDialog.Trigger>
+      <AlertDialog.Portal>
+        <AlertDialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-fade-in" />
+        <AlertDialog.Content className="fixed left-1/2 top-1/2 z-50 w-[440px] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-white/[0.08] bg-ink-900/95 p-6 shadow-2xl backdrop-blur-xl data-[state=open]:animate-fade-in">
+          <AlertDialog.Title className="font-display text-[16px] font-semibold text-white">
+            Ignore {candidateName}?
+          </AlertDialog.Title>
+          <AlertDialog.Description className="mt-2 text-[13.5px] leading-relaxed text-ink-300">
+            They'll be hidden from the dashboard and any pending drafts will be
+            discarded. You can restore them at any time.
+          </AlertDialog.Description>
+          <div className="mt-6 flex justify-end gap-2">
+            <AlertDialog.Cancel asChild>
+              <button className="rounded-lg bg-white/[0.04] px-4 py-2 text-[13px] font-medium text-ink-200 transition-colors hover:bg-white/[0.08]">
+                Cancel
+              </button>
+            </AlertDialog.Cancel>
+            <AlertDialog.Action asChild>
+              <button
+                onClick={onConfirm}
+                className="rounded-lg bg-rose-500 px-4 py-2 text-[13px] font-medium text-white transition-colors hover:bg-rose-400"
+              >
+                Ignore candidate
+              </button>
+            </AlertDialog.Action>
+          </div>
+        </AlertDialog.Content>
+      </AlertDialog.Portal>
+    </AlertDialog.Root>
   );
 }
