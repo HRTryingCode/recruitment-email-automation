@@ -1,0 +1,24 @@
+name: tests
+
+on:
+  pull_request:
+    branches: [main, "claude/**"]
+  push:
+    branches: [main, "claude/**"]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - name: Generate Prisma client
+        run: npm run db:generate --workspace=backend
+      - name: Type-check backend (src + tests)
+        run: npm run typecheck --workspace=backend
+      - name: Run backend tests
+        run: npm test --workspace=backend
