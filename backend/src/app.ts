@@ -28,7 +28,43 @@ const app = express();
 app.set('trust proxy', 1);
 
 // Security middleware
-app.use(helmet());
+//
+// Tuned CSP: defaults to self-origin and explicitly opens the Google Sign-In
+// endpoints we use (accounts.google.com for the iframe + redirect, apis.google.com
+// for the GSI client script, googleapis.com for the userinfo callback). styleSrc
+// keeps 'unsafe-inline' because both Vite-built styles and Radix component
+// libraries emit inline <style> blocks; without it the UI loses its layout in
+// production. imgSrc allows data: (avatar inlining) and https: (Google avatar URLs).
+//
+// Scope caveat: helmet only runs on requests that hit the Express app, i.e.
+// /api/*. The frontend HTML + asset bundles are served by Vercel's static
+// layer (see vercel.json outputDirectory) and do NOT inherit this CSP. Adding
+// a matching static CSP via vercel.json `headers` is the natural follow-up —
+// noting the theme-bootstrap inline <script> in frontend/index.html would
+// need a 'sha256-…' hash or a relaxation. See docs/OPERATIONS.md for the
+// hand-off.
+//
+// If a future API response starts violating this CSP, the browser console
+// will surface the directive that blocked it — adjust the matching entry here
+// rather than dropping the policy.
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", 'https://accounts.google.com', 'https://apis.google.com'],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", 'data:', 'https:'],
+        connectSrc: [
+          "'self'",
+          'https://accounts.google.com',
+          'https://www.googleapis.com',
+        ],
+        frameSrc: ["'self'", 'https://accounts.google.com'],
+      },
+    },
+  })
+);
 
 // Strict CORS: reject any Origin not in ALLOWED_ORIGINS. Requests without an
 // Origin header (same-origin browser fetches, curl, server-to-server) bypass
@@ -45,6 +81,25 @@ app.use(
 );
 
 // Rate limiting
+//
+// Two tiers:
+//   - Global 500/15min on every /api route — catches runaway clients without
+//     impacting normal recruiter usage.
+//   - Stricter 20/min on /api/auth/* — login, signup, and the Google ID-token
+//     exchange are the main brute-force / credential-stuffing surface. Combined
+//     with the trust-proxy setting above this caps a single client IP behind
+//     Vercel's edge.
+//
+// The auth limiter is mounted FIRST so it runs before the global one (express
+// short-circuits on the first 429). Order matters here.
+const authLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use('/api/auth', authLimiter);
+
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 500,

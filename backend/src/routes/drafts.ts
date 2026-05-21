@@ -5,6 +5,7 @@ import { createDraft, sendDraft as gmailSendDraft } from '../services/gmail.serv
 import { classifyReply, generateDraftReply } from '../services/claude.service';
 import { logEvent } from '../services/monitoring.service';
 import { serializeEmailMessages } from '../lib/emailMessageSerializer';
+import { requireAdmin } from '../middleware/requireAdmin';
 import { z } from 'zod';
 
 const router = Router();
@@ -24,6 +25,11 @@ const updateDraftSchema = z.object({
 const paginationSchema = z.object({
   page: z.coerce.number().int().min(1).max(10000).default(1),
   limit: z.coerce.number().int().min(1).max(500).default(50),
+});
+
+const DRAFT_STATUSES = ['PENDING', 'APPROVED', 'SENT', 'DISCARDED'] as const;
+const draftListFilterSchema = z.object({
+  status: z.enum(DRAFT_STATUSES).optional(),
 });
 
 const draftWithThreadInclude = {
@@ -118,7 +124,13 @@ function pickOriginalMessage(
 // GET /api/drafts
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const status = qs(req.query.status);
+    const filterParsed = draftListFilterSchema.safeParse({
+      status: qs(req.query.status),
+    });
+    if (!filterParsed.success) {
+      return next(createError(filterParsed.error.errors[0]?.message ?? 'Invalid filter', 400));
+    }
+    const { status } = filterParsed.data;
     const paged = paginationSchema.safeParse({
       page: qs(req.query.page),
       limit: qs(req.query.limit),
@@ -410,7 +422,7 @@ async function regenerateDraftById(id: string): Promise<RegenerateOk | Regenerat
 // POST /api/drafts/regenerate-pending
 // Bulk re-runs Claude on every PENDING draft attached to an active mailbox.
 // Capped at 50 per request to stay inside Vercel's function timeout.
-router.post('/regenerate-pending', async (_req: Request, res: Response, next: NextFunction) => {
+router.post('/regenerate-pending', requireAdmin, async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const pending = await prisma.emailDraft.findMany({
       where: {

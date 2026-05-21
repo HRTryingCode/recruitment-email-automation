@@ -17,11 +17,28 @@ const paginationSchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(50),
 });
 
+// Cuid pattern shared with the candidates list — keeps the two routes in sync
+// about what shape a mailbox/candidate id is allowed to take from the wire.
+const cuidPattern = /^[a-z0-9]{20,30}$/;
+const threadListFilterSchema = z.object({
+  mailboxId: z.string().regex(cuidPattern, 'mailboxId must be a cuid').optional(),
+  candidateId: z
+    .string()
+    .regex(cuidPattern, 'candidateId must be a cuid')
+    .optional(),
+});
+
 // GET /api/emails/threads
 router.get('/threads', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const mailboxId = qs(req.query.mailboxId);
-    const candidateId = qs(req.query.candidateId);
+    const filterParsed = threadListFilterSchema.safeParse({
+      mailboxId: qs(req.query.mailboxId),
+      candidateId: qs(req.query.candidateId),
+    });
+    if (!filterParsed.success) {
+      return next(createError(filterParsed.error.errors[0]?.message ?? 'Invalid filter', 400));
+    }
+    const { mailboxId, candidateId } = filterParsed.data;
     const paged = paginationSchema.safeParse({
       page: qs(req.query.page),
       limit: qs(req.query.limit),

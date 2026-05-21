@@ -4,6 +4,7 @@ import { createError } from '../middleware/error';
 import { logEvent } from '../services/monitoring.service';
 import { serializeEmailMessages } from '../lib/emailMessageSerializer';
 import { classifyReply } from '../services/claude.service';
+import { requireAdmin } from '../middleware/requireAdmin';
 import { z } from 'zod';
 
 const router = Router();
@@ -35,6 +36,21 @@ const paginationSchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(50),
 });
 
+// Validate filter query params before they hit Prisma. Without this the
+// `status` / `mailboxId` strings flow straight into the where clause; the
+// runtime still rejects malformed inputs at the DB layer, but the response
+// is opaque and the SQL it generates is wasted work.
+const candidateListFilterSchema = z.object({
+  status: z.enum(CANDIDATE_STATUSES).optional(),
+  // Cuid shape — 20–30 lowercase alphanumerics. Prisma's default id() uses
+  // `c` + 24 chars in practice; the wider range absorbs other cuid variants
+  // without opening up to arbitrary input.
+  mailboxId: z
+    .string()
+    .regex(/^[a-z0-9]{20,30}$/, 'mailboxId must be a cuid')
+    .optional(),
+});
+
 function qs(val: unknown): string | undefined {
   if (typeof val === 'string') return val;
   if (Array.isArray(val) && typeof val[0] === 'string') return val[0] as string;
@@ -55,8 +71,14 @@ function deriveReplyStatus(c: {
 // GET /api/candidates
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const status = qs(req.query.status);
-    const mailboxId = qs(req.query.mailboxId);
+    const filterParsed = candidateListFilterSchema.safeParse({
+      status: qs(req.query.status),
+      mailboxId: qs(req.query.mailboxId),
+    });
+    if (!filterParsed.success) {
+      return next(createError(filterParsed.error.errors[0]?.message ?? 'Invalid filter', 400));
+    }
+    const { status, mailboxId } = filterParsed.data;
     const paged = paginationSchema.safeParse({
       page: qs(req.query.page),
       limit: qs(req.query.limit),
@@ -221,7 +243,6 @@ router.post('/:id/ignore', async (req: Request, res: Response, next: NextFunctio
       'CANDIDATE_IGNORED',
       {
         candidateId: id,
-        email: candidate.email,
         draftsDiscarded: discardResult.count,
       },
       'INFO'
@@ -252,7 +273,7 @@ router.post('/:id/unignore', async (req: Request, res: Response, next: NextFunct
 
     await logEvent(
       'CANDIDATE_UNIGNORED',
-      { candidateId: id, email: candidate.email },
+      { candidateId: id },
       'INFO'
     );
 
@@ -270,7 +291,7 @@ router.post('/:id/unignore', async (req: Request, res: Response, next: NextFunct
 //
 // Caps at 25 per request to fit inside Vercel's function timeout — call
 // repeatedly until { remaining: 0 }.
-router.post('/backfill-roles', async (_req: Request, res: Response, next: NextFunction) => {
+router.post('/backfill-roles', requireAdmin, async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const targets = await prisma.candidate.findMany({
       where: { role: null },
