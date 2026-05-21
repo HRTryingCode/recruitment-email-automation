@@ -71,15 +71,22 @@ function validateEnv(): void {
     );
   }
 
-  // On Vercel, the Pub/Sub webhook MUST be JWT-verified — otherwise anyone
-  // who knows the public webhook URL can trigger Gmail history fetches. Local
-  // dev is allowed to leave it unset (the verifier becomes a no-op).
+  // On Vercel, the Pub/Sub webhook SHOULD be JWT-verified — otherwise anyone
+  // who knows the public webhook URL can trigger Gmail history fetches.
+  // Treated as a loud warning, NOT a hard error: the previous fatal-on-boot
+  // behavior could brick prod if the env var was unset (which is exactly
+  // what happened post-#51 deploy). The webhook handler at
+  // `backend/src/routes/webhooks.ts` independently rejects unsigned POSTs
+  // when this is set, so flipping the env var on Vercel is sufficient to
+  // upgrade to fail-closed — no redeploy required.
   if (
     process.env.VERCEL &&
     (!process.env.PUBSUB_AUDIENCE || process.env.PUBSUB_AUDIENCE === '')
   ) {
-    problems.push(
-      `PUBSUB_AUDIENCE is required on Vercel — without it the Gmail webhook accepts unsigned POSTs (see backend/src/routes/webhooks.ts).`
+    console.error(
+      '[config] WARNING: PUBSUB_AUDIENCE not set on Vercel — the Gmail ' +
+        'webhook is accepting unsigned POSTs (fail-open). Set the env var ' +
+        'to enforce JWT verification.'
     );
   }
 
