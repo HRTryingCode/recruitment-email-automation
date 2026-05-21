@@ -34,6 +34,13 @@ jobs:
           node-version: '20'
           cache: npm
       - run: npm ci
+      - name: Create shadow database
+        # Prisma's `migrate diff --from-migrations` needs an empty DB to
+        # replay the migrations against. The service container creates
+        # `ci`; we add `ci_shadow` ourselves.
+        env:
+          PGPASSWORD: ci
+        run: psql -h localhost -U ci -d postgres -c "CREATE DATABASE ci_shadow;"
       - name: Generate Prisma client
         run: npm run db:generate --workspace=backend
       - name: Validate Prisma schema
