@@ -75,7 +75,13 @@ router.post('/:id/resync', requireAdmin, async (req: Request, res: Response, nex
 });
 
 // POST /api/mailboxes/workspace/connect
-router.post('/workspace/connect', async (req: Request, res: Response, next: NextFunction) => {
+// Admin-only: this endpoint accepts an arbitrary list of @archive.com mailbox
+// addresses and uses the service-account DWD client to impersonate each one.
+// Without requireAdmin, any logged-in recruiter could attach the CEO's mailbox
+// (or any other workspace user's) and start ingesting their email. Siblings
+// resync / refresh-all-profiles / DELETE :id are all admin-gated for the same
+// reason — closing this gap matches them.
+router.post('/workspace/connect', requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { emailAddresses } = req.body as { emailAddresses?: string[] };
     if (!Array.isArray(emailAddresses) || emailAddresses.length === 0) {

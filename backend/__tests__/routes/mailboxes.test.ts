@@ -380,5 +380,42 @@ describe('/api/mailboxes', () => {
       expect(res.status).toBe(400);
       expect(createServiceAccountClient).not.toHaveBeenCalled();
     });
+
+    it('returns 403 when the authenticated user is not an admin', async () => {
+      // Override the default admin mock — non-admin recruiters must NOT be able
+      // to attach arbitrary @archive.com mailboxes via the service-account DWD
+      // path, which would let them ingest the CEO's email.
+      mockPrisma.user.findUnique.mockResolvedValueOnce({ id: 'test-user-1', role: 'recruiter' });
+
+      const res = await request(app)
+        .post('/api/mailboxes/workspace/connect')
+        .set('Authorization', AUTH)
+        .send({ emailAddresses: ['ceo@archive.com'] });
+
+      expect(res.status).toBe(403);
+      expect(createServiceAccountClient).not.toHaveBeenCalled();
+      expect(mockPrisma.mailbox.upsert).not.toHaveBeenCalled();
+    });
+
+    it('connects mailboxes when the authenticated user is an admin', async () => {
+      const gmailClient = {
+        users: { messages: { list: vi.fn().mockResolvedValue({ data: { messages: [] } }) } },
+      };
+      createServiceAccountClient.mockResolvedValue(gmailClient);
+      serializeCredentials.mockImplementation((c: unknown) => JSON.stringify(c));
+      mockPrisma.mailbox.upsert.mockResolvedValueOnce({ ...baseMailbox, id: 'mb-new' });
+      syncMessages.mockResolvedValueOnce({ scanned: 0, ingested: 0, skipped: 0 });
+
+      const res = await request(app)
+        .post('/api/mailboxes/workspace/connect')
+        .set('Authorization', AUTH)
+        .send({ emailAddresses: ['ops@archive.com'] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data).toEqual([{ email: 'ops@archive.com', success: true }]);
+      expect(createServiceAccountClient).toHaveBeenCalledWith('ops@archive.com');
+      expect(mockPrisma.mailbox.upsert).toHaveBeenCalledTimes(1);
+    });
   });
 });
