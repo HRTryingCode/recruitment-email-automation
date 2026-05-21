@@ -9,6 +9,24 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    # Ephemeral Postgres used as the shadow DB for `prisma migrate diff`.
+    # `validate` is parse-only and doesn't need a real connection, but
+    # `migrate diff --from-migrations` does because it applies migrations
+    # to derive the schema state.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -16,13 +34,31 @@ jobs:
           node-version: '20'
           cache: npm
       - run: npm ci
+      - name: Create shadow database
+        # Prisma's `migrate diff --from-migrations` needs an empty DB to
+        # replay the migrations against. The service container creates
+        # `ci`; we add `ci_shadow` ourselves.
+        env:
+          PGPASSWORD: ci
+        run: psql -h localhost -U ci -d postgres -c "CREATE DATABASE ci_shadow;"
       - name: Generate Prisma client
         run: npm run db:generate --workspace=backend
       - name: Validate Prisma schema
+        env:
+          POSTGRES_PRISMA_URL: postgresql://ci:ci@localhost:5432/ci?schema=public
+          POSTGRES_URL_NON_POOLING: postgresql://ci:ci@localhost:5432/ci?schema=public
         run: cd backend && npx prisma validate
       - name: Check schema/migration consistency
         # Fails the build if schema.prisma drifts from the applied migrations.
-        run: cd backend && npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --exit-code
+        env:
+          POSTGRES_PRISMA_URL: postgresql://ci:ci@localhost:5432/ci?schema=public
+          POSTGRES_URL_NON_POOLING: postgresql://ci:ci@localhost:5432/ci?schema=public
+        run: |
+          cd backend && npx prisma migrate diff \
+            --from-migrations prisma/migrations \
+            --to-schema-datamodel prisma/schema.prisma \
+            --shadow-database-url postgresql://ci:ci@localhost:5432/ci_shadow \
+            --exit-code
       - name: Type-check backend (src + tests)
         run: npm run typecheck --workspace=backend
       - name: Run backend tests

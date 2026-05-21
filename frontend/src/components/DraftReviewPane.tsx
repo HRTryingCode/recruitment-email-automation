@@ -13,6 +13,7 @@ import {
   ChevronLeft,
 } from 'lucide-react';
 import type { EmailDraft, OriginalMessage } from '../lib/api';
+import { toastError } from '../lib/toast';
 
 interface Props {
   draft: EmailDraft | null;
@@ -25,6 +26,8 @@ interface Props {
   onRegenerate: (id: string) => void;
   regenerating: boolean;
   regenerateError: string | null;
+  approving?: boolean;
+  sending?: boolean;
   /**
    * Imperative request to open the editor (driven by the `e` shortcut).
    * The pane resets this internally — parent only needs to bump a counter.
@@ -176,16 +179,60 @@ export default function DraftReviewPane({
   onRegenerate,
   regenerating,
   regenerateError,
+  approving = false,
+  sending = false,
   editRequestNonce,
 }: Props) {
   const [editing, setEditing] = useState(false);
   const [editedBody, setEditedBody] = useState(draft?.bodyText ?? '');
   const lastEditNonce = useRef(editRequestNonce);
+  // Snapshot of (draft id, original body, in-progress edit, editing flag) so
+  // we can detect when a draft switch is about to discard unsaved edits.
+  const prevDraftRef = useRef<{
+    id: string | undefined;
+    originalBody: string;
+    editedBody: string;
+    editing: boolean;
+  }>({
+    id: draft?.id,
+    originalBody: draft?.bodyText ?? '',
+    editedBody: draft?.bodyText ?? '',
+    editing: false,
+  });
 
-  // When the active draft changes, exit edit mode and resync body
+  // Keep the snapshot in sync with the editor's current state (without
+  // running on every keystroke — refs don't trigger renders).
   useEffect(() => {
+    if (draft?.id === prevDraftRef.current.id) {
+      prevDraftRef.current.editedBody = editedBody;
+      prevDraftRef.current.editing = editing;
+    }
+  }, [editedBody, editing, draft?.id]);
+
+  // When the active draft changes, exit edit mode and resync body. If the
+  // user had unsaved edits, surface a warning toast (Fix #4) — the alternative
+  // would be a blocking confirm, but a toast matches the existing style.
+  useEffect(() => {
+    const prev = prevDraftRef.current;
+    if (
+      prev.editing &&
+      prev.id !== undefined &&
+      prev.id !== draft?.id &&
+      prev.editedBody !== prev.originalBody
+    ) {
+      toastError(
+        'Unsaved changes discarded',
+        'You switched to another draft before saving your edits.'
+      );
+    }
     setEditing(false);
     setEditedBody(draft?.bodyText ?? '');
+    prevDraftRef.current = {
+      id: draft?.id,
+      originalBody: draft?.bodyText ?? '',
+      editedBody: draft?.bodyText ?? '',
+      editing: false,
+    };
   }, [draft?.id, draft?.bodyText]);
 
   // Honor imperative edit requests (driven by `e` keyboard shortcut)
@@ -359,22 +406,26 @@ export default function DraftReviewPane({
             <div className="flex items-center gap-2">
               {isPending && (
                 <>
-                  <Tooltip content="Approve — saves as Gmail draft (a)">
+                  <Tooltip content={approving ? 'Approving…' : 'Approve — saves as Gmail draft (a)'}>
                     <button
                       onClick={() => onApprove(draft.id)}
-                      disabled={regenerating || editing}
+                      disabled={regenerating || editing || approving}
                       aria-label="Approve draft"
                       className={cn(
                         'flex items-center gap-1.5 rounded-lg bg-emerald-500/15 px-3.5 py-2 text-[13px] font-medium text-emerald-700 ring-1 ring-inset ring-emerald-500/25 transition-colors hover:bg-emerald-500/25 dark:text-emerald-300 dark:hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-50'
                       )}
                     >
-                      <Check className="h-3.5 w-3.5" />
+                      {approving ? (
+                        <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Check className="h-3.5 w-3.5" />
+                      )}
                       Approve
                     </button>
                   </Tooltip>
                   <DiscardConfirm
                     onConfirm={() => onDiscard(draft.id)}
-                    disabled={regenerating}
+                    disabled={regenerating || approving}
                   />
                 </>
               )}
@@ -382,14 +433,21 @@ export default function DraftReviewPane({
                 <>
                   <button
                     onClick={() => onSend(draft.id)}
-                    className="flex items-center gap-1.5 rounded-lg bg-accent-500 px-3.5 py-2 text-[13px] font-medium text-white transition-colors hover:bg-accent-400"
+                    disabled={sending}
+                    aria-label="Send draft"
+                    className="flex items-center gap-1.5 rounded-lg bg-accent-500 px-3.5 py-2 text-[13px] font-medium text-white transition-colors hover:bg-accent-400 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    <Send className="h-3.5 w-3.5" />
+                    {sending ? (
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Send className="h-3.5 w-3.5" />
+                    )}
                     Send now
                   </button>
                   <button
                     onClick={() => onDiscard(draft.id)}
-                    className="flex items-center gap-1.5 rounded-lg bg-rose-500/10 px-3.5 py-2 text-[13px] font-medium text-rose-700 ring-1 ring-inset ring-rose-500/20 transition-colors hover:bg-rose-500/15 dark:text-rose-300"
+                    disabled={sending}
+                    className="flex items-center gap-1.5 rounded-lg bg-rose-500/10 px-3.5 py-2 text-[13px] font-medium text-rose-700 ring-1 ring-inset ring-rose-500/20 transition-colors hover:bg-rose-500/15 dark:text-rose-300 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <X className="h-3.5 w-3.5" />
                     Discard

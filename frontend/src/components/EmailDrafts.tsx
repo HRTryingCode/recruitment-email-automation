@@ -18,6 +18,7 @@ import {
   toastLoading,
   dismissToast,
   extractApiErrorMessage,
+  isAlreadyResolvedError,
 } from '../lib/toast';
 import {
   RefreshCw,
@@ -121,7 +122,7 @@ function DraftListRow({
           <div className="mt-0.5">
             <span
               data-testid="role-pill"
-              className="inline-block max-w-full truncate rounded-md bg-accent-500/8 px-1.5 py-0.5 align-middle text-[10.5px] font-medium text-accent-600 ring-1 ring-inset ring-accent-500/15 dark:text-accent-300"
+              className="inline-block max-w-[160px] truncate rounded-md bg-accent-500/8 px-1.5 py-0.5 align-middle text-[10.5px] font-medium text-accent-600 ring-1 ring-inset ring-accent-500/15 dark:text-accent-300"
               title={role}
             >
               {role}
@@ -349,6 +350,11 @@ export default function EmailDrafts({ mailboxId: _mailboxId }: Props) {
       void queryClient.invalidateQueries({ queryKey: ['drafts'] });
     },
     onError: (err) => {
+      if (isAlreadyResolvedError(err)) {
+        toastSuccess('Already approved', 'This draft was approved in another session.');
+        void queryClient.invalidateQueries({ queryKey: ['drafts'] });
+        return;
+      }
       toastError(
         'Could not approve draft',
         extractApiErrorMessage(err, 'Please try again.')
@@ -363,6 +369,11 @@ export default function EmailDrafts({ mailboxId: _mailboxId }: Props) {
       void queryClient.invalidateQueries({ queryKey: ['drafts'] });
     },
     onError: (err) => {
+      if (isAlreadyResolvedError(err)) {
+        toastSuccess('Already resolved', 'This draft was already approved or discarded.');
+        void queryClient.invalidateQueries({ queryKey: ['drafts'] });
+        return;
+      }
       toastError(
         'Could not discard draft',
         extractApiErrorMessage(err, 'Please try again.')
@@ -381,6 +392,12 @@ export default function EmailDrafts({ mailboxId: _mailboxId }: Props) {
       void queryClient.invalidateQueries({ queryKey: ['candidates'] });
     },
     onError: (err) => {
+      if (isAlreadyResolvedError(err)) {
+        toastSuccess('Already sent', 'This draft was sent in another session.');
+        void queryClient.invalidateQueries({ queryKey: ['drafts'] });
+        void queryClient.invalidateQueries({ queryKey: ['candidates'] });
+        return;
+      }
       toastError(
         'Could not send email',
         extractApiErrorMessage(err, 'Please try again.')
@@ -635,6 +652,14 @@ export default function EmailDrafts({ mailboxId: _mailboxId }: Props) {
           regenerateMutation.variables === (activeDraft?.id ?? '')
         }
         regenerateError={regenerateErrorMessage}
+        approving={
+          approveMutation.isPending &&
+          approveMutation.variables === (activeDraft?.id ?? '')
+        }
+        sending={
+          sendMutation.isPending &&
+          sendMutation.variables === (activeDraft?.id ?? '')
+        }
         editRequestNonce={editNonce}
       />
 
