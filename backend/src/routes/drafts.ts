@@ -383,6 +383,25 @@ async function regenerateDraftById(id: string): Promise<RegenerateOk | Regenerat
     },
   });
 
+  // Persist role to the candidate when Claude detected one and we don't have
+  // a value yet. Mirrors classifyAndDraft's policy: don't churn role on
+  // every follow-up.
+  if (classificationResult.role && !candidate.role) {
+    await prisma.candidate.update({
+      where: { id: candidate.id },
+      data: { role: classificationResult.role },
+    });
+    await logEvent(
+      'CANDIDATE_ROLE_DETECTED',
+      {
+        candidateId: candidate.id,
+        role: classificationResult.role,
+        via: 'regenerate',
+      },
+      'INFO'
+    );
+  }
+
   await logEvent('DRAFT_REGENERATED', { draftId: id, mailboxId: mailbox.id }, 'INFO');
 
   return { ok: true, draft: updated, originalMessage, mailboxId: mailbox.id };
