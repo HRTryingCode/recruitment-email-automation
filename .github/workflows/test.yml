@@ -22,3 +22,17 @@ jobs:
         run: npm run typecheck --workspace=backend
       - name: Run backend tests
         run: npm test --workspace=backend
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - name: Build frontend (type-check + bundle)
+        run: cd frontend && npm run build
+      - name: Run frontend tests
+        run: cd frontend && npm test
