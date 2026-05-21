@@ -32,6 +32,7 @@ export interface MockPrisma {
   emailThread: MockedMethods<'findUnique' | 'findMany' | 'update'>;
   emailMessage: MockedMethods<'findUnique' | 'findFirst' | 'findMany' | 'count'>;
   systemLog: MockedMethods<'create' | 'findMany'>;
+  oAuthState: MockedMethods<'create' | 'findUnique' | 'update' | 'deleteMany'>;
   $transaction: Mock;
   $queryRaw: Mock;
 }
@@ -65,6 +66,7 @@ export function buildPrismaMock(): MockPrisma {
     emailThread: methods('findUnique', 'findMany', 'update'),
     emailMessage: methods('findUnique', 'findFirst', 'findMany', 'count'),
     systemLog: methods('create', 'findMany'),
+    oAuthState: methods('create', 'findUnique', 'update', 'deleteMany'),
     $transaction: vi.fn(),
     $queryRaw: vi.fn(),
   };
@@ -72,6 +74,13 @@ export function buildPrismaMock(): MockPrisma {
   // monitoring.service.logEvent calls systemLog.create on every route action.
   // Resolve by default so we don't have to program it per-test.
   mock.systemLog.create.mockResolvedValue({});
+
+  // lib/oauthState now persists to Postgres (Phase AS). The /gmail/auth route
+  // does deleteMany (opportunistic reaper) + create on every call, so default
+  // them to succeed unless a test overrides.
+  mock.oAuthState.deleteMany.mockResolvedValue({ count: 0 });
+  mock.oAuthState.create.mockResolvedValue({});
+  mock.oAuthState.update.mockResolvedValue({});
 
   // requireAdmin (added in Phase AO) calls user.findUnique to verify the role
   // of the authenticated user. Default to an admin so existing integration
@@ -108,4 +117,7 @@ export function resetPrismaMock(p: MockPrisma): void {
     id: 'test-user-1',
     role: 'admin',
   });
+  p.oAuthState.deleteMany.mockResolvedValue({ count: 0 });
+  p.oAuthState.create.mockResolvedValue({});
+  p.oAuthState.update.mockResolvedValue({});
 }

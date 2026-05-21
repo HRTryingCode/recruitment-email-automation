@@ -140,7 +140,7 @@ app.get(
       if (!state) {
         return next(createError('Missing OAuth state parameter', 400));
       }
-      if (!consumeOAuthState(state)) {
+      if (!(await consumeOAuthState(state))) {
         return next(createError('Invalid or expired OAuth state', 400));
       }
       const mailbox = await handleCallback(code, state);

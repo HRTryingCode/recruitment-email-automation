@@ -134,3 +134,19 @@ model SystemLog {
   level     String   @default("INFO")
   createdAt DateTime @default(now())
 }
+
+/// Persistent OAuth state for CSRF protection on the Gmail connect flow.
+/// Lives here instead of an in-memory Map because Vercel function instances
+/// don't share memory — a callback hitting a different instance from
+/// auth-init would otherwise reject as "invalid state". Rows are written
+/// when /api/mailboxes/gmail/auth issues a state, consumed (consumedAt set)
+/// when /api/mailboxes/gmail/callback validates it, and reaped opportunistically
+/// (rows older than the 10-minute TTL) on each insert. See lib/oauthState.ts.
+model OAuthState {
+  state      String    @id
+  mailboxId  String?
+  createdAt  DateTime  @default(now())
+  consumedAt DateTime?
+
+  @@index([createdAt])
+}
