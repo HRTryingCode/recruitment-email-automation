@@ -80,7 +80,9 @@ describe('/api/candidates', () => {
       };
       expect(args?.where?.status).toEqual({ not: 'IGNORED' });
       expect(args?.skip).toBe(0);
-      expect(args?.take).toBe(20);
+      // Phase AR bug #5: route over-fetches 3x the limit so it can JS-sort
+      // by latest-thread lastMessageAt without forcing a relation orderBy.
+      expect(args?.take).toBe(60);
     });
 
     it('rejects page=0 with 400 (zod pagination bounds)', async () => {
@@ -91,6 +93,94 @@ describe('/api/candidates', () => {
       expect(res.status).toBe(400);
       expect(res.body.success).toBe(false);
       expect(mockPrisma.candidate.findMany).not.toHaveBeenCalled();
+    });
+
+    it('sorts by latest thread.lastMessageAt (Phase AR bug #5), not just updatedAt', async () => {
+      // Candidate A has a stale updatedAt but a fresh thread message;
+      // Candidate B has a fresh updatedAt but a stale thread message.
+      // The "Last activity" column in the UI shows time since the most
+      // recent thread message — so A should come first.
+      const oldDate = new Date('2026-04-01T00:00:00Z');
+      const newDate = new Date('2026-05-20T00:00:00Z');
+
+      const candA = {
+        id: 'cand-A',
+        email: 'a@example.com',
+        name: 'A',
+        status: 'PENDING',
+        mailboxId: 'mb-1',
+        mailbox: { id: 'mb-1', emailAddress: 'inbox@archive.com', provider: 'GMAIL' },
+        threads: [{ id: 't-A', subject: 'recent', lastMessageAt: newDate }],
+        repliedAt: null,
+        updatedAt: oldDate,
+      };
+      const candB = {
+        id: 'cand-B',
+        email: 'b@example.com',
+        name: 'B',
+        status: 'PENDING',
+        mailboxId: 'mb-1',
+        mailbox: { id: 'mb-1', emailAddress: 'inbox@archive.com', provider: 'GMAIL' },
+        threads: [{ id: 't-B', subject: 'older', lastMessageAt: oldDate }],
+        repliedAt: null,
+        updatedAt: newDate,
+      };
+
+      // Prisma returns the over-fetched window in updatedAt-desc order, so B
+      // is first off the wire. The route's JS sort should flip them so A
+      // (fresher thread activity) appears first.
+      mockPrisma.candidate.findMany.mockResolvedValueOnce([candB, candA]);
+      mockPrisma.candidate.count.mockResolvedValueOnce(2);
+
+      const res = await request(app)
+        .get('/api/candidates?page=1&limit=20')
+        .set('Authorization', AUTH);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toHaveLength(2);
+      expect(res.body.data[0].id).toBe('cand-A');
+      expect(res.body.data[1].id).toBe('cand-B');
+    });
+
+    it('falls back to updatedAt for candidates with no threads', async () => {
+      // A: no threads, fresh updatedAt. B: a thread but older lastMessageAt.
+      // The sort should use updatedAt for A and lastMessageAt for B.
+      const oldDate = new Date('2026-04-01T00:00:00Z');
+      const newDate = new Date('2026-05-20T00:00:00Z');
+
+      const candA = {
+        id: 'cand-A',
+        email: 'a@example.com',
+        name: 'A',
+        status: 'PENDING',
+        mailboxId: 'mb-1',
+        mailbox: { id: 'mb-1', emailAddress: 'inbox@archive.com', provider: 'GMAIL' },
+        threads: [],
+        repliedAt: null,
+        updatedAt: newDate,
+      };
+      const candB = {
+        id: 'cand-B',
+        email: 'b@example.com',
+        name: 'B',
+        status: 'PENDING',
+        mailboxId: 'mb-1',
+        mailbox: { id: 'mb-1', emailAddress: 'inbox@archive.com', provider: 'GMAIL' },
+        threads: [{ id: 't-B', subject: 'older', lastMessageAt: oldDate }],
+        repliedAt: null,
+        updatedAt: oldDate,
+      };
+
+      mockPrisma.candidate.findMany.mockResolvedValueOnce([candA, candB]);
+      mockPrisma.candidate.count.mockResolvedValueOnce(2);
+
+      const res = await request(app)
+        .get('/api/candidates?page=1&limit=20')
+        .set('Authorization', AUTH);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data[0].id).toBe('cand-A');
+      expect(res.body.data[1].id).toBe('cand-B');
     });
 
     it('includes role when present on the candidate row', async () => {

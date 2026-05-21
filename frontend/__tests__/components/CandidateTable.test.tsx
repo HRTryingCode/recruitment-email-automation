@@ -165,6 +165,31 @@ describe('<CandidateTable />', () => {
     expect(ignoreCandidateMock).toHaveBeenCalledTimes(1);
   });
 
+  it('renders a pagination footer when total exceeds the page limit (Phase AR bug #9)', async () => {
+    fetchCandidatesMock.mockResolvedValue({
+      success: true,
+      data: CANDIDATES,
+      // total deliberately greater than limit so the footer kicks in
+      meta: { total: 1500, page: 1, limit: 500 },
+    });
+
+    renderTable();
+    await screen.findByText('Ada Lovelace');
+
+    const footer = await screen.findByTestId('candidates-pagination-footer');
+    expect(footer).toBeInTheDocument();
+    expect(footer.textContent).toMatch(/Showing 1.{1,2}500 of 1500/);
+    expect(within(footer).getByRole('button', { name: /load more/i })).toBeEnabled();
+    expect(within(footer).getByRole('button', { name: /previous/i })).toBeDisabled();
+  });
+
+  it('does NOT render the pagination footer when total fits on a single page', async () => {
+    // Default fixture has total=5, limit=100 → no footer expected.
+    renderTable();
+    await screen.findByText('Ada Lovelace');
+    expect(screen.queryByTestId('candidates-pagination-footer')).not.toBeInTheDocument();
+  });
+
   it('changing the status filter refetches with the new status param', async () => {
     const user = userEvent.setup();
     renderTable();

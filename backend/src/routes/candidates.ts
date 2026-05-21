@@ -102,6 +102,20 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     }
     if (mailboxId) where.mailboxId = mailboxId;
 
+    // The UI's "Last activity" column shows time-since the most recent
+    // thread message, falling back to candidate.updatedAt when no threads
+    // exist. Prisma can't orderBy a relation aggregate without
+    // `_relationLoad`, so we over-fetch (3x the limit, capped at the
+    // pagination max of 500), apply the JS sort by lastMessageAt, and
+    // slice to limit. Initial orderBy stays on updatedAt so the over-fetch
+    // window is a stable, candidate-recent slice rather than random.
+    //
+    // Trade-off: at very high candidate counts (>500) and page>1 the
+    // window may not contain the globally-newest thread activity, so
+    // ordering near a page boundary can drift. Acceptable until we move
+    // to keyset pagination — the practical workload is well under 500.
+    const overFetchTake = Math.min(limit * 3, 500);
+
     const [candidates, total] = await Promise.all([
       prisma.candidate.findMany({
         where,
@@ -117,15 +131,26 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
         },
         orderBy: { updatedAt: 'desc' },
         skip,
-        take: limit,
+        take: overFetchTake,
       }),
       prisma.candidate.count({ where }),
     ]);
 
-    const enriched = candidates.map((c) => ({
-      ...c,
-      replyStatus: deriveReplyStatus(c),
-    }));
+    const enriched = candidates
+      .map((c) => ({
+        ...c,
+        replyStatus: deriveReplyStatus(c),
+      }))
+      .sort((a, b) => {
+        const aTs =
+          a.threads[0]?.lastMessageAt?.getTime() ??
+          a.updatedAt.getTime();
+        const bTs =
+          b.threads[0]?.lastMessageAt?.getTime() ??
+          b.updatedAt.getTime();
+        return bTs - aTs;
+      })
+      .slice(0, limit);
 
     res.json({ success: true, data: enriched, meta: { total, page, limit } });
   } catch (err) {

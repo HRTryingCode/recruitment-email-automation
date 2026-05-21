@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
 import {
@@ -232,10 +232,13 @@ function SortableTh({
   );
 }
 
+const PAGE_SIZE = 100;
+
 export default function CandidateTable({ mailboxId }: Props) {
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
   const [sort, setSort] = useState<{ column: SortColumn; dir: SortDir }>({
     column: 'updatedAt',
     dir: 'desc',
@@ -253,14 +256,21 @@ export default function CandidateTable({ mailboxId }: Props) {
   const apiStatus =
     statusFilter === '__ALL__' || statusFilter === '' ? undefined : statusFilter;
 
+  // Reset to page 1 when filters change so a user mid-pagination doesn't
+  // land on a page that no longer exists in the filtered view.
+  useEffect(() => {
+    setPage(1);
+  }, [mailboxId, statusFilter]);
+
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ['candidates', { mailboxId, status: statusFilter }],
+    queryKey: ['candidates', { mailboxId, status: statusFilter, page }],
     queryFn: () =>
       fetchCandidates({
         mailboxId,
         status: apiStatus,
         includeIgnored,
-        limit: 100,
+        page,
+        limit: PAGE_SIZE,
       }),
     staleTime: 30_000,
   });
@@ -452,6 +462,65 @@ export default function CandidateTable({ mailboxId }: Props) {
             </p>
           </div>
         )}
+
+        <PaginationFooter
+          meta={data?.meta}
+          page={page}
+          onPrev={() => setPage((p) => Math.max(1, p - 1))}
+          onNext={() => setPage((p) => p + 1)}
+        />
+      </div>
+    </div>
+  );
+}
+
+function PaginationFooter({
+  meta,
+  page,
+  onPrev,
+  onNext,
+}: {
+  meta: { total: number; page: number; limit: number } | undefined;
+  page: number;
+  onPrev: () => void;
+  onNext: () => void;
+}) {
+  // Don't render anything when there's no meta yet, or when the result set
+  // fits on a single page. The empty state above already covers zero-row.
+  if (!meta || meta.total <= meta.limit) return null;
+
+  const limit = meta.limit;
+  const total = meta.total;
+  const start = (page - 1) * limit + 1;
+  const end = Math.min(page * limit, total);
+  const hasNext = end < total;
+  const hasPrev = page > 1;
+
+  return (
+    <div
+      data-testid="candidates-pagination-footer"
+      className="flex items-center justify-between border-t border-line-soft px-4 py-3 text-[12.5px] text-fg-muted"
+    >
+      <span className="tabular-nums">
+        Showing {start}–{end} of {total}
+      </span>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onPrev}
+          disabled={!hasPrev}
+          className="rounded-md bg-fg-strong/[0.04] px-2.5 py-1 text-[12px] font-medium text-fg-default transition-colors hover:bg-fg-strong/[0.09] disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Previous
+        </button>
+        <button
+          type="button"
+          onClick={onNext}
+          disabled={!hasNext}
+          className="rounded-md bg-fg-strong/[0.04] px-2.5 py-1 text-[12px] font-medium text-fg-default transition-colors hover:bg-fg-strong/[0.09] disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Load more
+        </button>
       </div>
     </div>
   );
