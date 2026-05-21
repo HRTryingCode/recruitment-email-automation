@@ -13,6 +13,7 @@ import {
   type OriginalMessage,
 } from '../lib/api';
 import { cn, formatTimeAgo } from '../lib/utils';
+import { Tooltip } from './ui/Tooltip';
 import {
   toastSuccess,
   toastError,
@@ -244,64 +245,72 @@ function DraftCard({
           </span>
           {isPending && (
             <>
-              <IconButton
-                onClick={() => onApprove(draft.id)}
-                disabled={regenerating}
-                title="Approve — saves as a Gmail draft you can review"
-                aria-label="Approve draft"
-                tone="emerald"
-              >
-                <Check className="h-4 w-4" />
-              </IconButton>
-              <IconDestructiveButton
-                onConfirm={() => onDiscard(draft.id)}
-                disabled={regenerating}
-                title="Discard draft?"
-                description="The draft will not be sent. New emails from this candidate will still generate drafts unless you ignore them."
-                confirmLabel="Discard draft"
-                ariaLabel="Discard draft"
-                buttonTone="rose"
-                icon={<X className="h-4 w-4" />}
-              />
-              <IconButton
-                onClick={() => onRegenerate(draft.id)}
-                disabled={regenerating}
-                title={
+              <Tooltip content="Approve — saves as a Gmail draft you can review">
+                <IconButton
+                  onClick={() => onApprove(draft.id)}
+                  disabled={regenerating}
+                  aria-label="Approve draft"
+                  tone="emerald"
+                >
+                  <Check className="h-4 w-4" />
+                </IconButton>
+              </Tooltip>
+              <Tooltip content="Discard draft">
+                <IconDestructiveButton
+                  onConfirm={() => onDiscard(draft.id)}
+                  disabled={regenerating}
+                  title="Discard draft?"
+                  description="The draft will not be sent. New emails from this candidate will still generate drafts unless you ignore them."
+                  confirmLabel="Discard draft"
+                  ariaLabel="Discard draft"
+                  buttonTone="rose"
+                  icon={<X className="h-4 w-4" />}
+                />
+              </Tooltip>
+              <Tooltip
+                content={
                   regenerating
                     ? 'Regenerating…'
                     : 'Regenerate — re-run Claude with the latest persona + prompt'
                 }
-                aria-label="Regenerate draft"
-                tone="neutral"
               >
-                <RefreshCw
-                  className={cn('h-4 w-4', regenerating && 'animate-spin')}
-                />
-              </IconButton>
-              <IconButton
-                onClick={() => {
-                  setExpanded(true);
-                  setEditing(true);
-                }}
-                disabled={regenerating}
-                title="Edit draft body"
-                aria-label="Edit draft body"
-                tone="neutral"
-              >
-                <Pencil className="h-4 w-4" />
-              </IconButton>
+                <IconButton
+                  onClick={() => onRegenerate(draft.id)}
+                  disabled={regenerating}
+                  aria-label="Regenerate draft"
+                  tone="neutral"
+                >
+                  <RefreshCw
+                    className={cn('h-4 w-4', regenerating && 'animate-spin')}
+                  />
+                </IconButton>
+              </Tooltip>
+              <Tooltip content="Edit draft body">
+                <IconButton
+                  onClick={() => {
+                    setExpanded(true);
+                    setEditing(true);
+                  }}
+                  disabled={regenerating}
+                  aria-label="Edit draft body"
+                  tone="neutral"
+                >
+                  <Pencil className="h-4 w-4" />
+                </IconButton>
+              </Tooltip>
             </>
           )}
-          <span
-            title="Expand to see full body + original candidate email"
-            className="ml-1 flex h-7 w-7 items-center justify-center rounded-md text-ink-500"
-          >
+          <Tooltip content="Expand to see full body + original candidate email">
+            <span
+              className="ml-1 flex h-7 w-7 items-center justify-center rounded-md text-ink-500"
+            >
             {expanded ? (
               <ChevronUp className="h-4 w-4" />
             ) : (
               <ChevronDown className="h-4 w-4" />
             )}
-          </span>
+            </span>
+          </Tooltip>
         </div>
       </div>
 
