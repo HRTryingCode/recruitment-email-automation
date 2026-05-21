@@ -18,6 +18,11 @@ jobs:
       - run: npm ci
       - name: Generate Prisma client
         run: npm run db:generate --workspace=backend
+      - name: Validate Prisma schema
+        run: cd backend && npx prisma validate
+      - name: Check schema/migration consistency
+        # Fails the build if schema.prisma drifts from the applied migrations.
+        run: cd backend && npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --exit-code
       - name: Type-check backend (src + tests)
         run: npm run typecheck --workspace=backend
       - name: Run backend tests
