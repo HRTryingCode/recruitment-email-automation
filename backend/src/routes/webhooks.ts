@@ -79,11 +79,22 @@ function extractNotification(body: unknown): {
 
 // POST /api/webhooks/gmail — Google Cloud Pub/Sub push endpoint.
 //
-// Always returns 200 so Pub/Sub doesn't retry. The actual sync work runs
-// after we've ack'd, and any error inside it lands in SystemLog as
-// WEBHOOK_HANDLER_ERROR (instead of disappearing into Vercel's truncated
-// runtime logs). The dashboard sync-health tile surfaces a 24h count of
-// these so silent drops are visible.
+// Ack timing (Phase Q + Phase AR doc): we always return 200 — even on
+// internal errors — for three reasons.
+//
+//   (a) Pub/Sub treats any non-2xx as "redeliver this message". The
+//       processWebhook path is idempotent (history-id dedupe + message-id
+//       upsert keys), so a redelivery costs us a wasted Gmail history
+//       fetch but never produces duplicate candidates or drafts.
+//   (b) The contract here is at-least-once on the Pub/Sub side, made
+//       effectively exactly-once by the dedupe inside processWebhook. Ack
+//       in the synchronous response so we never sit past Pub/Sub's 10s
+//       push deadline waiting on Claude / Gmail latency.
+//   (c) Errors aren't swallowed: every failure inside processWebhook (or
+//       in synchronous pre-dispatch parsing below) is written to SystemLog
+//       as WEBHOOK_HANDLER_ERROR with the originating emailAddress +
+//       historyId. The dashboard sync-health tile surfaces a 24h count so
+//       silent drops stay visible even though Pub/Sub sees a 200.
 router.post('/gmail', async (req: Request, res: Response, _next: NextFunction) => {
   try {
     // Authenticate Pub/Sub push (if PUBSUB_AUDIENCE is configured). Runs
