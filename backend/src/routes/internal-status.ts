@@ -50,7 +50,10 @@ router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
     // doesn't have a mailboxId column for these so JS-side bucketing is the
     // simplest correct option.
     const [mailboxes, recentWebhookErrors] = await Promise.all([
-      prisma.mailbox.findMany({ orderBy: { createdAt: 'asc' } }),
+      prisma.mailbox.findMany({
+        where: { isActive: true },
+        orderBy: { createdAt: 'asc' },
+      }),
       prisma.systemLog.findMany({
         where: {
           event: 'WEBHOOK_HANDLER_ERROR',
