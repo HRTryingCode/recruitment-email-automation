@@ -3,6 +3,7 @@ import { prisma } from '../db/client';
 import { createError } from '../middleware/error';
 import { logEvent } from '../services/monitoring.service';
 import { serializeEmailMessages } from '../lib/emailMessageSerializer';
+import { classifyReply } from '../services/claude.service';
 import { z } from 'zod';
 
 const router = Router();
@@ -256,6 +257,102 @@ router.post('/:id/unignore', async (req: Request, res: Response, next: NextFunct
     );
 
     res.json({ success: true, data: updated });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/candidates/backfill-roles
+// One-shot admin action: re-classify every candidate that has role=null
+// and surface the role to the Candidate row. Useful right after the Phase
+// AN deploy when existing NEUTRAL/NOT_INTERESTED candidates never got
+// role extracted (regenerate-pending only covers PENDING drafts).
+//
+// Caps at 25 per request to fit inside Vercel's function timeout — call
+// repeatedly until { remaining: 0 }.
+router.post('/backfill-roles', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const targets = await prisma.candidate.findMany({
+      where: { role: null },
+      include: {
+        threads: {
+          include: {
+            mailbox: { select: { emailAddress: true } },
+            messages: {
+              orderBy: { receivedAt: 'desc' },
+              take: 8,
+            },
+          },
+          orderBy: { lastMessageAt: 'desc' },
+          take: 1,
+        },
+      },
+      orderBy: { updatedAt: 'asc' },
+      take: 25,
+    });
+
+    let updated = 0;
+    const skipped: Array<{ id: string; reason: string }> = [];
+
+    for (const c of targets) {
+      const thread = c.threads[0];
+      if (!thread) {
+        skipped.push({ id: c.id, reason: 'no_thread' });
+        continue;
+      }
+      const mailboxAddr = thread.mailbox?.emailAddress?.toLowerCase() ?? '';
+      // Most recent inbound message (not sent from the recruiter mailbox).
+      const inbound = thread.messages.find(
+        (m) => m.fromAddress.toLowerCase() !== mailboxAddr
+      );
+      if (!inbound) {
+        skipped.push({ id: c.id, reason: 'no_inbound_message' });
+        continue;
+      }
+      const previousMessages = thread.messages
+        .filter((m) => m.receivedAt.getTime() < inbound.receivedAt.getTime())
+        .sort((a, b) => a.receivedAt.getTime() - b.receivedAt.getTime())
+        .map((m) => ({
+          fromAddress: m.fromAddress,
+          fromName: m.fromName,
+          bodyText: m.bodyText,
+          receivedAt: m.receivedAt,
+        }));
+
+      try {
+        const result = await classifyReply(
+          inbound.bodyText || inbound.bodyHtml || inbound.subject,
+          inbound.fromName ?? c.name,
+          { subject: thread.subject, previousMessages }
+        );
+        if (result.role) {
+          await prisma.candidate.update({
+            where: { id: c.id },
+            data: { role: result.role },
+          });
+          await logEvent(
+            'CANDIDATE_ROLE_DETECTED',
+            { candidateId: c.id, role: result.role, via: 'backfill' },
+            'INFO'
+          );
+          updated += 1;
+        } else {
+          skipped.push({ id: c.id, reason: 'no_role_in_classifier_output' });
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        skipped.push({ id: c.id, reason: `classify_failed: ${msg}` });
+      }
+    }
+
+    const remaining = await prisma.candidate.count({ where: { role: null } });
+    res.json({
+      success: true,
+      processed: targets.length,
+      updated,
+      skipped,
+      remaining,
+    });
   } catch (err) {
     next(err);
   }
