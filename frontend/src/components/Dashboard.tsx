@@ -16,6 +16,7 @@ import {
   toastSuccess,
   toastError,
   extractApiErrorMessage,
+  isAlreadyResolvedError,
 } from '../lib/toast';
 import {
   Mail,
@@ -165,7 +166,7 @@ function QuickTriageRow({
           {role ? (
             <span
               data-testid="role-pill"
-              className="flex-shrink-0 truncate rounded-md bg-accent-500/8 px-1.5 py-0.5 text-[10.5px] font-medium text-accent-600 ring-1 ring-inset ring-accent-500/15 dark:text-accent-300"
+              className="max-w-[160px] flex-shrink-0 truncate rounded-md bg-accent-500/8 px-1.5 py-0.5 text-[10.5px] font-medium text-accent-600 ring-1 ring-inset ring-accent-500/15 dark:text-accent-300"
               title={role}
             >
               {role}
@@ -599,6 +600,11 @@ export default function Dashboard({
       void queryClient.invalidateQueries({ queryKey: ['drafts'] });
     },
     onError: (err) => {
+      if (isAlreadyResolvedError(err)) {
+        toastSuccess('Already approved', 'This draft was approved in another session.');
+        void queryClient.invalidateQueries({ queryKey: ['drafts'] });
+        return;
+      }
       toastError(
         'Could not approve draft',
         extractApiErrorMessage(err, 'Please try again.')

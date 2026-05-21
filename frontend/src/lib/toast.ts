@@ -36,3 +36,17 @@ export function extractApiErrorMessage(err: unknown, fallback: string): string {
   if (err instanceof Error) return err.message;
   return fallback;
 }
+
+// Concurrent-approve / send / discard races surface as 400 "not in PENDING
+// status" from the backend. The user's intent ("resolve this draft") is
+// already satisfied by whichever request landed first, so we surface those as
+// a softer "already resolved" success rather than a scary error toast.
+export function isAlreadyResolvedError(err: unknown): boolean {
+  if (!axios.isAxiosError(err)) return false;
+  if (err.response?.status !== 400) return false;
+  const data = err.response?.data as
+    | { error?: string; message?: string }
+    | undefined;
+  const msg = (data?.error ?? data?.message ?? '').toLowerCase();
+  return msg.includes('not in pending');
+}
