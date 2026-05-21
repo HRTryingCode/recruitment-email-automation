@@ -18,11 +18,24 @@ interface Config {
   };
   jwtSecret: string;
   frontendUrl: string;
+  allowedOrigins: string[];
   nodeEnv: string;
   draftCcEmail: string;
 }
 
 const PLACEHOLDER_JWT_SECRET = 'default-dev-secret-change-in-production';
+
+// Production Vercel origin used when ALLOWED_ORIGINS is unset, so a misconfigured
+// deploy fails closed (only the prod origin) rather than open.
+const DEFAULT_PROD_ORIGIN = 'https://recruiting-email-automation-api.vercel.app';
+
+function parseAllowedOrigins(raw: string | undefined): string[] {
+  if (!raw || raw.trim() === '') return [DEFAULT_PROD_ORIGIN];
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
 
 // Fail-fast env validation. Runs once at module load — config.ts is imported
 // by index.ts before app.listen, so any throw here surfaces during cold-start
@@ -109,6 +122,7 @@ export const config: Config = {
   },
   jwtSecret: process.env.JWT_SECRET ?? PLACEHOLDER_JWT_SECRET,
   frontendUrl: process.env.FRONTEND_URL ?? 'http://localhost:5173',
+  allowedOrigins: parseAllowedOrigins(process.env.ALLOWED_ORIGINS),
   nodeEnv: process.env.NODE_ENV ?? 'development',
   draftCcEmail: process.env.DRAFT_CC_EMAIL ?? 'sofia@archive.com',
 };
