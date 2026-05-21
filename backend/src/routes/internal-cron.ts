@@ -74,6 +74,8 @@ router.post(
       });
 
       let totalIngested = 0;
+      let totalMissing = 0;
+      let totalScanned = 0;
       let deadlineReachedAt = -1;
       const results: Array<{
         mailboxId: string;
@@ -94,6 +96,8 @@ router.post(
         try {
           const result = await reconcileMailbox(mb.id, { deadline: innerDeadline });
           totalIngested += result.ingested;
+          totalMissing += result.missingBefore;
+          totalScanned += result.scannedFromGmail;
 
           await logEvent(
             'RECONCILIATION_RUN',
@@ -171,12 +175,35 @@ router.post(
         );
       }
 
+      const elapsedMs = Date.now() - start;
+
+      // Final aggregate summary log so operators can see total run cost and
+      // drift at a glance ("reconcile took 3.4s, scanned 2 mailboxes, found 0
+      // missing") without joining the per-mailbox entries above.
+      await logEvent(
+        'RECONCILIATION_RUN',
+        {
+          summary: true,
+          mailboxCount: mailboxes.length,
+          processedCount:
+            deadlineReachedAt >= 0 ? deadlineReachedAt : mailboxes.length,
+          totalScanned,
+          totalMissing,
+          totalIngested,
+          elapsedMs,
+          deadlineReached: deadlineReachedAt >= 0,
+        },
+        'INFO'
+      );
+
       res.status(200).json({
         success: true,
         data: {
           mailboxCount: mailboxes.length,
           totalIngested,
-          elapsedMs: Date.now() - start,
+          totalMissing,
+          totalScanned,
+          elapsedMs,
           deadlineReached: deadlineReachedAt >= 0,
           results,
         },

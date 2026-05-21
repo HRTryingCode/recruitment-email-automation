@@ -20,8 +20,13 @@ model User {
   updatedAt    DateTime @updatedAt
 }
 
+/// The only currently-supported `provider` value is `"GMAIL"`. Outlook/IMAP
+/// adapters are stubbed in the codebase but not wired through ingestion,
+/// drafts, or reconciliation — do not insert other values without also
+/// implementing the corresponding service paths.
 model Mailbox {
   id            String         @id @default(cuid())
+  /// Mailbox backend. Only `"GMAIL"` is supported today; see model-level doc.
   provider      String         @default("GMAIL")
   emailAddress  String         @unique
   displayName   String?
