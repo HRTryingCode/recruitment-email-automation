@@ -965,6 +965,98 @@ export async function watchMailbox(mailboxId: string): Promise<void> {
   await logEvent('GMAIL_WATCH_SET', { mailboxId, expiry, baselineHistoryId }, 'INFO');
 }
 
+/**
+ * Format a Date as `YYYY/MM/DD` (UTC) for use in Gmail's `q=after:` search
+ * syntax. Gmail interprets `after:YYYY/MM/DD` as "messages received on or
+ * after midnight of that day". Using UTC for the conversion avoids missing
+ * mail near midnight in either direction.
+ */
+function gmailDateString(d: Date): string {
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  return `${yyyy}/${mm}/${dd}`;
+}
+
+/**
+ * Reconcile one mailbox: list Gmail messages received in the last 24h and
+ * compare against what we have stored. Any messageId Gmail reports but we
+ * don't have gets re-ingested via fetchAndStoreMessage, which runs through
+ * the same classification + draft generation path as the webhook. This is
+ * the safety net for the Pub/Sub push pipeline (cold starts, watch expiry
+ * windows, transient errors, Gmail history horizon).
+ *
+ * Returns counts so the caller can log them.
+ */
+export async function reconcileMailbox(
+  mailboxId: string,
+  opts: { deadline?: number } = {}
+): Promise<{ scannedFromGmail: number; missingBefore: number; ingested: number }> {
+  const mailbox = await prisma.mailbox.findUnique({ where: { id: mailboxId } });
+  if (!mailbox || !mailbox.isActive) {
+    return { scannedFromGmail: 0, missingBefore: 0, ingested: 0 };
+  }
+
+  const credentials = parseCredentials(mailbox);
+  const oauth2Client = getAuthenticatedClient(credentials);
+  const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+
+  // Gmail's `after:` only takes day precision, so subtracting 24h then taking
+  // the date gives us a roughly 24–48h window depending on time of day. That
+  // overlap is fine — fetchAndStoreMessage is idempotent.
+  const after = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const q = `after:${gmailDateString(after)}`;
+
+  const messageIds: string[] = [];
+  let pageToken: string | undefined;
+  const MAX_PAGES = 5;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const listRes = await gmail.users.messages.list({
+      userId: 'me',
+      q,
+      maxResults: 500,
+      pageToken,
+    });
+    const msgs = listRes.data.messages ?? [];
+    for (const m of msgs) {
+      if (m.id) messageIds.push(m.id);
+    }
+    pageToken = listRes.data.nextPageToken ?? undefined;
+    if (!pageToken) break;
+  }
+
+  const scannedFromGmail = messageIds.length;
+  if (scannedFromGmail === 0) {
+    return { scannedFromGmail, missingBefore: 0, ingested: 0 };
+  }
+
+  // Find which of those we already have. Doing it with `in:` is bounded —
+  // worst case ~2500 ids (5 pages × 500), which Postgres handles fine.
+  const existing = await prisma.emailMessage.findMany({
+    where: {
+      mailboxId: mailbox.id,
+      externalMessageId: { in: messageIds },
+    },
+    select: { externalMessageId: true },
+  });
+  const existingSet = new Set(existing.map((e) => e.externalMessageId));
+  const missing = messageIds.filter((id) => !existingSet.has(id));
+
+  let ingested = 0;
+  for (const msgId of missing) {
+    if (opts.deadline && Date.now() > opts.deadline) {
+      console.warn(
+        `[Gmail] reconcileMailbox(${mailbox.emailAddress}) deadline hit after ingesting ${ingested}/${missing.length}`
+      );
+      break;
+    }
+    const didStore = await fetchAndStoreMessage(gmail, mailbox, msgId);
+    if (didStore) ingested += 1;
+  }
+
+  return { scannedFromGmail, missingBefore: missing.length, ingested };
+}
+
 export async function renewGmailWatches(): Promise<number> {
   const mailboxes = await prisma.mailbox.findMany({
     where: {

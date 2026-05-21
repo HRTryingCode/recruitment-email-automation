@@ -13,6 +13,7 @@ import webhooksRouter from './routes/webhooks';
 import healthRouter from './routes/health';
 import authRouter from './routes/auth';
 import internalCronRouter from './routes/internal-cron';
+import internalStatusRouter from './routes/internal-status';
 import { handleCallback, watchMailbox, syncMessages } from './services/gmail.service';
 import { consumeOAuthState } from './lib/oauthState';
 import { createError } from './middleware/error';
@@ -111,6 +112,9 @@ app.use('/api/mailboxes', requireAuth, mailboxesRouter);
 app.use('/api/candidates', requireAuth, candidatesRouter);
 app.use('/api/emails', requireAuth, emailsRouter);
 app.use('/api/drafts', requireAuth, draftsRouter);
+// Sync-health is JWT-auth-gated (dashboard/debug), not CRON_SECRET. Mounted
+// under /api/internal/ alongside the cron router but using requireAuth.
+app.use('/api/internal/sync-health', requireAuth, internalStatusRouter);
 
 // Error handler (must be last)
 app.use(errorHandler);

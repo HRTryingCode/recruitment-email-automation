@@ -1,7 +1,16 @@
 import { useQuery } from '@tanstack/react-query';
-import { fetchCandidates, fetchMailboxes, fetchDrafts, type Candidate, type Mailbox, type EmailDraft } from '../lib/api';
+import {
+  fetchCandidates,
+  fetchMailboxes,
+  fetchDrafts,
+  fetchSyncHealth,
+  type Candidate,
+  type Mailbox,
+  type EmailDraft,
+  type MailboxSyncHealth,
+} from '../lib/api';
 import { cn } from '../lib/utils';
-import { Mail, Users, Send, Clock, AlertCircle, CheckCircle2, XCircle, MinusCircle, FileText, AlertTriangle } from 'lucide-react';
+import { Mail, Users, Send, Clock, AlertCircle, CheckCircle2, XCircle, MinusCircle, FileText, AlertTriangle, Activity } from 'lucide-react';
 
 interface Props {
   mailboxId?: string;
@@ -152,6 +161,106 @@ function AccountCard({
   );
 }
 
+// ---------- Mailbox Health ----------
+
+function watchExpiryTone(hours: number | null): string {
+  if (hours === null) return 'text-gray-500';
+  if (hours < 0) return 'text-red-400';
+  if (hours < 24) return 'text-amber-400';
+  return 'text-gray-400';
+}
+
+function formatWatchExpiry(h: number | null): string {
+  if (h === null) return 'no watch';
+  if (h < 0) return `expired ${Math.abs(Math.round(h))}h ago`;
+  if (h < 1) return `< 1h`;
+  if (h < 48) return `${Math.round(h)}h`;
+  return `${Math.round(h / 24)}d`;
+}
+
+function MailboxHealthSection({
+  data,
+  loading,
+}: {
+  data: MailboxSyncHealth[];
+  loading: boolean;
+}) {
+  if (!loading && data.length === 0) return null;
+  const anyDrift = data.some((d) => d.lastReconciliationFoundMissing > 0);
+
+  return (
+    <div>
+      <h2 className="text-white font-semibold text-base mb-3 flex items-center gap-2">
+        <Activity className="w-4 h-4 text-emerald-400" />
+        Mailbox Health
+        {anyDrift && (
+          <span className="ml-1 px-2 py-0.5 bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded-full text-xs font-medium">
+            drift detected
+          </span>
+        )}
+      </h2>
+      {loading ? (
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 h-20 animate-pulse" />
+      ) : (
+        <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-gray-800 text-gray-400">
+                <th className="text-left px-4 py-2 font-medium">Mailbox</th>
+                <th className="text-left px-4 py-2 font-medium">Watch expires</th>
+                <th className="text-left px-4 py-2 font-medium hidden sm:table-cell">Msgs / 24h</th>
+                <th className="text-left px-4 py-2 font-medium hidden md:table-cell">Last reconciled</th>
+                <th className="text-left px-4 py-2 font-medium">Missing found</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-800">
+              {data.map((row) => {
+                const driftTone =
+                  row.lastReconciliationFoundMissing > 0 ? 'text-amber-400' : 'text-gray-500';
+                const recon = row.lastReconciliationAt
+                  ? new Date(row.lastReconciliationAt).toLocaleString(undefined, {
+                      month: 'short',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })
+                  : '—';
+                return (
+                  <tr key={row.mailboxId} className="hover:bg-gray-800/50 transition-colors">
+                    <td className="px-4 py-2">
+                      <p className="text-white font-mono truncate max-w-[200px]">
+                        {row.emailAddress}
+                      </p>
+                      {!row.isActive && (
+                        <span className="text-red-400 text-[10px]">inactive</span>
+                      )}
+                    </td>
+                    <td
+                      className={cn(
+                        'px-4 py-2 font-mono',
+                        watchExpiryTone(row.watchExpiresInHours)
+                      )}
+                    >
+                      {formatWatchExpiry(row.watchExpiresInHours)}
+                    </td>
+                    <td className="px-4 py-2 text-gray-300 hidden sm:table-cell">
+                      {row.messagesLast24h}
+                    </td>
+                    <td className="px-4 py-2 text-gray-400 hidden md:table-cell">{recon}</td>
+                    <td className={cn('px-4 py-2 font-mono', driftTone)}>
+                      {row.lastReconciliationFoundMissing}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------- Main Dashboard ----------
 
 export default function Dashboard({ mailboxId, onSwitchToDrafts }: Props) {
@@ -171,6 +280,15 @@ export default function Dashboard({ mailboxId, onSwitchToDrafts }: Props) {
     queryKey: ['mailboxes'],
     queryFn: fetchMailboxes,
     staleTime: 60_000,
+  });
+
+  // Mailbox sync health (watch-expiry, reconciliation drift, message counts).
+  // Tolerant of failure — if the endpoint 500s the section just stays empty.
+  const { data: syncHealthData, isLoading: loadingSyncHealth } = useQuery({
+    queryKey: ['sync-health'],
+    queryFn: fetchSyncHealth,
+    staleTime: 60_000,
+    retry: false,
   });
 
   const candidates = candidatesData?.data ?? [];
@@ -297,6 +415,12 @@ export default function Dashboard({ mailboxId, onSwitchToDrafts }: Props) {
           </div>
         )}
       </div>
+
+      {/* Section 1b: Mailbox Health (watch-expiry + reconciliation drift) */}
+      <MailboxHealthSection
+        data={syncHealthData?.data ?? []}
+        loading={loadingSyncHealth}
+      />
 
       {/* Section 2: Priority Queue — Candidates Needing Replies */}
       <div>

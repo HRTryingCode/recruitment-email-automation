@@ -13,6 +13,7 @@
     { "source": "/((?!api/|assets/).*)", "destination": "/index.html" }
   ],
   "crons": [
-    { "path": "/api/internal/cron/renew-watches", "schedule": "0 */6 * * *" }
+    { "path": "/api/internal/cron/renew-watches", "schedule": "0 */6 * * *" },
+    { "path": "/api/internal/cron/reconcile", "schedule": "0 * * * *" }
   ]
 }
