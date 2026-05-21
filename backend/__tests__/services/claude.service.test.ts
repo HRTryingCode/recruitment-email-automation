@@ -52,6 +52,7 @@ describe('services/claude.service.classifyReply', () => {
       needsReview: false,
       confidence: 0.93,
       reasoning: 'Candidate explicitly asks about next steps.',
+      role: null,
     });
   });
 
@@ -178,6 +179,117 @@ describe('services/claude.service.classifyReply', () => {
       expect(result.classification).toBe('NEUTRAL');
       expect(result.needsReview).toBe(true);
       expect(result.reasoning).toMatch(/no text content/i);
+    });
+  });
+
+  describe('Phase AN role extraction', () => {
+    it('returns role when Claude provides one', async () => {
+      createMock.mockResolvedValueOnce(
+        textResponse(
+          JSON.stringify({
+            classification: 'INTERESTED',
+            messageType: 'NEW_INQUIRY',
+            needsReview: false,
+            confidence: 0.92,
+            reasoning: 'Excited about the role.',
+            role: 'Senior Backend Engineer',
+          })
+        )
+      );
+
+      const result = await classifyReply('Sounds great!', 'Jane');
+      expect(result.role).toBe('Senior Backend Engineer');
+    });
+
+    it('returns null when role is missing from the response', async () => {
+      createMock.mockResolvedValueOnce(
+        textResponse(
+          JSON.stringify({
+            classification: 'INTERESTED',
+            messageType: 'NEW_INQUIRY',
+            needsReview: false,
+            confidence: 0.92,
+            reasoning: 'Excited.',
+          })
+        )
+      );
+
+      const result = await classifyReply('Sure!', 'Jane');
+      expect(result.role).toBeNull();
+    });
+
+    it('returns null when role is explicit null', async () => {
+      createMock.mockResolvedValueOnce(
+        textResponse(
+          JSON.stringify({
+            classification: 'NEUTRAL',
+            messageType: 'AMBIGUOUS',
+            needsReview: true,
+            confidence: 0.5,
+            reasoning: 'No role mentioned.',
+            role: null,
+          })
+        )
+      );
+
+      const result = await classifyReply('thanks', 'Jane');
+      expect(result.role).toBeNull();
+    });
+
+    it('strips leading articles from role', async () => {
+      createMock.mockResolvedValueOnce(
+        textResponse(
+          JSON.stringify({
+            classification: 'INTERESTED',
+            messageType: 'NEW_INQUIRY',
+            needsReview: false,
+            confidence: 0.9,
+            reasoning: 'ok',
+            role: 'the Head of Product Design',
+          })
+        )
+      );
+
+      const result = await classifyReply('yes', 'Jane');
+      expect(result.role).toBe('Head of Product Design');
+    });
+
+    it('truncates absurdly long roles', async () => {
+      const longRole = 'Super Senior Principal Staff Distinguished Engineer of Special Projects and Long Titles';
+      createMock.mockResolvedValueOnce(
+        textResponse(
+          JSON.stringify({
+            classification: 'INTERESTED',
+            messageType: 'NEW_INQUIRY',
+            needsReview: false,
+            confidence: 0.9,
+            reasoning: 'ok',
+            role: longRole,
+          })
+        )
+      );
+
+      const result = await classifyReply('yes', 'Jane');
+      expect(result.role).not.toBeNull();
+      expect((result.role as string).length).toBeLessThanOrEqual(60);
+    });
+
+    it('coerces non-string role values to null', async () => {
+      createMock.mockResolvedValueOnce(
+        textResponse(
+          JSON.stringify({
+            classification: 'INTERESTED',
+            messageType: 'NEW_INQUIRY',
+            needsReview: false,
+            confidence: 0.9,
+            reasoning: 'ok',
+            role: 42,
+          })
+        )
+      );
+
+      const result = await classifyReply('yes', 'Jane');
+      expect(result.role).toBeNull();
     });
   });
 });

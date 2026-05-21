@@ -344,15 +344,28 @@ function CandidateRow({
         onClick={onToggle}
       >
         <td className="px-4 py-3">
-          <div className="flex items-center gap-2">
+          <div className="flex items-start gap-2">
             {expanded ? (
-              <ChevronUp className="h-3.5 w-3.5 text-fg-muted" />
+              <ChevronUp className="mt-0.5 h-3.5 w-3.5 text-fg-muted" />
             ) : (
-              <ChevronDown className="h-3.5 w-3.5 text-fg-subtle group-hover:text-fg-muted" />
+              <ChevronDown className="mt-0.5 h-3.5 w-3.5 text-fg-subtle group-hover:text-fg-muted" />
             )}
-            <span className="text-[13.5px] font-medium text-fg-strong">
-              {candidate.name}
-            </span>
+            <div className="min-w-0">
+              <span className="text-[13.5px] font-medium text-fg-strong">
+                {candidate.name}
+              </span>
+              {candidate.role ? (
+                <div className="mt-0.5">
+                  <span
+                    data-testid="role-pill"
+                    className="inline-block max-w-full truncate rounded-md bg-accent-500/8 px-1.5 py-0.5 text-[10.5px] font-medium text-accent-600 ring-1 ring-inset ring-accent-500/15 dark:text-accent-300"
+                    title={candidate.role}
+                  >
+                    {candidate.role}
+                  </span>
+                </div>
+              ) : null}
+            </div>
           </div>
         </td>
         <td className="px-4 py-3">

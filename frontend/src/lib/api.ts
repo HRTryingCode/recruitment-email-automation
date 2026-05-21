@@ -57,6 +57,7 @@ export interface Candidate {
   email: string;
   company?: string;
   title?: string;
+  role?: string | null;
   status:
     | 'PENDING'
     | 'INTERESTED'
@@ -79,7 +80,7 @@ export interface Candidate {
 export interface EmailThread {
   id: string;
   candidateId?: string;
-  candidate?: Pick<Candidate, 'id' | 'name' | 'email' | 'status'>;
+  candidate?: Pick<Candidate, 'id' | 'name' | 'email' | 'status' | 'role'>;
   mailboxId: string;
   mailbox?: Pick<Mailbox, 'id' | 'emailAddress' | 'provider'>;
   externalThreadId: string;

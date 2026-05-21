@@ -47,6 +47,7 @@ model Candidate {
   email     String        @unique
   company   String?
   title     String?
+  role      String?
   status    String        @default("PENDING")
   source    String?
   notes     String?

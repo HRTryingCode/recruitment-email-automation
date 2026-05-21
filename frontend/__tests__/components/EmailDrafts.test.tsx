@@ -68,7 +68,24 @@ function makeDraft(overrides: Partial<EmailDraft> = {}): EmailDraft {
 }
 
 const DRAFTS: EmailDraft[] = [
-  makeDraft({ id: 'draft-1' }),
+  makeDraft({
+    id: 'draft-1',
+    thread: {
+      id: 'thread-1',
+      mailboxId: 'mb-1',
+      externalThreadId: 'ext-1',
+      subject: 'Re: Senior Engineer role',
+      lastMessageAt: '2026-05-20T10:00:00.000Z',
+      createdAt: '2026-05-19T10:00:00.000Z',
+      candidate: {
+        id: 'cand-1',
+        name: 'Ada Lovelace',
+        email: 'ada@example.com',
+        status: 'INTERESTED',
+        role: 'Senior Backend Engineer',
+      },
+    },
+  }),
   makeDraft({
     id: 'draft-2',
     subject: 'Re: Staff Engineer opening',
@@ -85,6 +102,7 @@ const DRAFTS: EmailDraft[] = [
         name: 'Marie Curie',
         email: 'marie@example.com',
         status: 'INTERESTED',
+        // role intentionally omitted — should render no pill
       },
     },
   }),
@@ -147,6 +165,22 @@ describe('<EmailDrafts />', () => {
     expect(screen.getByText('Marie Curie')).toBeInTheDocument();
     expect(screen.getByText('Re: Senior Engineer role')).toBeInTheDocument();
     expect(screen.getByText('Re: Staff Engineer opening')).toBeInTheDocument();
+  });
+
+  it('renders the role pill next to the candidate with a role and omits it when missing', async () => {
+    renderDrafts();
+    await screen.findByText('Ada Lovelace');
+
+    // Ada has a role — pill should render with the role text.
+    const adaRow = screen.getByText('Ada Lovelace').closest('button');
+    expect(adaRow).not.toBeNull();
+    const adaPill = within(adaRow!).getByTestId('role-pill');
+    expect(adaPill).toHaveTextContent('Senior Backend Engineer');
+
+    // Marie has no role — no role-pill in her row.
+    const marieRow = screen.getByText('Marie Curie').closest('button');
+    expect(marieRow).not.toBeNull();
+    expect(within(marieRow!).queryByTestId('role-pill')).toBeNull();
   });
 
   it('clicking a row opens the side-pane with the draft body', async () => {

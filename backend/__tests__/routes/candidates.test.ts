@@ -92,6 +92,33 @@ describe('/api/candidates', () => {
       expect(res.body.success).toBe(false);
       expect(mockPrisma.candidate.findMany).not.toHaveBeenCalled();
     });
+
+    it('includes role when present on the candidate row', async () => {
+      const now = new Date('2026-05-01T00:00:00Z');
+      const rows = [
+        {
+          id: 'cand-3',
+          email: 'c@example.com',
+          name: 'C',
+          role: 'Senior Backend Engineer',
+          status: 'INTERESTED',
+          mailboxId: 'mb-1',
+          mailbox: { id: 'mb-1', emailAddress: 'inbox@archive.com', provider: 'GMAIL' },
+          threads: [],
+          repliedAt: null,
+          updatedAt: now,
+        },
+      ];
+      mockPrisma.candidate.findMany.mockResolvedValueOnce(rows);
+      mockPrisma.candidate.count.mockResolvedValueOnce(1);
+
+      const res = await request(app)
+        .get('/api/candidates?page=1&limit=20')
+        .set('Authorization', AUTH);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data[0].role).toBe('Senior Backend Engineer');
+    });
   });
 
   describe('PATCH /api/candidates/:id', () => {

@@ -65,6 +65,7 @@ function DraftListRow({
 }) {
   const candidate = draft.thread?.candidate;
   const name = candidate?.name ?? 'Unknown candidate';
+  const role = candidate?.role;
   const preview = firstNonEmptyLine(draft.bodyText) || draft.subject;
   const rowRef = useRef<HTMLButtonElement | null>(null);
 
@@ -116,6 +117,17 @@ function DraftListRow({
             {formatTimeAgo(draft.createdAt)}
           </span>
         </div>
+        {role ? (
+          <div className="mt-0.5">
+            <span
+              data-testid="role-pill"
+              className="inline-block max-w-full truncate rounded-md bg-accent-500/8 px-1.5 py-0.5 align-middle text-[10.5px] font-medium text-accent-600 ring-1 ring-inset ring-accent-500/15 dark:text-accent-300"
+              title={role}
+            >
+              {role}
+            </span>
+          </div>
+        ) : null}
         <p className="mt-0.5 truncate text-[12px] text-fg-muted">
           {draft.subject}
         </p>

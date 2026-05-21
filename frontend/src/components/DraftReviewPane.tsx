@@ -262,6 +262,17 @@ export default function DraftReviewPane({
             <p className="mt-0.5 truncate font-mono text-[12px] text-fg-muted">
               {candidate?.email ?? '—'}
             </p>
+            {candidate?.role ? (
+              <div className="mt-1.5">
+                <span
+                  data-testid="role-pill"
+                  className="inline-block max-w-full truncate rounded-md bg-accent-500/8 px-2 py-0.5 text-[11.5px] font-medium text-accent-600 ring-1 ring-inset ring-accent-500/15 dark:text-accent-300"
+                  title={candidate.role}
+                >
+                  {candidate.role}
+                </span>
+              </div>
+            ) : null}
             <p className="mt-2.5 truncate text-[13px] text-fg-default">
               {draft?.subject}
             </p>
