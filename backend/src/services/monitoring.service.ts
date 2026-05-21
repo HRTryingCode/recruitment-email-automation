@@ -2,6 +2,23 @@ import { prisma } from '../db/client';
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config';
 
+function safeStringify(value: unknown): string {
+  const seen = new WeakSet<object>();
+  try {
+    return JSON.stringify(value, (_key, val) => {
+      if (typeof val === 'object' && val !== null) {
+        if (seen.has(val as object)) return '[Circular]';
+        seen.add(val as object);
+      }
+      if (typeof val === 'bigint') return val.toString();
+      if (val instanceof Error) return { name: val.name, message: val.message, stack: val.stack };
+      return val;
+    });
+  } catch {
+    return '{"_serializationError":"unstringifiable"}';
+  }
+}
+
 export async function logEvent(
   event: string,
   details: Record<string, unknown>,
@@ -9,7 +26,7 @@ export async function logEvent(
 ): Promise<void> {
   try {
     await prisma.systemLog.create({
-      data: { event, details: JSON.stringify(details), level },
+      data: { event, details: safeStringify(details), level },
     });
   } catch (err) {
     console.error('[Monitoring] Failed to log event:', err);
