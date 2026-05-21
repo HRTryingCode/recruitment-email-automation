@@ -400,13 +400,13 @@ export default function Dashboard({
 }: Props) {
   const { data: candidatesData, isLoading: loadingCandidates } = useQuery({
     queryKey: ['candidates', { mailboxId }],
-    queryFn: () => fetchCandidates({ mailboxId, limit: 1000 }),
+    queryFn: () => fetchCandidates({ mailboxId, limit: 500 }),
     staleTime: 30_000,
   });
 
   const { data: draftsData, isLoading: loadingDrafts } = useQuery({
     queryKey: ['drafts'],
-    queryFn: () => fetchDrafts({ limit: 1000 }),
+    queryFn: () => fetchDrafts({ limit: 500 }),
     staleTime: 30_000,
   });
 

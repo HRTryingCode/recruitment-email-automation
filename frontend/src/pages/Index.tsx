@@ -152,7 +152,7 @@ export default function Index() {
 
   const { data: draftsData } = useQuery({
     queryKey: ['drafts'],
-    queryFn: () => fetchDrafts({ limit: 1000 }),
+    queryFn: () => fetchDrafts({ limit: 500 }),
     staleTime: 30_000,
   });
 
