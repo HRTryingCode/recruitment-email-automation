@@ -25,6 +25,9 @@ import {
   EyeOff,
   Eye,
   Users,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
 } from 'lucide-react';
 import { StatusBadge, type StatusVariant } from './ui/StatusBadge';
 import { Tooltip } from './ui/Tooltip';
@@ -116,10 +119,135 @@ interface Props {
   mailboxId?: string;
 }
 
+type SortColumn =
+  | 'name'
+  | 'email'
+  | 'company'
+  | 'role'
+  | 'status'
+  | 'reply'
+  | 'updatedAt';
+type SortDir = 'asc' | 'desc';
+
+const STATUS_RANK: Record<string, number> = {
+  INTERESTED: 0,
+  NEEDS_REVIEW: 1,
+  NEUTRAL: 2,
+  PENDING: 3,
+  REPLIED: 4,
+  NOT_INTERESTED: 5,
+  IGNORED: 6,
+};
+const REPLY_RANK: Record<string, number> = {
+  AWAITING_REPLY: 0,
+  NEW: 1,
+  REPLIED: 2,
+};
+
+function deriveReplyStatus(c: Candidate): string {
+  return (
+    c.replyStatus ??
+    (c.repliedAt ? 'REPLIED' : c.threads?.length ? 'AWAITING_REPLY' : 'NEW')
+  );
+}
+
+function compareCandidates(
+  a: Candidate,
+  b: Candidate,
+  column: SortColumn,
+  dir: SortDir
+): number {
+  const sign = dir === 'asc' ? 1 : -1;
+  const nullsLast = (v: unknown) => (v === null || v === undefined || v === '' ? 1 : 0);
+  switch (column) {
+    case 'name':
+      return sign * (a.name || '').localeCompare(b.name || '');
+    case 'email':
+      return sign * (a.email || '').localeCompare(b.email || '');
+    case 'company': {
+      const na = nullsLast(a.company);
+      const nb = nullsLast(b.company);
+      if (na !== nb) return na - nb;
+      return sign * (a.company || '').localeCompare(b.company || '');
+    }
+    case 'role': {
+      const na = nullsLast(a.role);
+      const nb = nullsLast(b.role);
+      if (na !== nb) return na - nb;
+      return sign * (a.role || '').localeCompare(b.role || '');
+    }
+    case 'status':
+      return sign * ((STATUS_RANK[a.status] ?? 99) - (STATUS_RANK[b.status] ?? 99));
+    case 'reply':
+      return sign * ((REPLY_RANK[deriveReplyStatus(a)] ?? 99) - (REPLY_RANK[deriveReplyStatus(b)] ?? 99));
+    case 'updatedAt': {
+      const ta = new Date(a.updatedAt ?? 0).getTime();
+      const tb = new Date(b.updatedAt ?? 0).getTime();
+      return sign * (ta - tb);
+    }
+  }
+}
+
+function SortableTh({
+  column,
+  label,
+  align = 'left',
+  hiddenClass = '',
+  current,
+  onSort,
+}: {
+  column: SortColumn;
+  label: string;
+  align?: 'left' | 'right';
+  hiddenClass?: string;
+  current: { column: SortColumn; dir: SortDir };
+  onSort: (column: SortColumn) => void;
+}) {
+  const active = current.column === column;
+  const Icon = active ? (current.dir === 'asc' ? ArrowUp : ArrowDown) : ArrowUpDown;
+  return (
+    <th
+      className={cn(
+        `px-4 py-3 text-${align}`,
+        hiddenClass
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(column)}
+        className={cn(
+          'inline-flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.08em] transition-colors',
+          active ? 'text-fg-strong' : 'text-fg-muted hover:text-fg-default'
+        )}
+      >
+        <span>{label}</span>
+        <Icon
+          className={cn(
+            'h-3 w-3 flex-shrink-0',
+            active ? 'opacity-100' : 'opacity-50'
+          )}
+        />
+      </button>
+    </th>
+  );
+}
+
 export default function CandidateTable({ mailboxId }: Props) {
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [sort, setSort] = useState<{ column: SortColumn; dir: SortDir }>({
+    column: 'updatedAt',
+    dir: 'desc',
+  });
+
+  function handleSort(column: SortColumn) {
+    setSort((prev) =>
+      prev.column === column
+        ? { column, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
+        : { column, dir: column === 'updatedAt' ? 'desc' : 'asc' }
+    );
+  }
 
   const includeIgnored = statusFilter === 'IGNORED' || statusFilter === '__ALL__';
   const apiStatus =
@@ -185,7 +313,10 @@ export default function CandidateTable({ mailboxId }: Props) {
     },
   });
 
-  const candidates = data?.data ?? [];
+  const candidatesRaw = data?.data ?? [];
+  const candidates = [...candidatesRaw].sort((a, b) =>
+    compareCandidates(a, b, sort.column, sort.dir)
+  );
 
   if (error) {
     return (
@@ -243,18 +374,28 @@ export default function CandidateTable({ mailboxId }: Props) {
       <div className="overflow-hidden rounded-xl border border-line bg-surface-raised/70">
         <table className="w-full">
           <thead>
-            <tr className="border-b border-line text-[11px] font-medium uppercase tracking-[0.08em] text-fg-muted">
-              <th className="px-4 py-3 text-left">Name</th>
-              <th className="px-4 py-3 text-left">Email</th>
-              <th className="hidden px-4 py-3 text-left md:table-cell">
-                Company
+            <tr className="border-b border-line">
+              <SortableTh column="name" label="Name" current={sort} onSort={handleSort} />
+              <SortableTh column="email" label="Email" current={sort} onSort={handleSort} />
+              <SortableTh
+                column="company"
+                label="Company"
+                hiddenClass="hidden md:table-cell"
+                current={sort}
+                onSort={handleSort}
+              />
+              <SortableTh column="status" label="Status" current={sort} onSort={handleSort} />
+              <SortableTh column="reply" label="Reply" current={sort} onSort={handleSort} />
+              <SortableTh
+                column="updatedAt"
+                label="Last activity"
+                hiddenClass="hidden lg:table-cell"
+                current={sort}
+                onSort={handleSort}
+              />
+              <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.08em] text-fg-muted">
+                Actions
               </th>
-              <th className="px-4 py-3 text-left">Status</th>
-              <th className="px-4 py-3 text-left">Reply</th>
-              <th className="hidden px-4 py-3 text-left lg:table-cell">
-                Last activity
-              </th>
-              <th className="px-4 py-3 text-left">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-line-soft">
@@ -354,17 +495,26 @@ function CandidateRow({
               <span className="text-[13.5px] font-medium text-fg-strong">
                 {candidate.name}
               </span>
-              {candidate.role ? (
-                <div className="mt-0.5">
+              <div className="mt-1">
+                {candidate.role ? (
                   <span
                     data-testid="role-pill"
-                    className="inline-block max-w-full truncate rounded-md bg-accent-500/8 px-1.5 py-0.5 text-[10.5px] font-medium text-accent-600 ring-1 ring-inset ring-accent-500/15 dark:text-accent-300"
+                    className="inline-flex max-w-full items-center gap-1 truncate rounded-md bg-accent-500/10 px-2 py-0.5 text-[11.5px] font-medium text-accent-700 ring-1 ring-inset ring-accent-500/20 dark:text-accent-300"
                     title={candidate.role}
                   >
+                    <Users className="h-3 w-3 flex-shrink-0" />
                     {candidate.role}
                   </span>
-                </div>
-              ) : null}
+                ) : (
+                  <span
+                    className="inline-flex items-center gap-1 rounded-md bg-fg-strong/[0.03] px-2 py-0.5 text-[11.5px] text-fg-subtle ring-1 ring-inset ring-fg-strong/[0.05]"
+                    title="Role not detected by Claude on the original outreach"
+                  >
+                    <Users className="h-3 w-3 flex-shrink-0" />
+                    Role not detected
+                  </span>
+                )}
+              </div>
             </div>
           </div>
         </td>
