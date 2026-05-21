@@ -1,9 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Dashboard from '../../src/components/Dashboard';
+import { TooltipProvider } from '../../src/components/ui/Tooltip';
 import type {
   Candidate,
   EmailDraft,
@@ -17,12 +18,14 @@ vi.mock('../../src/lib/api', () => ({
   fetchDrafts: vi.fn(),
   fetchMailboxes: vi.fn(),
   fetchSyncHealth: vi.fn(),
+  approveDraft: vi.fn(),
 }));
 
 const fetchCandidatesMock = vi.mocked(api.fetchCandidates);
 const fetchDraftsMock = vi.mocked(api.fetchDrafts);
 const fetchMailboxesMock = vi.mocked(api.fetchMailboxes);
 const fetchSyncHealthMock = vi.mocked(api.fetchSyncHealth);
+const approveDraftMock = vi.mocked(api.approveDraft);
 
 const MAILBOX: Mailbox = {
   id: 'mb-1',
@@ -40,6 +43,7 @@ const CANDIDATES: Candidate[] = [
     email: 'ada@example.com',
     status: 'INTERESTED',
     mailboxId: MAILBOX.id,
+    replyStatus: 'AWAITING_REPLY',
     threads: [
       {
         id: 'thread-1',
@@ -97,7 +101,7 @@ const DRAFTS: EmailDraft[] = [
       },
     },
     subject: 'Re: Senior Engineer role',
-    bodyText: 'Hi Ada,\n\nThanks for reaching out…',
+    bodyText: 'Hi Ada,\n\nThanks for reaching out — happy to chat next week.',
     classification: 'INTERESTED',
     confidence: 0.92,
     status: 'PENDING',
@@ -127,7 +131,7 @@ const DRAFTS: EmailDraft[] = [
       },
     },
     subject: 'Re: Staff Engineer',
-    bodyText: 'Hi Marie,\n\nThanks…',
+    bodyText: 'Hi Marie,\n\nThanks for getting back to me.',
     classification: 'INTERESTED',
     confidence: 0.88,
     status: 'PENDING',
@@ -136,7 +140,23 @@ const DRAFTS: EmailDraft[] = [
   },
 ];
 
-const SYNC_HEALTH: MailboxSyncHealth[] = [];
+const SYNC_HEALTH: MailboxSyncHealth[] = [
+  {
+    mailboxId: MAILBOX.id,
+    emailAddress: MAILBOX.emailAddress,
+    displayName: null,
+    isActive: true,
+    watchExpiry: '2026-06-01T00:00:00.000Z',
+    watchExpiresInHours: 240,
+    lastSyncedMessageAt: '2026-05-20T11:00:00.000Z',
+    lastReconciliationAt: '2026-05-20T10:00:00.000Z',
+    lastReconciliationFoundMissing: 0,
+    messagesLast24h: 12,
+    pendingDrafts: 2,
+    candidatesNeedsReview: 1,
+    webhookErrorsLast24h: 0,
+  },
+];
 
 function createClient() {
   return new QueryClient({
@@ -153,7 +173,9 @@ function renderDashboard(
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter>
-        <Dashboard {...props} />
+        <TooltipProvider>
+          <Dashboard {...props} />
+        </TooltipProvider>
       </MemoryRouter>
     </QueryClientProvider>
   );
@@ -179,6 +201,7 @@ describe('<Dashboard />', () => {
       success: true,
       data: SYNC_HEALTH,
     });
+    approveDraftMock.mockResolvedValue({ success: true, message: 'ok' });
   });
 
   afterEach(() => {
@@ -192,69 +215,100 @@ describe('<Dashboard />', () => {
     ).toBeInTheDocument();
   });
 
-  it('displays stat counts derived from the fixture data', async () => {
+  it('renders the three action pills with counts derived from fixture data', async () => {
     renderDashboard();
 
-    // Wait for react-query to settle before reading any metric values —
-    // otherwise we see skeletons in place of the numbers.
+    // Wait for the queries to resolve — Ada Lovelace only renders inside the
+    // quick-triage panel once the drafts query has fired.
     await screen.findByText('Ada Lovelace');
 
-    function cardFor(label: string): HTMLElement {
-      // MetricCard renders <p>{label}</p> followed by <p>{value}</p> + hint
-      // inside a min-w-0 wrapper. Scope to that wrapper.
-      const labelEl = screen.getByText(label);
-      return labelEl.closest('div')! as HTMLElement;
-    }
+    const draftsPill = screen.getByTestId('action-pill-drafts');
+    await waitFor(() => {
+      expect(within(draftsPill).getByText('2')).toBeInTheDocument();
+    });
+    expect(within(draftsPill).getByText(/drafts pending/i)).toBeInTheDocument();
 
-    // 3 candidates total
-    const totalCard = cardFor('Total');
-    expect(within(totalCard).getByText('3')).toBeInTheDocument();
-    expect(within(totalCard).getByText(/candidates/i)).toBeInTheDocument();
+    // 1 candidate is AWAITING_REPLY in the fixture.
+    const awaitingPill = screen.getByTestId('action-pill-awaiting');
+    expect(within(awaitingPill).getByText('1')).toBeInTheDocument();
+    expect(within(awaitingPill).getByText(/awaiting reply/i)).toBeInTheDocument();
 
-    // 2 pending drafts
-    const draftsCard = cardFor('Drafts');
-    expect(within(draftsCard).getByText('2')).toBeInTheDocument();
-    expect(within(draftsCard).getByText(/pending/i)).toBeInTheDocument();
-
-    // 1 INTERESTED in fixture → "Need reply" metric == 1
-    const needReplyCard = cardFor('Need reply');
-    expect(within(needReplyCard).getByText('1')).toBeInTheDocument();
+    // 1 NEEDS_REVIEW candidate (Grace Hopper)
+    const reviewPill = screen.getByTestId('action-pill-review');
+    expect(within(reviewPill).getByText('1')).toBeInTheDocument();
+    expect(within(reviewPill).getByText(/needs review/i)).toBeInTheDocument();
   });
 
-  it('lists each interested candidate in the priority queue', async () => {
+  it('the quick triage panel shows pending drafts and approves on one click', async () => {
+    const user = userEvent.setup();
     renderDashboard();
-    expect(
-      await screen.findByText('Ada Lovelace')
-    ).toBeInTheDocument();
-    expect(screen.getByText('ada@example.com')).toBeInTheDocument();
-    // Non-interested candidates are NOT in the priority queue
-    expect(screen.queryByText('Grace Hopper')).not.toBeInTheDocument();
-    expect(screen.queryByText('Alan Turing')).not.toBeInTheDocument();
+
+    // Pending drafts appear inside the quick-triage panel with candidate names
+    expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
+    expect(screen.getByText('Marie Curie')).toBeInTheDocument();
+
+    const approveBtns = screen.getAllByRole('button', {
+      name: /approve draft for/i,
+    });
+    await user.click(approveBtns[0]);
+
+    await waitFor(() => {
+      expect(approveDraftMock).toHaveBeenCalled();
+    });
+    // First call's first arg should be a known draft id from the fixture
+    expect(['draft-1', 'draft-2']).toContain(
+      approveDraftMock.mock.calls[0][0]
+    );
   });
 
-  it('clicking an interested candidate row calls onOpenDraftForCandidate with the candidate id', async () => {
-    const onOpenDraftForCandidate = vi.fn();
+  it('account pipelines section renders one condensed row per mailbox (no stacked bar)', async () => {
+    renderDashboard();
+
+    // The condensed row shows the mailbox address as monospace text
+    expect(
+      await screen.findByText('sofia@archive.com')
+    ).toBeInTheDocument();
+
+    // The pre-rewrite version rendered a "candidates tracked" label inside
+    // each card; the condensed row no longer uses that phrasing.
+    expect(screen.queryByText(/candidates tracked/i)).not.toBeInTheDocument();
+
+    // The condensed row shows a "N pending drafts" hint.
+    expect(
+      screen.getByText(/pending draft/i)
+    ).toBeInTheDocument();
+  });
+
+  it('clicking the drafts action pill switches to the drafts tab', async () => {
+    const onSwitchToDrafts = vi.fn();
     const user = userEvent.setup();
     renderDashboard({
       onRefetchMailboxes: () => {},
-      onOpenDraftForCandidate,
+      onSwitchToDrafts,
     });
 
-    const nameCell = await screen.findByText('Ada Lovelace');
-    const row = nameCell.closest('tr');
-    expect(row).not.toBeNull();
-    await user.click(row!);
+    const pill = await screen.findByTestId('action-pill-drafts');
+    await user.click(pill);
 
-    expect(onOpenDraftForCandidate).toHaveBeenCalledTimes(1);
-    expect(onOpenDraftForCandidate).toHaveBeenCalledWith('cand-interested');
+    expect(onSwitchToDrafts).toHaveBeenCalledTimes(1);
   });
 
-  it('renders the "All caught up" empty state when no candidates need replies', async () => {
-    fetchCandidatesMock.mockResolvedValue({
-      success: true,
-      data: [],
-      meta: { total: 0, page: 1, limit: 1000 },
+  it('clicking the awaiting-reply pill switches to the candidates tab with AWAITING_REPLY filter', async () => {
+    const onSwitchToCandidates = vi.fn();
+    const user = userEvent.setup();
+    renderDashboard({
+      onRefetchMailboxes: () => {},
+      onSwitchToCandidates,
     });
+
+    const pill = await screen.findByTestId('action-pill-awaiting');
+    await user.click(pill);
+
+    expect(onSwitchToCandidates).toHaveBeenCalledTimes(1);
+    expect(onSwitchToCandidates).toHaveBeenCalledWith('AWAITING_REPLY');
+  });
+
+  it('renders the "All caught up" empty state when no pending drafts exist', async () => {
     fetchDraftsMock.mockResolvedValue({
       success: true,
       data: [],
@@ -263,5 +317,24 @@ describe('<Dashboard />', () => {
 
     renderDashboard();
     expect(await screen.findByText(/all caught up/i)).toBeInTheDocument();
+  });
+
+  it('mailbox health renders as a collapsed accordion by default', async () => {
+    renderDashboard();
+
+    await screen.findByText(/mailbox health/i);
+
+    // The accordion is closed by default — the detail table should not be
+    // mounted, so the column header is not visible.
+    expect(screen.queryByText(/watch expires/i)).not.toBeInTheDocument();
+
+    // Toggling expands it
+    const user = userEvent.setup();
+    const trigger = screen.getByRole('button', { name: /mailbox health/i });
+    await user.click(trigger);
+
+    expect(
+      await screen.findByText(/watch expires/i)
+    ).toBeInTheDocument();
   });
 });

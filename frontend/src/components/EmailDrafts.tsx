@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import * as AlertDialog from '@radix-ui/react-alert-dialog';
+import * as Dialog from '@radix-ui/react-dialog';
 import {
   fetchDrafts,
   approveDraft,
@@ -10,10 +10,8 @@ import {
   updateDraft,
   regenerateDraft,
   type EmailDraft,
-  type OriginalMessage,
 } from '../lib/api';
 import { cn, formatTimeAgo } from '../lib/utils';
-import { Tooltip } from './ui/Tooltip';
 import {
   toastSuccess,
   toastError,
@@ -22,118 +20,15 @@ import {
   extractApiErrorMessage,
 } from '../lib/toast';
 import {
-  Check,
-  X,
-  Send,
   RefreshCw,
-  ChevronDown,
-  ChevronUp,
-  Pencil,
-  Mail,
   Inbox,
   FileText,
   Sparkles,
+  Keyboard,
+  ChevronRight,
 } from 'lucide-react';
-import { ClassificationBadge } from './ui/StatusBadge';
-
-const PREVIEW_LINE_LIMIT = 12;
-
-function htmlToPlainText(html: string): string {
-  return html
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/(p|div|li|tr|h[1-6])>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-function getOriginalBodyPlainText(original: OriginalMessage): string {
-  if (original.bodyText && original.bodyText.trim().length > 0) {
-    return original.bodyText;
-  }
-  if (original.bodyHtml) {
-    return htmlToPlainText(original.bodyHtml);
-  }
-  return '';
-}
-
-function formatOriginalDate(value: string): string {
-  const d = new Date(value);
-  return d.toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
-
-function OriginalMessageBlock({ original }: { original: OriginalMessage }) {
-  const [showFull, setShowFull] = useState(false);
-  const body = getOriginalBodyPlainText(original);
-  const lines = body.split('\n');
-  const isLong = lines.length > PREVIEW_LINE_LIMIT;
-  const visibleBody =
-    showFull || !isLong ? body : lines.slice(0, PREVIEW_LINE_LIMIT).join('\n');
-
-  const senderLabel = original.fromName
-    ? `${original.fromName} <${original.fromAddress}>`
-    : original.fromAddress;
-
-  return (
-    <div className="mb-4 overflow-hidden rounded-lg border border-white/[0.06] bg-ink-950/60">
-      <div className="border-b border-white/[0.05] bg-white/[0.015] px-4 py-2.5">
-        <div className="mb-2 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.14em] text-ink-400">
-          <Mail className="h-3 w-3" />
-          Original message
-        </div>
-        <div className="space-y-0.5 font-mono text-[11.5px] leading-relaxed">
-          <div className="flex">
-            <span className="w-14 flex-shrink-0 text-ink-500">From</span>
-            <span className="text-ink-200">{senderLabel}</span>
-          </div>
-          <div className="flex">
-            <span className="w-14 flex-shrink-0 text-ink-500">Date</span>
-            <span className="text-ink-200">
-              {formatOriginalDate(original.receivedAt)}
-            </span>
-          </div>
-          <div className="flex">
-            <span className="w-14 flex-shrink-0 text-ink-500">Subject</span>
-            <span className="text-ink-200">{original.subject}</span>
-          </div>
-        </div>
-      </div>
-      <div className="border-l-2 border-accent-500/40 px-4 py-3">
-        {body ? (
-          <>
-            <pre className="whitespace-pre-wrap font-sans text-[13px] leading-relaxed text-ink-200">
-              {visibleBody}
-            </pre>
-            {isLong && (
-              <button
-                onClick={() => setShowFull((v) => !v)}
-                className="mt-2 text-[12px] font-medium text-accent-300 transition-colors hover:text-accent-200"
-              >
-                {showFull ? 'Show less' : `Show ${lines.length - PREVIEW_LINE_LIMIT} more lines`}
-              </button>
-            )}
-          </>
-        ) : (
-          <p className="text-[13px] italic text-ink-500">(no message body)</p>
-        )}
-      </div>
-    </div>
-  );
-}
+import DraftReviewPane from './DraftReviewPane';
+import { useDraftKeyboardShortcuts } from '../hooks/useDraftKeyboardShortcuts';
 
 type DraftStatus = 'PENDING' | 'APPROVED' | 'SENT';
 
@@ -141,347 +36,201 @@ interface Props {
   mailboxId?: string;
 }
 
-interface DraftCardProps {
-  draft: EmailDraft;
-  highlight: boolean;
-  defaultExpanded: boolean;
-  onApprove: (id: string) => void;
-  onDiscard: (id: string) => void;
-  onSend: (id: string) => void;
-  onUpdate: (id: string, body: string) => void;
-  onRegenerate: (id: string) => void;
-  regenerating: boolean;
-  regenerateError: string | null;
-}
-
-function DraftCard({
-  draft,
-  highlight,
-  defaultExpanded,
-  onApprove,
-  onDiscard,
-  onSend,
-  onUpdate,
-  onRegenerate,
-  regenerating,
-  regenerateError,
-}: DraftCardProps) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
-  const [editing, setEditing] = useState(false);
-  const [editedBody, setEditedBody] = useState(draft.bodyText);
-  const cardRef = useRef<HTMLDivElement | null>(null);
-
-  // Keep `expanded` aligned with deep-link changes.
-  useEffect(() => {
-    if (defaultExpanded) setExpanded(true);
-  }, [defaultExpanded]);
-
-  // Scroll into view when this card is the deep-link target.
-  useEffect(() => {
-    if (!highlight) return;
-    const el = cardRef.current;
-    if (!el) return;
-    const id = window.setTimeout(() => {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 50);
-    return () => window.clearTimeout(id);
-  }, [highlight]);
-
-  const candidate = draft.thread?.candidate;
-  const subject = draft.subject;
-
-  const handleSaveEdit = () => {
-    onUpdate(draft.id, editedBody);
-    setEditing(false);
-  };
-
-  const isPending = draft.status === 'PENDING';
-
+function initialsFor(name?: string, email?: string): string {
+  const seed = (name || email || '?').trim();
   return (
-    <div
-      ref={cardRef}
-      className={cn(
-        'group relative overflow-hidden rounded-xl border bg-ink-900/60 transition-all',
-        highlight
-          ? 'border-accent-400/40 shadow-glow'
-          : 'border-white/[0.06] hover:border-white/[0.1]'
-      )}
-    >
-      {/* Hairline accent on the left edge keyed to classification */}
-      <div
-        className={cn(
-          'absolute left-0 top-0 h-full w-[2px]',
-          draft.classification === 'INTERESTED' && 'bg-emerald-400/60',
-          draft.classification === 'NOT_INTERESTED' && 'bg-rose-400/60',
-          draft.classification === 'NEUTRAL' && 'bg-ink-500/40'
-        )}
-      />
-
-      <div
-        className="flex cursor-pointer items-start justify-between gap-4 p-4 transition-colors hover:bg-white/[0.015]"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <div className="min-w-0 flex-1">
-          <div className="mb-1.5 flex flex-wrap items-center gap-2">
-            <span className="text-[14px] font-medium text-white">
-              {candidate?.name ?? 'Unknown candidate'}
-            </span>
-            <ClassificationBadge
-              classification={draft.classification}
-              confidence={draft.confidence}
-            />
-          </div>
-          <p className="truncate text-[13px] text-ink-200">{subject}</p>
-          <p className="mt-1 line-clamp-1 text-[12px] text-ink-400">
-            {draft.bodyText.split('\n').find((l) => l.trim()) ?? ''}
-          </p>
-        </div>
-        <div
-          className="flex flex-shrink-0 items-center gap-0.5"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <span className="mr-2 font-mono text-[11px] tabular-nums text-ink-500">
-            {formatTimeAgo(draft.createdAt)}
-          </span>
-          {isPending && (
-            <>
-              <Tooltip content="Approve — saves as a Gmail draft you can review">
-                <IconButton
-                  onClick={() => onApprove(draft.id)}
-                  disabled={regenerating}
-                  aria-label="Approve draft"
-                  tone="emerald"
-                >
-                  <Check className="h-4 w-4" />
-                </IconButton>
-              </Tooltip>
-              <Tooltip content="Discard draft">
-                <IconDestructiveButton
-                  onConfirm={() => onDiscard(draft.id)}
-                  disabled={regenerating}
-                  title="Discard draft?"
-                  description="The draft will not be sent. New emails from this candidate will still generate drafts unless you ignore them."
-                  confirmLabel="Discard draft"
-                  ariaLabel="Discard draft"
-                  buttonTone="rose"
-                  icon={<X className="h-4 w-4" />}
-                />
-              </Tooltip>
-              <Tooltip
-                content={
-                  regenerating
-                    ? 'Regenerating…'
-                    : 'Regenerate — re-run Claude with the latest persona + prompt'
-                }
-              >
-                <IconButton
-                  onClick={() => onRegenerate(draft.id)}
-                  disabled={regenerating}
-                  aria-label="Regenerate draft"
-                  tone="neutral"
-                >
-                  <RefreshCw
-                    className={cn('h-4 w-4', regenerating && 'animate-spin')}
-                  />
-                </IconButton>
-              </Tooltip>
-              <Tooltip content="Edit draft body">
-                <IconButton
-                  onClick={() => {
-                    setExpanded(true);
-                    setEditing(true);
-                  }}
-                  disabled={regenerating}
-                  aria-label="Edit draft body"
-                  tone="neutral"
-                >
-                  <Pencil className="h-4 w-4" />
-                </IconButton>
-              </Tooltip>
-            </>
-          )}
-          <Tooltip content="Expand to see full body + original candidate email">
-            <span
-              className="ml-1 flex h-7 w-7 items-center justify-center rounded-md text-ink-500"
-            >
-            {expanded ? (
-              <ChevronUp className="h-4 w-4" />
-            ) : (
-              <ChevronDown className="h-4 w-4" />
-            )}
-            </span>
-          </Tooltip>
-        </div>
-      </div>
-
-      {isPending && regenerateError && (
-        <div className="px-4 pb-3 -mt-1">
-          <p className="text-[12px] text-rose-300">{regenerateError}</p>
-        </div>
-      )}
-
-      {expanded && (
-        <div className="border-t border-white/[0.05] bg-ink-950/30">
-          <div className="px-4 pb-1 pt-3">
-            <p className="text-[11px] text-ink-500">
-              Will Cc <span className="font-mono text-ink-300">sofia@archive.com</span>
-            </p>
-          </div>
-          <div className="p-4 pt-3">
-            {draft.originalMessage && (
-              <OriginalMessageBlock original={draft.originalMessage} />
-            )}
-            {editing ? (
-              <div className="space-y-3">
-                <textarea
-                  value={editedBody}
-                  onChange={(e) => setEditedBody(e.target.value)}
-                  className="min-h-32 w-full resize-y rounded-lg border border-white/[0.08] bg-ink-950/60 p-3 text-[13px] leading-relaxed text-ink-100 focus:border-accent-400 focus:outline-none"
-                  rows={8}
-                />
-                <div className="flex gap-2">
-                  <button
-                    onClick={handleSaveEdit}
-                    className="rounded-lg bg-accent-500 px-3 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-accent-400"
-                  >
-                    Save changes
-                  </button>
-                  <button
-                    onClick={() => {
-                      setEditing(false);
-                      setEditedBody(draft.bodyText);
-                    }}
-                    className="rounded-lg bg-white/[0.04] px-3 py-1.5 text-[13px] font-medium text-ink-200 transition-colors hover:bg-white/[0.08]"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="rounded-lg border border-white/[0.04] bg-ink-950/40 p-4">
-                <pre className="whitespace-pre-wrap font-sans text-[13.5px] leading-relaxed text-ink-100">
-                  {draft.bodyText}
-                </pre>
-              </div>
-            )}
-          </div>
-
-          {draft.status === 'APPROVED' && (
-            <div className="flex items-center gap-2 border-t border-white/[0.05] px-4 py-3">
-              <button
-                onClick={() => onSend(draft.id)}
-                className="flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-accent-400"
-              >
-                <Send className="h-3.5 w-3.5" />
-                Send now
-              </button>
-              <button
-                onClick={() => onDiscard(draft.id)}
-                className="flex items-center gap-1.5 rounded-lg bg-rose-500/10 px-3 py-1.5 text-[13px] font-medium text-rose-300 ring-1 ring-inset ring-rose-500/20 transition-colors hover:bg-rose-500/15"
-              >
-                <X className="h-3.5 w-3.5" />
-                Discard
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
+    seed
+      .split(/\s+/)
+      .map((s) => s[0])
+      .slice(0, 2)
+      .join('')
+      .toUpperCase() || '?'
   );
 }
 
-function IconButton({
-  children,
-  tone,
-  ...rest
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & {
-  tone: 'emerald' | 'rose' | 'neutral';
+function firstNonEmptyLine(body: string): string {
+  return body.split('\n').find((l) => l.trim().length > 0) ?? '';
+}
+
+function DraftListRow({
+  draft,
+  active,
+  focused,
+  onClick,
+}: {
+  draft: EmailDraft;
+  active: boolean;
+  focused: boolean;
+  onClick: () => void;
 }) {
-  const toneClass = {
-    emerald:
-      'text-emerald-300 hover:bg-emerald-500/15 hover:text-emerald-200',
-    rose: 'text-rose-300 hover:bg-rose-500/15 hover:text-rose-200',
-    neutral: 'text-ink-400 hover:bg-white/[0.06] hover:text-ink-100',
-  }[tone];
+  const candidate = draft.thread?.candidate;
+  const name = candidate?.name ?? 'Unknown candidate';
+  const preview = firstNonEmptyLine(draft.bodyText) || draft.subject;
+  const rowRef = useRef<HTMLButtonElement | null>(null);
+
+  // Keep the focused row visible without grabbing input focus
+  useEffect(() => {
+    if (!focused) return;
+    rowRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [focused]);
+
   return (
     <button
-      {...rest}
+      ref={rowRef}
+      onClick={onClick}
+      aria-current={active ? 'true' : undefined}
+      data-focused={focused ? 'true' : undefined}
       className={cn(
-        'flex h-7 w-7 items-center justify-center rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-40',
-        toneClass
+        'group flex w-full items-center gap-3 border-l-2 px-4 py-3 text-left transition-colors',
+        active
+          ? 'border-accent-400 bg-accent-500/[0.06]'
+          : focused
+            ? 'border-white/[0.16] bg-white/[0.025]'
+            : 'border-transparent hover:bg-white/[0.02]'
       )}
     >
-      {children}
+      <div
+        className={cn(
+          'flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-semibold text-white ring-1 ring-inset ring-white/[0.08]',
+          draft.classification === 'INTERESTED' &&
+            'bg-gradient-to-br from-emerald-500/70 to-emerald-700/70',
+          draft.classification === 'NOT_INTERESTED' &&
+            'bg-gradient-to-br from-rose-500/70 to-rose-700/70',
+          draft.classification === 'NEUTRAL' &&
+            'bg-gradient-to-br from-accent-500/70 to-accent-700/70'
+        )}
+      >
+        {initialsFor(name, candidate?.email)}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline justify-between gap-2">
+          <p
+            className={cn(
+              'truncate text-[13px] font-medium',
+              active ? 'text-white' : 'text-ink-100'
+            )}
+          >
+            {name}
+          </p>
+          <span className="flex-shrink-0 font-mono text-[10.5px] tabular-nums text-ink-500">
+            {formatTimeAgo(draft.createdAt)}
+          </span>
+        </div>
+        <p className="mt-0.5 truncate text-[12px] text-ink-300">
+          {draft.subject}
+        </p>
+        <p className="mt-0.5 truncate text-[11.5px] text-ink-500">{preview}</p>
+      </div>
+      <ChevronRight
+        className={cn(
+          'h-4 w-4 flex-shrink-0 transition-all',
+          active ? 'text-accent-300' : 'text-ink-600 group-hover:text-ink-300'
+        )}
+      />
     </button>
   );
 }
 
-interface IconDestructiveButtonProps {
-  onConfirm: () => void;
-  disabled?: boolean;
-  title: string;
-  description: string;
-  confirmLabel: string;
-  ariaLabel: string;
-  buttonTone: 'rose';
-  icon: React.ReactNode;
+function EmptyDraftsState({ status }: { status: DraftStatus }) {
+  const config = {
+    PENDING: {
+      icon: Sparkles,
+      title: 'No drafts waiting',
+      description:
+        "We'll generate replies automatically when interested candidates respond. Check back in a few minutes or connect a new mailbox.",
+    },
+    APPROVED: {
+      icon: FileText,
+      title: 'Nothing approved yet',
+      description:
+        'Approve drafts from the Pending tab — they will queue up here, saved as Gmail drafts for you to review before sending.',
+    },
+    SENT: {
+      icon: Inbox,
+      title: 'No sent drafts yet',
+      description:
+        'Approved drafts that you choose to send will land here, along with the timestamp of delivery.',
+    },
+  }[status];
+
+  const Icon = config.icon;
+  return (
+    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-white/[0.08] bg-ink-900/30 px-6 py-16 text-center">
+      <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-white/[0.04] text-accent-300 ring-1 ring-inset ring-white/[0.06]">
+        <Icon className="h-5 w-5" />
+      </div>
+      <p className="font-display text-[15px] font-medium text-ink-100">
+        {config.title}
+      </p>
+      <p className="mt-1.5 max-w-md text-[13px] leading-relaxed text-ink-400">
+        {config.description}
+      </p>
+    </div>
+  );
 }
 
-function IconDestructiveButton({
-  onConfirm,
-  disabled,
-  title,
-  description,
-  confirmLabel,
-  ariaLabel,
-  buttonTone,
-  icon,
-}: IconDestructiveButtonProps) {
-  const toneClass = {
-    rose: 'text-rose-300 hover:bg-rose-500/15 hover:text-rose-200',
-  }[buttonTone];
+const SHORTCUTS: Array<{ keys: string[]; label: string }> = [
+  { keys: ['j', '↓'], label: 'Focus next draft' },
+  { keys: ['k', '↑'], label: 'Focus previous draft' },
+  { keys: ['Enter', 'o'], label: 'Open focused draft' },
+  { keys: ['Esc'], label: 'Close draft pane' },
+  { keys: ['a'], label: 'Approve' },
+  { keys: ['x', 'd'], label: 'Discard (with confirm)' },
+  { keys: ['r'], label: 'Regenerate' },
+  { keys: ['e'], label: 'Edit body' },
+  { keys: ['?'], label: 'Show this help' },
+];
+
+function ShortcutsDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (next: boolean) => void;
+}) {
   return (
-    <AlertDialog.Root>
-      <AlertDialog.Trigger asChild>
-        <button
-          disabled={disabled}
-          aria-label={ariaLabel}
-          title={title}
-          className={cn(
-            'flex h-7 w-7 items-center justify-center rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-40',
-            toneClass
-          )}
-        >
-          {icon}
-        </button>
-      </AlertDialog.Trigger>
-      <AlertDialog.Portal>
-        <AlertDialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-fade-in" />
-        <AlertDialog.Content className="fixed left-1/2 top-1/2 z-50 w-[440px] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-white/[0.08] bg-ink-900/95 p-6 shadow-2xl backdrop-blur-xl data-[state=open]:animate-fade-in">
-          <AlertDialog.Title className="font-display text-[16px] font-semibold text-white">
-            {title}
-          </AlertDialog.Title>
-          <AlertDialog.Description className="mt-2 text-[13.5px] leading-relaxed text-ink-300">
-            {description}
-          </AlertDialog.Description>
-          <div className="mt-6 flex justify-end gap-2">
-            <AlertDialog.Cancel asChild>
-              <button className="rounded-lg bg-white/[0.04] px-4 py-2 text-[13px] font-medium text-ink-200 transition-colors hover:bg-white/[0.08]">
-                Cancel
-              </button>
-            </AlertDialog.Cancel>
-            <AlertDialog.Action asChild>
-              <button
-                onClick={onConfirm}
-                className="rounded-lg bg-rose-500 px-4 py-2 text-[13px] font-medium text-white transition-colors hover:bg-rose-400"
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/60 backdrop-blur-sm data-[state=open]:animate-fade-in" />
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-[70] w-[480px] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-white/[0.08] bg-ink-900/95 p-6 shadow-2xl backdrop-blur-xl data-[state=open]:animate-fade-in">
+          <Dialog.Title className="font-display text-[16px] font-semibold text-white">
+            Keyboard shortcuts
+          </Dialog.Title>
+          <Dialog.Description className="mt-1 text-[12.5px] text-ink-400">
+            Available on the Drafts tab and while the review pane is open.
+          </Dialog.Description>
+          <div className="mt-5 space-y-2.5">
+            {SHORTCUTS.map((s) => (
+              <div
+                key={s.label}
+                className="flex items-center justify-between gap-3"
               >
-                {confirmLabel}
-              </button>
-            </AlertDialog.Action>
+                <span className="text-[13px] text-ink-200">{s.label}</span>
+                <div className="flex items-center gap-1">
+                  {s.keys.map((k, i) => (
+                    <span key={i} className="flex items-center gap-1">
+                      {i > 0 && (
+                        <span className="text-[11px] text-ink-500">or</span>
+                      )}
+                      <kbd className="rounded-md border border-white/[0.08] bg-ink-950/80 px-2 py-0.5 font-mono text-[11px] font-medium text-ink-100 shadow-sm">
+                        {k}
+                      </kbd>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
-        </AlertDialog.Content>
-      </AlertDialog.Portal>
-    </AlertDialog.Root>
+          <div className="mt-6 flex justify-end">
+            <Dialog.Close asChild>
+              <button className="rounded-lg bg-white/[0.04] px-4 py-2 text-[13px] font-medium text-ink-200 transition-colors hover:bg-white/[0.08]">
+                Got it
+              </button>
+            </Dialog.Close>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 
@@ -489,6 +238,10 @@ export default function EmailDrafts({ mailboxId: _mailboxId }: Props) {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeStatus, setActiveStatus] = useState<DraftStatus>('PENDING');
+  const [focusedIndex, setFocusedIndex] = useState(0);
+  const [activeDraftId, setActiveDraftId] = useState<string | null>(null);
+  const [editNonce, setEditNonce] = useState(0);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   const deepLinkCandidateId = searchParams.get('candidateId');
   const deepLinkDraftId = searchParams.get('draftId');
@@ -499,8 +252,6 @@ export default function EmailDrafts({ mailboxId: _mailboxId }: Props) {
     staleTime: 15_000,
   });
 
-  // If we deep-link to a candidate that has no pending draft in the active list,
-  // fall back to checking APPROVED. We do this by widening the query when needed.
   const drafts = data?.data ?? [];
   const total = data?.meta.total ?? 0;
 
@@ -508,7 +259,6 @@ export default function EmailDrafts({ mailboxId: _mailboxId }: Props) {
   const targetDraftId = useMemo(() => {
     if (deepLinkDraftId) return deepLinkDraftId;
     if (!deepLinkCandidateId) return null;
-    // Try active list first; if not found in PENDING, switch tabs.
     const match = drafts.find(
       (d) =>
         d.thread?.candidate?.id === deepLinkCandidateId ||
@@ -526,12 +276,20 @@ export default function EmailDrafts({ mailboxId: _mailboxId }: Props) {
       setActiveStatus('APPROVED');
       setDidAutoSwitchTabs(true);
     }
-  }, [deepLinkCandidateId, isLoading, targetDraftId, activeStatus, didAutoSwitchTabs]);
+  }, [
+    deepLinkCandidateId,
+    isLoading,
+    targetDraftId,
+    activeStatus,
+    didAutoSwitchTabs,
+  ]);
 
-  // After consuming the deep-link (i.e. matched + auto-scrolled), clear params
-  // so navigating between tabs doesn't keep re-triggering scroll.
+  // When a deep-link resolves, open the pane and clear the URL params.
   useEffect(() => {
     if (!targetDraftId) return;
+    setActiveDraftId(targetDraftId);
+    const idx = drafts.findIndex((d) => d.id === targetDraftId);
+    if (idx !== -1) setFocusedIndex(idx);
     const params = new URLSearchParams(searchParams);
     const hadDeepLink = params.has('candidateId') || params.has('draftId');
     if (!hadDeepLink) return;
@@ -539,9 +297,33 @@ export default function EmailDrafts({ mailboxId: _mailboxId }: Props) {
       params.delete('candidateId');
       params.delete('draftId');
       setSearchParams(params, { replace: true });
-    }, 1200);
+    }, 250);
     return () => window.clearTimeout(id);
-  }, [targetDraftId, searchParams, setSearchParams]);
+  }, [targetDraftId, drafts, searchParams, setSearchParams]);
+
+  // Clamp focusedIndex when the list changes
+  useEffect(() => {
+    if (drafts.length === 0) {
+      setFocusedIndex(0);
+      return;
+    }
+    if (focusedIndex >= drafts.length) {
+      setFocusedIndex(drafts.length - 1);
+    }
+  }, [drafts.length, focusedIndex]);
+
+  // If active draft disappears (e.g. after discard), close pane
+  useEffect(() => {
+    if (!activeDraftId) return;
+    if (!drafts.some((d) => d.id === activeDraftId)) {
+      setActiveDraftId(null);
+    }
+  }, [drafts, activeDraftId]);
+
+  const activeDraft = useMemo(
+    () => drafts.find((d) => d.id === activeDraftId) ?? null,
+    [drafts, activeDraftId]
+  );
 
   const approveMutation = useMutation({
     mutationFn: approveDraft,
@@ -580,11 +362,9 @@ export default function EmailDrafts({ mailboxId: _mailboxId }: Props) {
     mutationFn: sendDraft,
     onSuccess: (_res, id) => {
       const d = drafts.find((x) => x.id === id);
-      const to = d?.thread?.candidate?.name ?? d?.thread?.candidate?.email ?? 'candidate';
-      toastSuccess(
-        `Email sent to ${to}`,
-        'Cc: sofia@archive.com'
-      );
+      const to =
+        d?.thread?.candidate?.name ?? d?.thread?.candidate?.email ?? 'candidate';
+      toastSuccess(`Email sent to ${to}`, 'Cc: sofia@archive.com');
       void queryClient.invalidateQueries({ queryKey: ['drafts'] });
       void queryClient.invalidateQueries({ queryKey: ['candidates'] });
     },
@@ -637,14 +417,107 @@ export default function EmailDrafts({ mailboxId: _mailboxId }: Props) {
     },
   });
 
-  const regenerateErrorMessage = (id: string): string | null => {
-    if (regenerateMutation.variables !== id) return null;
-    if (regenerateMutation.isPending || !regenerateMutation.isError) return null;
-    return extractApiErrorMessage(
-      regenerateMutation.error,
-      'Failed to regenerate draft'
+  const regenerateErrorMessage =
+    activeDraft &&
+    regenerateMutation.variables === activeDraft.id &&
+    !regenerateMutation.isPending &&
+    regenerateMutation.isError
+      ? extractApiErrorMessage(
+          regenerateMutation.error,
+          'Failed to regenerate draft'
+        )
+      : null;
+
+  const handleOpen = useCallback(
+    (draftId: string) => {
+      const idx = drafts.findIndex((d) => d.id === draftId);
+      if (idx !== -1) setFocusedIndex(idx);
+      setActiveDraftId(draftId);
+    },
+    [drafts]
+  );
+
+  // Keyboard shortcuts
+  const shortcutOpen = useCallback(() => {
+    const draft = drafts[focusedIndex];
+    if (draft) handleOpen(draft.id);
+  }, [drafts, focusedIndex, handleOpen]);
+
+  const shortcutNext = useCallback(() => {
+    if (drafts.length === 0) return;
+    setFocusedIndex((i) => Math.min(drafts.length - 1, i + 1));
+  }, [drafts.length]);
+
+  const shortcutPrev = useCallback(() => {
+    if (drafts.length === 0) return;
+    setFocusedIndex((i) => Math.max(0, i - 1));
+  }, [drafts.length]);
+
+  const shortcutClose = useCallback(() => {
+    if (shortcutsOpen) {
+      setShortcutsOpen(false);
+      return;
+    }
+    setActiveDraftId(null);
+  }, [shortcutsOpen]);
+
+  const shortcutApprove = useCallback(() => {
+    const target = activeDraft ?? drafts[focusedIndex];
+    if (target && target.status === 'PENDING') {
+      approveMutation.mutate(target.id);
+    }
+  }, [activeDraft, drafts, focusedIndex, approveMutation]);
+
+  const shortcutDiscard = useCallback(() => {
+    if (!activeDraft) return;
+    if (activeDraft.status !== 'PENDING') return;
+    // Open the discard confirm AlertDialog by clicking the pane's trigger;
+    // user still confirms via the dialog (keeps Phase O safety flow).
+    const trigger = document.querySelector<HTMLButtonElement>(
+      '[data-draft-pane="true"] button[aria-label="Discard draft"]'
     );
-  };
+    trigger?.click();
+  }, [activeDraft]);
+
+  const shortcutRegenerate = useCallback(() => {
+    if (!activeDraft) return;
+    if (activeDraft.status !== 'PENDING') return;
+    regenerateMutation.mutate(activeDraft.id);
+  }, [activeDraft, regenerateMutation]);
+
+  const shortcutEdit = useCallback(() => {
+    if (!activeDraft) return;
+    if (activeDraft.status !== 'PENDING') return;
+    setEditNonce((n) => n + 1);
+  }, [activeDraft]);
+
+  useDraftKeyboardShortcuts(
+    {
+      onNext: shortcutNext,
+      onPrev: shortcutPrev,
+      onOpen: shortcutOpen,
+      onClose: shortcutClose,
+      onApprove: shortcutApprove,
+      onDiscard: shortcutDiscard,
+      onRegenerate: shortcutRegenerate,
+      onEdit: shortcutEdit,
+    },
+    { enabled: true }
+  );
+
+  // `?` to open shortcuts help
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === '?' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        const tag = (e.target as HTMLElement | null)?.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+        e.preventDefault();
+        setShortcutsOpen(true);
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const statusTabs: { id: DraftStatus; label: string }[] = [
     { id: 'PENDING', label: 'Pending' },
@@ -674,7 +547,11 @@ export default function EmailDrafts({ mailboxId: _mailboxId }: Props) {
             Email drafts
           </h1>
           <p className="mt-1 text-[13.5px] text-ink-400">
-            Review, edit, and send AI-drafted replies to interested candidates.
+            Review, edit, and send AI-drafted replies. Press{' '}
+            <kbd className="rounded border border-white/[0.08] bg-ink-950/80 px-1.5 py-0.5 font-mono text-[10.5px] text-ink-200">
+              ?
+            </kbd>{' '}
+            for shortcuts.
           </p>
         </div>
       </div>
@@ -685,7 +562,11 @@ export default function EmailDrafts({ mailboxId: _mailboxId }: Props) {
           {statusTabs.map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setActiveStatus(tab.id)}
+              onClick={() => {
+                setActiveStatus(tab.id);
+                setFocusedIndex(0);
+                setActiveDraftId(null);
+              }}
               className={cn(
                 'rounded-md px-3.5 py-1.5 text-[13px] font-medium transition-all',
                 activeStatus === tab.id
@@ -702,85 +583,59 @@ export default function EmailDrafts({ mailboxId: _mailboxId }: Props) {
         </span>
       </div>
 
-      {/* Drafts list */}
-      <div className="space-y-3">
+      {/* Flat list */}
+      <div className="overflow-hidden rounded-xl border border-white/[0.06] bg-ink-900/40">
         {isLoading ? (
-          Array.from({ length: 3 }).map((_, i) => (
-            <div
-              key={i}
-              className="space-y-3 rounded-xl border border-white/[0.06] bg-ink-900/60 p-4"
-            >
-              <div className="h-4 w-1/3 skeleton" />
-              <div className="h-3 w-2/3 skeleton" />
-              <div className="h-10 w-full skeleton" />
-            </div>
-          ))
+          <div className="divide-y divide-white/[0.04]">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="h-16 skeleton" />
+            ))}
+          </div>
         ) : drafts.length === 0 ? (
           <EmptyDraftsState status={activeStatus} />
         ) : (
-          drafts.map((draft) => {
-            const isTarget = draft.id === targetDraftId;
-            return (
-              <DraftCard
+          <div className="divide-y divide-white/[0.04]">
+            {drafts.map((draft, idx) => (
+              <DraftListRow
                 key={draft.id}
                 draft={draft}
-                highlight={isTarget}
-                defaultExpanded={isTarget}
-                onApprove={(id) => approveMutation.mutate(id)}
-                onDiscard={(id) => discardMutation.mutate(id)}
-                onSend={(id) => sendMutation.mutate(id)}
-                onUpdate={(id, bodyText) =>
-                  updateMutation.mutate({ id, bodyText })
-                }
-                onRegenerate={(id) => regenerateMutation.mutate(id)}
-                regenerating={
-                  regenerateMutation.isPending &&
-                  regenerateMutation.variables === draft.id
-                }
-                regenerateError={regenerateErrorMessage(draft.id)}
+                active={draft.id === activeDraftId}
+                focused={idx === focusedIndex && draft.id !== activeDraftId}
+                onClick={() => handleOpen(draft.id)}
               />
-            );
-          })
+            ))}
+          </div>
         )}
       </div>
-    </div>
-  );
-}
 
-function EmptyDraftsState({ status }: { status: DraftStatus }) {
-  const config = {
-    PENDING: {
-      icon: Sparkles,
-      title: 'No drafts waiting',
-      description:
-        "We'll generate replies automatically when interested candidates respond. Check back in a few minutes or connect a new mailbox.",
-    },
-    APPROVED: {
-      icon: FileText,
-      title: 'Nothing approved yet',
-      description:
-        'Approve drafts from the Pending tab — they will queue up here, saved as Gmail drafts for you to review before sending.',
-    },
-    SENT: {
-      icon: Inbox,
-      title: 'No sent drafts yet',
-      description:
-        'Approved drafts that you choose to send will land here, along with the timestamp of delivery.',
-    },
-  }[status];
+      {/* Side-pane */}
+      <DraftReviewPane
+        open={activeDraft !== null}
+        draft={activeDraft}
+        onClose={() => setActiveDraftId(null)}
+        onApprove={(id) => approveMutation.mutate(id)}
+        onDiscard={(id) => discardMutation.mutate(id)}
+        onSend={(id) => sendMutation.mutate(id)}
+        onUpdate={(id, bodyText) => updateMutation.mutate({ id, bodyText })}
+        onRegenerate={(id) => regenerateMutation.mutate(id)}
+        regenerating={
+          regenerateMutation.isPending &&
+          regenerateMutation.variables === (activeDraft?.id ?? '')
+        }
+        regenerateError={regenerateErrorMessage}
+        editRequestNonce={editNonce}
+      />
 
-  const Icon = config.icon;
-  return (
-    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-white/[0.08] bg-ink-900/30 px-6 py-16 text-center">
-      <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-white/[0.04] text-accent-300 ring-1 ring-inset ring-white/[0.06]">
-        <Icon className="h-5 w-5" />
-      </div>
-      <p className="font-display text-[15px] font-medium text-ink-100">
-        {config.title}
-      </p>
-      <p className="mt-1.5 max-w-md text-[13px] leading-relaxed text-ink-400">
-        {config.description}
-      </p>
+      {/* Shortcuts help — floating ? button */}
+      <button
+        onClick={() => setShortcutsOpen(true)}
+        aria-label="Show keyboard shortcuts"
+        className="fixed bottom-5 right-5 z-30 flex h-10 w-10 items-center justify-center rounded-full border border-white/[0.08] bg-ink-900/90 text-ink-300 shadow-lg backdrop-blur transition-all hover:scale-105 hover:bg-ink-800 hover:text-ink-100"
+      >
+        <Keyboard className="h-4 w-4" />
+      </button>
+
+      <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
     </div>
   );
 }

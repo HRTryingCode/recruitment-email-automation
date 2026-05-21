@@ -132,8 +132,8 @@ export default function Index() {
   };
 
   /**
-   * Deep-link helper used by Dashboard rows: jump to drafts tab and pre-expand
-   * the candidate's most recent pending draft.
+   * Deep-link helper used by Dashboard rows: jump to drafts tab and pre-open
+   * the side-pane for the candidate's most recent pending draft.
    */
   const openDraftForCandidate = (candidateId: string) => {
     const params = new URLSearchParams(searchParams);
@@ -142,6 +142,37 @@ export default function Index() {
     params.delete('draftId');
     setSearchParams(params);
     setActiveTab('drafts');
+  };
+
+  /**
+   * Used by the dashboard Quick Triage chevron — opens a specific draft.
+   */
+  const openDraft = (draftId: string) => {
+    const params = new URLSearchParams(searchParams);
+    params.set('tab', 'drafts');
+    params.set('draftId', draftId);
+    params.delete('candidateId');
+    setSearchParams(params);
+    setActiveTab('drafts');
+  };
+
+  /**
+   * Switch to the candidates tab. The optional filter is appended to the URL
+   * so future iterations of CandidateTable can consume it; current behavior
+   * just switches tabs.
+   */
+  const switchToCandidates = (filter?: string) => {
+    const params = new URLSearchParams(searchParams);
+    params.set('tab', 'candidates');
+    if (filter) {
+      params.set('filter', filter);
+    } else {
+      params.delete('filter');
+    }
+    params.delete('candidateId');
+    params.delete('draftId');
+    setSearchParams(params);
+    setActiveTab('candidates');
   };
 
   const { data: mailboxesData, refetch: refetchMailboxes } = useQuery({
@@ -344,7 +375,9 @@ export default function Index() {
               mailboxId={selectedMailboxId}
               onRefetchMailboxes={refetchMailboxes}
               onOpenDraftForCandidate={openDraftForCandidate}
+              onOpenDraft={openDraft}
               onSwitchToDrafts={() => handleTabChange('drafts')}
+              onSwitchToCandidates={switchToCandidates}
             />
           </Tabs.Content>
           <Tabs.Content value="drafts" className="outline-none animate-fade-in">
