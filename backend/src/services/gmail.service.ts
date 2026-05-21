@@ -421,7 +421,10 @@ async function classifyAndDraft(opts: {
   ).map((m) => ({
     fromAddress: m.fromAddress,
     fromName: m.fromName,
-    bodyText: m.bodyText,
+    // Fall back through bodyHtml then a sentinel so Claude always gets
+    // *some* text per message. A null/empty entry in the context array
+    // poisons the classifier prompt.
+    bodyText: m.bodyText || m.bodyHtml || `(no body, subject: ${m.subject ?? thread.subject})`,
     receivedAt: m.receivedAt,
   }));
 
@@ -434,8 +437,16 @@ async function classifyAndDraft(opts: {
   let classificationResult;
   try {
     const candidateName = parsed.fromName ?? parsed.fromAddress;
+    // Three-step fallback with explicit empty-body sentinel. An empty
+    // string would let Claude classify "no message" as NEUTRAL with high
+    // confidence — wrong. The sentinel tells the model the body was empty.
+    const primaryBody =
+      parsed.bodyText ||
+      parsed.bodyHtml ||
+      parsed.subject ||
+      '(empty inbound message body)';
     classificationResult = await classifyReply(
-      parsed.bodyText || parsed.bodyHtml || parsed.subject,
+      primaryBody,
       candidateName,
       {
         subject: thread.subject,
