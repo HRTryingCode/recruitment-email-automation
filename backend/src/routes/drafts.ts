@@ -530,11 +530,24 @@ router.post('/:id/approve', async (req: Request, res: Response, next: NextFuncti
           data: { status: 'APPROVED', externalDraftId },
         });
       } catch (gmailErr) {
-        console.error('[Drafts] Failed to create Gmail draft:', gmailErr);
-        await prisma.emailDraft.update({
-          where: { id },
-          data: { status: 'APPROVED' },
-        });
+        // Fail loudly. Previous behavior was to flip the row to APPROVED
+        // anyway, but then /send would have no externalDraftId and would
+        // either re-create the draft (wasteful) or 500. Surfacing the
+        // error to the caller lets them retry while the row stays
+        // PENDING and stays in the review queue.
+        const message =
+          gmailErr instanceof Error ? gmailErr.message : String(gmailErr);
+        await logEvent(
+          'DRAFT_APPROVE_GMAIL_FAILED',
+          { draftId: id, error: message },
+          'ERROR'
+        );
+        return next(
+          createError(
+            `Could not create the draft in Gmail: ${message}. The draft is still pending; please retry.`,
+            502
+          )
+        );
       }
     } else {
       await prisma.emailDraft.update({
