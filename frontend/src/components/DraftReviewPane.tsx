@@ -77,36 +77,36 @@ function OriginalMessageBlock({ original }: { original: OriginalMessage }) {
     : original.fromAddress;
 
   return (
-    <div className="overflow-hidden rounded-xl border border-white/[0.06] bg-ink-950/40">
-      <div className="border-b border-white/[0.05] bg-white/[0.015] px-4 py-2.5">
-        <div className="mb-2 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.14em] text-ink-400">
+    <div className="overflow-hidden rounded-xl border border-line bg-surface-base/40">
+      <div className="border-b border-line-soft bg-fg-strong/[0.015] px-4 py-2.5">
+        <div className="mb-2 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.14em] text-fg-muted">
           <Mail className="h-3 w-3" />
           Original message
         </div>
         <div className="space-y-0.5 font-mono text-[11.5px] leading-relaxed">
           <div className="flex">
-            <span className="w-14 flex-shrink-0 text-ink-500">From</span>
-            <span className="truncate text-ink-200">{senderLabel}</span>
+            <span className="w-14 flex-shrink-0 text-fg-subtle">From</span>
+            <span className="truncate text-fg-default">{senderLabel}</span>
           </div>
           <div className="flex">
-            <span className="w-14 flex-shrink-0 text-ink-500">Date</span>
-            <span className="text-ink-200">
+            <span className="w-14 flex-shrink-0 text-fg-subtle">Date</span>
+            <span className="text-fg-default">
               {formatOriginalDate(original.receivedAt)}
             </span>
           </div>
           <div className="flex">
-            <span className="w-14 flex-shrink-0 text-ink-500">Subject</span>
-            <span className="text-ink-200">{original.subject}</span>
+            <span className="w-14 flex-shrink-0 text-fg-subtle">Subject</span>
+            <span className="text-fg-default">{original.subject}</span>
           </div>
         </div>
       </div>
       <div className="border-l-2 border-accent-500/40 px-4 py-3">
         {body ? (
-          <pre className="whitespace-pre-wrap font-sans text-[13px] leading-relaxed text-ink-200">
+          <pre className="whitespace-pre-wrap font-sans text-[13px] leading-relaxed text-fg-default">
             {body}
           </pre>
         ) : (
-          <p className="text-[13px] italic text-ink-500">(no message body)</p>
+          <p className="text-[13px] italic text-fg-subtle">(no message body)</p>
         )}
       </div>
     </div>
@@ -127,7 +127,7 @@ function DiscardConfirm({
           <button
             disabled={disabled}
             aria-label="Discard draft"
-            className="flex items-center gap-1.5 rounded-lg bg-rose-500/10 px-3 py-2 text-[13px] font-medium text-rose-300 ring-1 ring-inset ring-rose-500/20 transition-colors hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded-lg bg-rose-500/10 px-3 py-2 text-[13px] font-medium text-rose-700 ring-1 ring-inset ring-rose-500/20 transition-colors hover:bg-rose-500/15 dark:text-rose-300 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <X className="h-3.5 w-3.5" />
             Discard
@@ -135,18 +135,18 @@ function DiscardConfirm({
         </AlertDialog.Trigger>
       </Tooltip>
       <AlertDialog.Portal>
-        <AlertDialog.Overlay className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm data-[state=open]:animate-fade-in" />
-        <AlertDialog.Content className="fixed left-1/2 top-1/2 z-[60] w-[440px] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-white/[0.08] bg-ink-900/95 p-6 shadow-2xl backdrop-blur-xl data-[state=open]:animate-fade-in">
-          <AlertDialog.Title className="font-display text-[16px] font-semibold text-white">
+        <AlertDialog.Overlay className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm data-[state=open]:animate-fade-in" />
+        <AlertDialog.Content className="fixed left-1/2 top-1/2 z-[60] w-[440px] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-line bg-surface-elevated/95 p-6 shadow-2xl backdrop-blur-xl data-[state=open]:animate-fade-in">
+          <AlertDialog.Title className="font-display text-[16px] font-semibold text-fg-strong">
             Discard draft?
           </AlertDialog.Title>
-          <AlertDialog.Description className="mt-2 text-[13.5px] leading-relaxed text-ink-300">
+          <AlertDialog.Description className="mt-2 text-[13.5px] leading-relaxed text-fg-muted">
             The draft will not be sent. New emails from this candidate will
             still generate drafts unless you ignore them.
           </AlertDialog.Description>
           <div className="mt-6 flex justify-end gap-2">
             <AlertDialog.Cancel asChild>
-              <button className="rounded-lg bg-white/[0.04] px-4 py-2 text-[13px] font-medium text-ink-200 transition-colors hover:bg-white/[0.08]">
+              <button className="rounded-lg bg-fg-strong/[0.05] px-4 py-2 text-[13px] font-medium text-fg-default transition-colors hover:bg-fg-strong/[0.09]">
                 Cancel
               </button>
             </AlertDialog.Cancel>
@@ -225,16 +225,16 @@ export default function DraftReviewPane({
         aria-label={
           candidate ? `Draft for ${candidate.name}` : 'Draft review'
         }
-        className="fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-white/[0.06] bg-ink-950/95 shadow-2xl backdrop-blur-xl animate-fade-in sm:w-[640px]"
+        className="fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-line bg-surface-raised/95 shadow-2xl backdrop-blur-xl animate-fade-in sm:w-[640px]"
       >
         {/* Header */}
-        <div className="flex items-start justify-between gap-3 border-b border-white/[0.06] px-5 py-4">
+        <div className="flex items-start justify-between gap-3 border-b border-line px-5 py-4">
           <div className="min-w-0 flex-1">
             <div className="mb-2 flex items-center gap-2">
               <button
                 onClick={onClose}
                 aria-label="Close draft pane"
-                className="-ml-1 flex h-7 w-7 items-center justify-center rounded-md text-ink-400 transition-colors hover:bg-white/[0.06] hover:text-ink-100 sm:hidden"
+                className="-ml-1 flex h-7 w-7 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-fg-strong/[0.06] hover:text-fg-strong sm:hidden"
               >
                 <ChevronLeft className="h-4 w-4" />
               </button>
@@ -251,25 +251,25 @@ export default function DraftReviewPane({
                 />
               )}
               {draft && (
-                <span className="font-mono text-[11px] tabular-nums text-ink-500">
+                <span className="font-mono text-[11px] tabular-nums text-fg-subtle">
                   {formatTimeAgo(draft.createdAt)}
                 </span>
               )}
             </div>
-            <h2 className="truncate font-display text-[17px] font-semibold tracking-tight text-white">
+            <h2 className="truncate font-display text-[17px] font-semibold tracking-tight text-fg-strong">
               {candidate?.name ?? 'Unknown candidate'}
             </h2>
-            <p className="mt-0.5 truncate font-mono text-[12px] text-ink-400">
+            <p className="mt-0.5 truncate font-mono text-[12px] text-fg-muted">
               {candidate?.email ?? '—'}
             </p>
-            <p className="mt-2.5 truncate text-[13px] text-ink-200">
+            <p className="mt-2.5 truncate text-[13px] text-fg-default">
               {draft?.subject}
             </p>
           </div>
           <button
             onClick={onClose}
             aria-label="Close draft pane"
-            className="hidden h-8 w-8 items-center justify-center rounded-md text-ink-400 transition-colors hover:bg-white/[0.06] hover:text-ink-100 sm:flex"
+            className="hidden h-8 w-8 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-fg-strong/[0.06] hover:text-fg-strong sm:flex"
           >
             <X className="h-4 w-4" />
           </button>
@@ -289,13 +289,13 @@ export default function DraftReviewPane({
               )}
 
               <div>
-                <p className="mb-2 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.14em] text-ink-400">
-                  <span className="inline-block h-px w-3 bg-accent-400/60" />
+                <p className="mb-2 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.14em] text-fg-muted">
+                  <span className="inline-block h-px w-3 bg-accent-500/70" />
                   Your reply
                 </p>
-                <p className="mb-2 text-[11px] text-ink-500">
+                <p className="mb-2 text-[11px] text-fg-subtle">
                   Will Cc{' '}
-                  <span className="font-mono text-ink-300">
+                  <span className="font-mono text-fg-muted">
                     sofia@archive.com
                   </span>
                 </p>
@@ -304,7 +304,7 @@ export default function DraftReviewPane({
                     <textarea
                       value={editedBody}
                       onChange={(e) => setEditedBody(e.target.value)}
-                      className="min-h-48 w-full resize-y rounded-lg border border-white/[0.08] bg-ink-950/60 p-3 text-[13.5px] leading-relaxed text-ink-100 focus:border-accent-400 focus:outline-none"
+                      className="min-h-48 w-full resize-y rounded-lg border border-line-strong bg-surface-base/60 p-3 text-[13.5px] leading-relaxed text-fg-default focus:border-accent-400 focus:outline-none"
                       rows={12}
                       autoFocus
                     />
@@ -320,15 +320,15 @@ export default function DraftReviewPane({
                           setEditing(false);
                           setEditedBody(draft.bodyText);
                         }}
-                        className="rounded-lg bg-white/[0.04] px-3.5 py-2 text-[13px] font-medium text-ink-200 transition-colors hover:bg-white/[0.08]"
+                        className="rounded-lg bg-fg-strong/[0.05] px-3.5 py-2 text-[13px] font-medium text-fg-default transition-colors hover:bg-fg-strong/[0.09]"
                       >
                         Cancel
                       </button>
                     </div>
                   </div>
                 ) : (
-                  <div className="rounded-xl border border-white/[0.06] bg-ink-950/40 p-4">
-                    <pre className="whitespace-pre-wrap font-sans text-[13.5px] leading-relaxed text-ink-100">
+                  <div className="rounded-xl border border-line bg-surface-base/40 p-4">
+                    <pre className="whitespace-pre-wrap font-sans text-[13.5px] leading-relaxed text-fg-default">
                       {draft.bodyText}
                     </pre>
                   </div>
@@ -336,7 +336,7 @@ export default function DraftReviewPane({
               </div>
 
               {regenerateError && (
-                <p className="text-[12px] text-rose-300">{regenerateError}</p>
+                <p className="text-[12px] text-rose-700 dark:text-rose-300">{regenerateError}</p>
               )}
             </div>
           )}
@@ -344,7 +344,7 @@ export default function DraftReviewPane({
 
         {/* Action bar */}
         {draft && (isPending || isApproved) && (
-          <div className="flex items-center justify-between gap-2 border-t border-white/[0.06] bg-ink-950/80 px-5 py-3.5">
+          <div className="flex items-center justify-between gap-2 border-t border-line bg-surface-base/80 px-5 py-3.5">
             <div className="flex items-center gap-2">
               {isPending && (
                 <>
@@ -354,7 +354,7 @@ export default function DraftReviewPane({
                       disabled={regenerating || editing}
                       aria-label="Approve draft"
                       className={cn(
-                        'flex items-center gap-1.5 rounded-lg bg-emerald-500/15 px-3.5 py-2 text-[13px] font-medium text-emerald-300 ring-1 ring-inset ring-emerald-500/25 transition-colors hover:bg-emerald-500/25 hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-50'
+                        'flex items-center gap-1.5 rounded-lg bg-emerald-500/15 px-3.5 py-2 text-[13px] font-medium text-emerald-700 ring-1 ring-inset ring-emerald-500/25 transition-colors hover:bg-emerald-500/25 dark:text-emerald-300 dark:hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-50'
                       )}
                     >
                       <Check className="h-3.5 w-3.5" />
@@ -378,7 +378,7 @@ export default function DraftReviewPane({
                   </button>
                   <button
                     onClick={() => onDiscard(draft.id)}
-                    className="flex items-center gap-1.5 rounded-lg bg-rose-500/10 px-3.5 py-2 text-[13px] font-medium text-rose-300 ring-1 ring-inset ring-rose-500/20 transition-colors hover:bg-rose-500/15"
+                    className="flex items-center gap-1.5 rounded-lg bg-rose-500/10 px-3.5 py-2 text-[13px] font-medium text-rose-700 ring-1 ring-inset ring-rose-500/20 transition-colors hover:bg-rose-500/15 dark:text-rose-300"
                   >
                     <X className="h-3.5 w-3.5" />
                     Discard
@@ -396,7 +396,7 @@ export default function DraftReviewPane({
                       onClick={() => onRegenerate(draft.id)}
                       disabled={regenerating || editing}
                       aria-label="Regenerate draft"
-                      className="flex h-9 w-9 items-center justify-center rounded-md text-ink-400 transition-colors hover:bg-white/[0.06] hover:text-ink-100 disabled:cursor-not-allowed disabled:opacity-40"
+                      className="flex h-9 w-9 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-fg-strong/[0.06] hover:text-fg-strong disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       <RefreshCw
                         className={cn('h-4 w-4', regenerating && 'animate-spin')}
@@ -408,7 +408,7 @@ export default function DraftReviewPane({
                       onClick={() => setEditing(true)}
                       disabled={regenerating || editing}
                       aria-label="Edit draft body"
-                      className="flex h-9 w-9 items-center justify-center rounded-md text-ink-400 transition-colors hover:bg-white/[0.06] hover:text-ink-100 disabled:cursor-not-allowed disabled:opacity-40"
+                      className="flex h-9 w-9 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-fg-strong/[0.06] hover:text-fg-strong disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       <Pencil className="h-4 w-4" />
                     </button>

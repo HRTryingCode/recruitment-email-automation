@@ -25,10 +25,10 @@ export function Tooltip({
         <RadixTooltip.Content
           side={side}
           sideOffset={6}
-          className="z-50 max-w-xs rounded-md border border-white/[0.08] bg-ink-900 px-2.5 py-1.5 text-[12px] text-white shadow-lg animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
+          className="z-50 max-w-xs rounded-md border border-line bg-surface-elevated px-2.5 py-1.5 text-[12px] text-fg-strong shadow-lg animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
         >
           {content}
-          <RadixTooltip.Arrow className="fill-ink-900" />
+          <RadixTooltip.Arrow className="fill-surface-elevated" />
         </RadixTooltip.Content>
       </RadixTooltip.Portal>
     </RadixTooltip.Root>

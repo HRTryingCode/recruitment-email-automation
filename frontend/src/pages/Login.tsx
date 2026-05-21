@@ -76,30 +76,30 @@ export default function Login() {
 
   return (
     <div className="flex min-h-screen items-center justify-center px-4">
-      <div className="absolute inset-0 -z-10 grid-bg opacity-50" />
+      <div className="absolute inset-0 -z-10 grid-bg opacity-60" />
       <div className="w-full max-w-md">
         <div className="mb-10 flex items-center justify-center gap-3">
           <div className="relative">
             <div className="absolute inset-0 rounded-xl bg-accent-500/40 blur-xl" />
-            <div className="relative flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-accent-400 via-accent-500 to-accent-700 ring-1 ring-white/10">
+            <div className="relative flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-accent-400 via-accent-500 to-accent-700 ring-1 ring-white/15">
               <Sparkles className="h-5 w-5 text-white" strokeWidth={2.4} />
             </div>
           </div>
           <div>
-            <h1 className="font-display text-xl font-semibold leading-none text-white tracking-tight">
+            <h1 className="font-display text-xl font-semibold leading-none text-fg-strong tracking-tight">
               Archive Recruiting
             </h1>
-            <p className="mt-1.5 text-[10.5px] font-medium uppercase tracking-[0.14em] text-ink-400">
+            <p className="mt-1.5 text-[10.5px] font-medium uppercase tracking-[0.14em] text-fg-muted">
               AI Email Automation
             </p>
           </div>
         </div>
 
-        <div className="overflow-hidden rounded-2xl border border-white/[0.07] bg-ink-900/60 p-8 shadow-2xl backdrop-blur-xl">
-          <h2 className="font-display text-2xl font-semibold tracking-tight text-white">
+        <div className="overflow-hidden rounded-2xl border border-line bg-surface-raised/70 p-8 shadow-2xl backdrop-blur-xl">
+          <h2 className="font-display text-2xl font-semibold tracking-tight text-fg-strong">
             Welcome back
           </h2>
-          <p className="mt-2 text-[13.5px] leading-relaxed text-ink-400">
+          <p className="mt-2 text-[13.5px] leading-relaxed text-fg-muted">
             Sign in with your Archive Google account to continue.
           </p>
 
@@ -108,20 +108,20 @@ export default function Login() {
           </div>
 
           {!gisReady && (
-            <p className="mt-4 text-center text-[12px] text-ink-500">
+            <p className="mt-4 text-center text-[12px] text-fg-subtle">
               Loading Google sign-in…
             </p>
           )}
 
           {error && (
-            <div className="mt-5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 text-[13px] text-rose-300">
+            <div className="mt-5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 text-[13px] text-rose-700 dark:text-rose-300">
               {error}
             </div>
           )}
         </div>
 
-        <p className="mt-6 text-center text-[12px] text-ink-500">
-          Restricted to <span className="font-mono text-ink-400">@archive.com</span> accounts.
+        <p className="mt-6 text-center text-[12px] text-fg-subtle">
+          Restricted to <span className="font-mono text-fg-muted">@archive.com</span> accounts.
         </p>
       </div>
     </div>

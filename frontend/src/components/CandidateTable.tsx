@@ -40,9 +40,10 @@ function ReplyStatusBadge({ candidate }: { candidate: Candidate }) {
 
   const styles = {
     REPLIED:
-      'bg-emerald-500/10 text-emerald-300 ring-emerald-500/20',
-    AWAITING_REPLY: 'bg-amber-500/10 text-amber-300 ring-amber-500/20',
-    NEW: 'bg-white/[0.04] text-ink-300 ring-white/[0.06]',
+      'bg-emerald-500/10 text-emerald-700 ring-emerald-500/20 dark:text-emerald-300',
+    AWAITING_REPLY:
+      'bg-amber-500/10 text-amber-700 ring-amber-500/20 dark:text-amber-300',
+    NEW: 'bg-fg-strong/[0.04] text-fg-muted ring-fg-strong/[0.06]',
   }[derived];
 
   const label = {
@@ -86,22 +87,22 @@ function ThreadView({ threadId }: { threadId: string }) {
   return (
     <div className="max-h-72 space-y-2.5 overflow-y-auto p-4">
       {messages.length === 0 ? (
-        <p className="text-[13px] text-ink-500">No messages yet</p>
+        <p className="text-[13px] text-fg-subtle">No messages yet</p>
       ) : (
         messages.map((msg) => (
           <div
             key={msg.id}
-            className="rounded-lg border border-white/[0.05] bg-ink-950/40 p-3"
+            className="rounded-lg border border-line-soft bg-surface-base/40 p-3"
           >
             <div className="mb-1 flex items-center justify-between">
-              <span className="text-[13px] font-medium text-ink-100">
+              <span className="text-[13px] font-medium text-fg-strong">
                 {msg.fromName ?? msg.fromAddress}
               </span>
-              <span className="font-mono text-[11px] tabular-nums text-ink-500">
+              <span className="font-mono text-[11px] tabular-nums text-fg-subtle">
                 {formatTimeAgo(msg.receivedAt)}
               </span>
             </div>
-            <p className="line-clamp-3 text-[12.5px] leading-relaxed text-ink-300">
+            <p className="line-clamp-3 text-[12.5px] leading-relaxed text-fg-muted">
               {msg.bodyText}
             </p>
           </div>
@@ -188,11 +189,11 @@ export default function CandidateTable({ mailboxId }: Props) {
 
   if (error) {
     return (
-      <div className="rounded-xl border border-white/[0.06] bg-ink-900/60 p-10 text-center">
-        <p className="mb-3 text-rose-300">Failed to load candidates</p>
+      <div className="rounded-xl border border-line bg-surface-raised p-10 text-center">
+        <p className="mb-3 text-rose-700 dark:text-rose-300">Failed to load candidates</p>
         <button
           onClick={() => refetch()}
-          className="mx-auto flex items-center gap-2 rounded-lg bg-white/[0.04] px-3 py-1.5 text-[13px] text-ink-200 transition-colors hover:bg-white/[0.08]"
+          className="mx-auto flex items-center gap-2 rounded-lg bg-fg-strong/[0.05] px-3 py-1.5 text-[13px] text-fg-default transition-colors hover:bg-fg-strong/[0.09]"
         >
           <RefreshCw className="h-4 w-4" /> Retry
         </button>
@@ -204,10 +205,10 @@ export default function CandidateTable({ mailboxId }: Props) {
     <div className="space-y-6">
       <div className="flex items-baseline justify-between gap-4">
         <div>
-          <h1 className="font-display text-2xl font-semibold tracking-tight text-white sm:text-[28px]">
+          <h1 className="font-display text-2xl font-semibold tracking-tight text-fg-strong sm:text-[28px]">
             Candidates
           </h1>
-          <p className="mt-1 text-[13.5px] text-ink-400">
+          <p className="mt-1 text-[13.5px] text-fg-muted">
             Every candidate detected across connected mailboxes.
           </p>
         </div>
@@ -219,7 +220,7 @@ export default function CandidateTable({ mailboxId }: Props) {
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="appearance-none rounded-lg border border-white/[0.06] bg-ink-900/60 py-1.5 pl-3 pr-9 text-[13px] text-ink-200 transition-colors hover:border-white/[0.12] focus:border-accent-400 focus:outline-none"
+            className="appearance-none rounded-lg border border-line bg-surface-raised/70 py-1.5 pl-3 pr-9 text-[13px] text-fg-default transition-colors hover:border-line-strong focus:border-accent-400 focus:outline-none"
           >
             <option value="">Active candidates</option>
             <option value="__ALL__">All (incl. ignored)</option>
@@ -231,18 +232,18 @@ export default function CandidateTable({ mailboxId }: Props) {
             <option value="NEEDS_REVIEW">Needs Review</option>
             <option value="IGNORED">Ignored</option>
           </select>
-          <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-400" />
+          <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg-muted" />
         </div>
-        <span className="font-mono text-[12px] tabular-nums text-ink-500">
+        <span className="font-mono text-[12px] tabular-nums text-fg-subtle">
           {data?.meta.total ?? 0} candidates
         </span>
       </div>
 
       {/* Table */}
-      <div className="overflow-hidden rounded-xl border border-white/[0.06] bg-ink-900/60">
+      <div className="overflow-hidden rounded-xl border border-line bg-surface-raised/70">
         <table className="w-full">
           <thead>
-            <tr className="border-b border-white/[0.06] text-[11px] font-medium uppercase tracking-[0.08em] text-ink-400">
+            <tr className="border-b border-line text-[11px] font-medium uppercase tracking-[0.08em] text-fg-muted">
               <th className="px-4 py-3 text-left">Name</th>
               <th className="px-4 py-3 text-left">Email</th>
               <th className="hidden px-4 py-3 text-left md:table-cell">
@@ -256,7 +257,7 @@ export default function CandidateTable({ mailboxId }: Props) {
               <th className="px-4 py-3 text-left">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-white/[0.04]">
+          <tbody className="divide-y divide-line-soft">
             {isLoading
               ? Array.from({ length: 5 }).map((_, i) => (
                   <tr key={i}>
@@ -297,13 +298,13 @@ export default function CandidateTable({ mailboxId }: Props) {
 
         {!isLoading && candidates.length === 0 && (
           <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
-            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-white/[0.04] text-ink-300 ring-1 ring-inset ring-white/[0.06]">
+            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-fg-strong/[0.04] text-fg-muted ring-1 ring-inset ring-fg-strong/[0.06]">
               <Users className="h-5 w-5" />
             </div>
-            <p className="font-display text-[15px] font-medium text-ink-100">
+            <p className="font-display text-[15px] font-medium text-fg-strong">
               No candidates found
             </p>
-            <p className="mt-1.5 max-w-sm text-[13px] leading-relaxed text-ink-400">
+            <p className="mt-1.5 max-w-sm text-[13px] leading-relaxed text-fg-muted">
               {statusFilter
                 ? 'Try a different filter — or wait for new emails to be classified.'
                 : 'Candidates show up here as soon as their first email is processed.'}
@@ -339,35 +340,35 @@ function CandidateRow({
   return (
     <>
       <tr
-        className="group cursor-pointer transition-colors hover:bg-white/[0.02]"
+        className="group cursor-pointer transition-colors hover:bg-fg-strong/[0.02]"
         onClick={onToggle}
       >
         <td className="px-4 py-3">
           <div className="flex items-center gap-2">
             {expanded ? (
-              <ChevronUp className="h-3.5 w-3.5 text-ink-400" />
+              <ChevronUp className="h-3.5 w-3.5 text-fg-muted" />
             ) : (
-              <ChevronDown className="h-3.5 w-3.5 text-ink-500 group-hover:text-ink-300" />
+              <ChevronDown className="h-3.5 w-3.5 text-fg-subtle group-hover:text-fg-muted" />
             )}
-            <span className="text-[13.5px] font-medium text-white">
+            <span className="text-[13.5px] font-medium text-fg-strong">
               {candidate.name}
             </span>
           </div>
         </td>
         <td className="px-4 py-3">
-          <div className="flex items-center gap-1.5 text-[13px] text-ink-200">
-            <Mail className="h-3.5 w-3.5 flex-shrink-0 text-ink-500" />
+          <div className="flex items-center gap-1.5 text-[13px] text-fg-default">
+            <Mail className="h-3.5 w-3.5 flex-shrink-0 text-fg-subtle" />
             <span className="truncate">{candidate.email}</span>
           </div>
         </td>
         <td className="hidden px-4 py-3 md:table-cell">
           {candidate.company ? (
-            <div className="flex items-center gap-1.5 text-[13px] text-ink-300">
-              <Building2 className="h-3.5 w-3.5 flex-shrink-0 text-ink-500" />
+            <div className="flex items-center gap-1.5 text-[13px] text-fg-muted">
+              <Building2 className="h-3.5 w-3.5 flex-shrink-0 text-fg-subtle" />
               {candidate.company}
             </div>
           ) : (
-            <span className="text-[13px] text-ink-600">—</span>
+            <span className="text-[13px] text-fg-subtle">—</span>
           )}
         </td>
         <td className="px-4 py-3">
@@ -377,7 +378,7 @@ function CandidateRow({
           <ReplyStatusBadge candidate={candidate} />
         </td>
         <td className="hidden px-4 py-3 lg:table-cell">
-          <span className="font-mono text-[12px] tabular-nums text-ink-400">
+          <span className="font-mono text-[12px] tabular-nums text-fg-muted">
             {candidate.threads?.[0]
               ? formatTimeAgo(candidate.threads[0].lastMessageAt)
               : formatTimeAgo(candidate.updatedAt)}
@@ -391,7 +392,7 @@ function CandidateRow({
                 onChange={(e) =>
                   onChangeStatus(e.target.value as Candidate['status'])
                 }
-                className="appearance-none rounded-md border border-white/[0.06] bg-ink-950/60 px-2 py-1 pr-6 text-[11.5px] text-ink-200 focus:border-accent-400 focus:outline-none"
+                className="appearance-none rounded-md border border-line bg-surface-base/60 px-2 py-1 pr-6 text-[11.5px] text-fg-default focus:border-accent-400 focus:outline-none"
               >
                 <option value="PENDING">Pending</option>
                 <option value="INTERESTED">Interested</option>
@@ -401,7 +402,7 @@ function CandidateRow({
                 <option value="NEEDS_REVIEW">Needs Review</option>
                 <option value="IGNORED">Ignored</option>
               </select>
-              <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-ink-500" />
+              <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-fg-subtle" />
             </div>
             {candidate.status !== 'IGNORED' ? (
               <IgnoreConfirmButton
@@ -415,7 +416,7 @@ function CandidateRow({
                 disabled={unignoring}
                 title="Restore candidate (re-enables draft generation)"
                 aria-label="Restore candidate"
-                className="flex h-7 w-7 items-center justify-center rounded-md text-ink-400 transition-colors hover:bg-white/[0.06] hover:text-ink-100 disabled:cursor-not-allowed disabled:opacity-40"
+                className="flex h-7 w-7 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-fg-strong/[0.06] hover:text-fg-strong disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <Eye className="h-3.5 w-3.5" />
               </button>
@@ -429,7 +430,7 @@ function CandidateRow({
           <tr>
             <td
               colSpan={7}
-              className="border-b border-white/[0.04] bg-ink-950/40"
+              className="border-b border-line-soft bg-surface-base/40"
             >
               <ThreadView threadId={candidate.threads[0].id} />
             </td>
@@ -455,25 +456,25 @@ function IgnoreConfirmButton({
           <button
             disabled={disabled}
             aria-label="Ignore candidate"
-            className="flex h-7 w-7 items-center justify-center rounded-md text-ink-400 transition-colors hover:bg-rose-500/15 hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-40"
+            className="flex h-7 w-7 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-rose-500/15 hover:text-rose-700 dark:hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-40"
           >
             <EyeOff className="h-3.5 w-3.5" />
           </button>
         </AlertDialog.Trigger>
       </Tooltip>
       <AlertDialog.Portal>
-        <AlertDialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-fade-in" />
-        <AlertDialog.Content className="fixed left-1/2 top-1/2 z-50 w-[440px] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-white/[0.08] bg-ink-900/95 p-6 shadow-2xl backdrop-blur-xl data-[state=open]:animate-fade-in">
-          <AlertDialog.Title className="font-display text-[16px] font-semibold text-white">
+        <AlertDialog.Overlay className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm data-[state=open]:animate-fade-in" />
+        <AlertDialog.Content className="fixed left-1/2 top-1/2 z-50 w-[440px] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-line bg-surface-elevated/95 p-6 shadow-2xl backdrop-blur-xl data-[state=open]:animate-fade-in">
+          <AlertDialog.Title className="font-display text-[16px] font-semibold text-fg-strong">
             Ignore {candidateName}?
           </AlertDialog.Title>
-          <AlertDialog.Description className="mt-2 text-[13.5px] leading-relaxed text-ink-300">
+          <AlertDialog.Description className="mt-2 text-[13.5px] leading-relaxed text-fg-muted">
             They'll be hidden from the dashboard and any pending drafts will be
             discarded. You can restore them at any time.
           </AlertDialog.Description>
           <div className="mt-6 flex justify-end gap-2">
             <AlertDialog.Cancel asChild>
-              <button className="rounded-lg bg-white/[0.04] px-4 py-2 text-[13px] font-medium text-ink-200 transition-colors hover:bg-white/[0.08]">
+              <button className="rounded-lg bg-fg-strong/[0.05] px-4 py-2 text-[13px] font-medium text-fg-default transition-colors hover:bg-fg-strong/[0.09]">
                 Cancel
               </button>
             </AlertDialog.Cancel>

@@ -83,21 +83,21 @@ function DraftListRow({
       className={cn(
         'group flex w-full items-center gap-3 border-l-2 px-4 py-3 text-left transition-colors',
         active
-          ? 'border-accent-400 bg-accent-500/[0.06]'
+          ? 'border-accent-400 bg-accent-500/[0.08]'
           : focused
-            ? 'border-white/[0.16] bg-white/[0.025]'
-            : 'border-transparent hover:bg-white/[0.02]'
+            ? 'border-line-strong bg-fg-strong/[0.03]'
+            : 'border-transparent hover:bg-fg-strong/[0.02]'
       )}
     >
       <div
         className={cn(
-          'flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-semibold text-white ring-1 ring-inset ring-white/[0.08]',
+          'flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-semibold text-white ring-1 ring-inset ring-fg-strong/[0.08]',
           draft.classification === 'INTERESTED' &&
-            'bg-gradient-to-br from-emerald-500/70 to-emerald-700/70',
+            'bg-gradient-to-br from-emerald-500/80 to-emerald-700/80',
           draft.classification === 'NOT_INTERESTED' &&
-            'bg-gradient-to-br from-rose-500/70 to-rose-700/70',
+            'bg-gradient-to-br from-rose-500/80 to-rose-700/80',
           draft.classification === 'NEUTRAL' &&
-            'bg-gradient-to-br from-accent-500/70 to-accent-700/70'
+            'bg-gradient-to-br from-accent-500/80 to-accent-700/80'
         )}
       >
         {initialsFor(name, candidate?.email)}
@@ -107,24 +107,24 @@ function DraftListRow({
           <p
             className={cn(
               'truncate text-[13px] font-medium',
-              active ? 'text-white' : 'text-ink-100'
+              active ? 'text-fg-strong' : 'text-fg-default'
             )}
           >
             {name}
           </p>
-          <span className="flex-shrink-0 font-mono text-[10.5px] tabular-nums text-ink-500">
+          <span className="flex-shrink-0 font-mono text-[10.5px] tabular-nums text-fg-subtle">
             {formatTimeAgo(draft.createdAt)}
           </span>
         </div>
-        <p className="mt-0.5 truncate text-[12px] text-ink-300">
+        <p className="mt-0.5 truncate text-[12px] text-fg-muted">
           {draft.subject}
         </p>
-        <p className="mt-0.5 truncate text-[11.5px] text-ink-500">{preview}</p>
+        <p className="mt-0.5 truncate text-[11.5px] text-fg-subtle">{preview}</p>
       </div>
       <ChevronRight
         className={cn(
           'h-4 w-4 flex-shrink-0 transition-all',
-          active ? 'text-accent-300' : 'text-ink-600 group-hover:text-ink-300'
+          active ? 'text-accent-600 dark:text-accent-300' : 'text-fg-subtle group-hover:text-fg-muted'
         )}
       />
     </button>
@@ -155,14 +155,14 @@ function EmptyDraftsState({ status }: { status: DraftStatus }) {
 
   const Icon = config.icon;
   return (
-    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-white/[0.08] bg-ink-900/30 px-6 py-16 text-center">
-      <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-white/[0.04] text-accent-300 ring-1 ring-inset ring-white/[0.06]">
+    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-line-strong bg-surface-raised/40 px-6 py-16 text-center">
+      <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-fg-strong/[0.04] text-accent-600 ring-1 ring-inset ring-fg-strong/[0.06] dark:text-accent-300">
         <Icon className="h-5 w-5" />
       </div>
-      <p className="font-display text-[15px] font-medium text-ink-100">
+      <p className="font-display text-[15px] font-medium text-fg-strong">
         {config.title}
       </p>
-      <p className="mt-1.5 max-w-md text-[13px] leading-relaxed text-ink-400">
+      <p className="mt-1.5 max-w-md text-[13px] leading-relaxed text-fg-muted">
         {config.description}
       </p>
     </div>
@@ -191,12 +191,12 @@ function ShortcutsDialog({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/60 backdrop-blur-sm data-[state=open]:animate-fade-in" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-[70] w-[480px] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-white/[0.08] bg-ink-900/95 p-6 shadow-2xl backdrop-blur-xl data-[state=open]:animate-fade-in">
-          <Dialog.Title className="font-display text-[16px] font-semibold text-white">
+        <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/50 backdrop-blur-sm data-[state=open]:animate-fade-in" />
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-[70] w-[480px] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-line bg-surface-elevated/95 p-6 shadow-2xl backdrop-blur-xl data-[state=open]:animate-fade-in">
+          <Dialog.Title className="font-display text-[16px] font-semibold text-fg-strong">
             Keyboard shortcuts
           </Dialog.Title>
-          <Dialog.Description className="mt-1 text-[12.5px] text-ink-400">
+          <Dialog.Description className="mt-1 text-[12.5px] text-fg-muted">
             Available on the Drafts tab and while the review pane is open.
           </Dialog.Description>
           <div className="mt-5 space-y-2.5">
@@ -205,14 +205,14 @@ function ShortcutsDialog({
                 key={s.label}
                 className="flex items-center justify-between gap-3"
               >
-                <span className="text-[13px] text-ink-200">{s.label}</span>
+                <span className="text-[13px] text-fg-default">{s.label}</span>
                 <div className="flex items-center gap-1">
                   {s.keys.map((k, i) => (
                     <span key={i} className="flex items-center gap-1">
                       {i > 0 && (
-                        <span className="text-[11px] text-ink-500">or</span>
+                        <span className="text-[11px] text-fg-subtle">or</span>
                       )}
-                      <kbd className="rounded-md border border-white/[0.08] bg-ink-950/80 px-2 py-0.5 font-mono text-[11px] font-medium text-ink-100 shadow-sm">
+                      <kbd className="rounded-md border border-line bg-surface-base px-2 py-0.5 font-mono text-[11px] font-medium text-fg-strong shadow-sm">
                         {k}
                       </kbd>
                     </span>
@@ -223,7 +223,7 @@ function ShortcutsDialog({
           </div>
           <div className="mt-6 flex justify-end">
             <Dialog.Close asChild>
-              <button className="rounded-lg bg-white/[0.04] px-4 py-2 text-[13px] font-medium text-ink-200 transition-colors hover:bg-white/[0.08]">
+              <button className="rounded-lg bg-fg-strong/[0.05] px-4 py-2 text-[13px] font-medium text-fg-default transition-colors hover:bg-fg-strong/[0.09]">
                 Got it
               </button>
             </Dialog.Close>
@@ -527,11 +527,11 @@ export default function EmailDrafts({ mailboxId: _mailboxId }: Props) {
 
   if (error) {
     return (
-      <div className="rounded-xl border border-white/[0.06] bg-ink-900/60 p-10 text-center">
-        <p className="mb-3 text-rose-300">Failed to load drafts</p>
+      <div className="rounded-xl border border-line bg-surface-raised p-10 text-center">
+        <p className="mb-3 text-rose-700 dark:text-rose-300">Failed to load drafts</p>
         <button
           onClick={() => refetch()}
-          className="mx-auto flex items-center gap-2 rounded-lg bg-white/[0.04] px-3 py-1.5 text-[13px] text-ink-200 transition-colors hover:bg-white/[0.08]"
+          className="mx-auto flex items-center gap-2 rounded-lg bg-fg-strong/[0.05] px-3 py-1.5 text-[13px] text-fg-default transition-colors hover:bg-fg-strong/[0.09]"
         >
           <RefreshCw className="h-4 w-4" /> Retry
         </button>
@@ -543,12 +543,12 @@ export default function EmailDrafts({ mailboxId: _mailboxId }: Props) {
     <div className="space-y-6">
       <div className="flex items-baseline justify-between gap-4">
         <div>
-          <h1 className="font-display text-2xl font-semibold tracking-tight text-white sm:text-[28px]">
+          <h1 className="font-display text-2xl font-semibold tracking-tight text-fg-strong sm:text-[28px]">
             Email drafts
           </h1>
-          <p className="mt-1 text-[13.5px] text-ink-400">
+          <p className="mt-1 text-[13.5px] text-fg-muted">
             Review, edit, and send AI-drafted replies. Press{' '}
-            <kbd className="rounded border border-white/[0.08] bg-ink-950/80 px-1.5 py-0.5 font-mono text-[10.5px] text-ink-200">
+            <kbd className="rounded border border-line bg-surface-base px-1.5 py-0.5 font-mono text-[10.5px] text-fg-default">
               ?
             </kbd>{' '}
             for shortcuts.
@@ -558,7 +558,7 @@ export default function EmailDrafts({ mailboxId: _mailboxId }: Props) {
 
       {/* Status segmented control */}
       <div className="flex items-center justify-between gap-3">
-        <div className="inline-flex rounded-lg border border-white/[0.06] bg-ink-900/60 p-1">
+        <div className="inline-flex rounded-lg border border-line bg-surface-raised/70 p-1">
           {statusTabs.map((tab) => (
             <button
               key={tab.id}
@@ -570,23 +570,23 @@ export default function EmailDrafts({ mailboxId: _mailboxId }: Props) {
               className={cn(
                 'rounded-md px-3.5 py-1.5 text-[13px] font-medium transition-all',
                 activeStatus === tab.id
-                  ? 'bg-white/[0.08] text-white shadow-sm'
-                  : 'text-ink-400 hover:text-ink-200'
+                  ? 'bg-fg-strong/[0.08] text-fg-strong shadow-sm'
+                  : 'text-fg-muted hover:text-fg-default'
               )}
             >
               {tab.label}
             </button>
           ))}
         </div>
-        <span className="font-mono text-[12px] tabular-nums text-ink-500">
+        <span className="font-mono text-[12px] tabular-nums text-fg-subtle">
           {total} {activeStatus.toLowerCase()}
         </span>
       </div>
 
       {/* Flat list */}
-      <div className="overflow-hidden rounded-xl border border-white/[0.06] bg-ink-900/40">
+      <div className="overflow-hidden rounded-xl border border-line bg-surface-raised/60">
         {isLoading ? (
-          <div className="divide-y divide-white/[0.04]">
+          <div className="divide-y divide-line-soft">
             {Array.from({ length: 5 }).map((_, i) => (
               <div key={i} className="h-16 skeleton" />
             ))}
@@ -594,7 +594,7 @@ export default function EmailDrafts({ mailboxId: _mailboxId }: Props) {
         ) : drafts.length === 0 ? (
           <EmptyDraftsState status={activeStatus} />
         ) : (
-          <div className="divide-y divide-white/[0.04]">
+          <div className="divide-y divide-line-soft">
             {drafts.map((draft, idx) => (
               <DraftListRow
                 key={draft.id}
@@ -630,7 +630,7 @@ export default function EmailDrafts({ mailboxId: _mailboxId }: Props) {
       <button
         onClick={() => setShortcutsOpen(true)}
         aria-label="Show keyboard shortcuts"
-        className="fixed bottom-5 right-5 z-30 flex h-10 w-10 items-center justify-center rounded-full border border-white/[0.08] bg-ink-900/90 text-ink-300 shadow-lg backdrop-blur transition-all hover:scale-105 hover:bg-ink-800 hover:text-ink-100"
+        className="fixed bottom-5 right-5 z-30 flex h-10 w-10 items-center justify-center rounded-full border border-line bg-surface-elevated/90 text-fg-muted shadow-lg backdrop-blur transition-all hover:scale-105 hover:bg-surface-elevated hover:text-fg-strong"
       >
         <Keyboard className="h-4 w-4" />
       </button>
