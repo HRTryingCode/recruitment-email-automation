@@ -123,14 +123,27 @@ export async function handleCallback(code: string, mailboxId?: string): Promise<
     userInfo?.name && userInfo.name.trim().length > 0 ? userInfo.name.trim() : emailAddress;
 
   const encryptedCreds = serializeCredentials(tokens as Record<string, unknown>);
+
+  // Decide whether this is a fresh connect or a credential refresh. Refresh is
+  // when the row already exists, isActive, AND has a live Gmail watch — in
+  // that case the prior baseline is still meaningful and a backfill may be
+  // in flight, so overwriting lastHistoryId would lose messages between the
+  // old baseline and now. Only reset baseline on a genuinely-new connect.
+  const existing = await prisma.mailbox.findUnique({ where: { emailAddress } });
+  const isRefresh =
+    !!existing &&
+    existing.isActive &&
+    !!existing.watchExpiry &&
+    existing.watchExpiry.getTime() > Date.now();
+
   const mailbox = await prisma.mailbox.upsert({
     where: { emailAddress },
     update: {
       credentials: encryptedCreds,
       displayName: resolvedDisplayName,
       isActive: true,
-      // Reset historyId baseline on reconnect so the next webhook starts fresh.
-      lastHistoryId: baselineHistoryId,
+      // Preserve baseline on refresh; reset only on a fresh (re)connect.
+      ...(isRefresh ? {} : { lastHistoryId: baselineHistoryId }),
       updatedAt: new Date(),
     },
     create: {
@@ -145,7 +158,12 @@ export async function handleCallback(code: string, mailboxId?: string): Promise<
 
   await logEvent(
     'MAILBOX_CONNECTED',
-    { mailboxId: mailbox.id, emailAddress, displayName: resolvedDisplayName },
+    {
+      mailboxId: mailbox.id,
+      emailAddress,
+      displayName: resolvedDisplayName,
+      mode: isRefresh ? 'refresh' : 'fresh',
+    },
     'INFO'
   );
   return mailbox;
@@ -316,7 +334,24 @@ export function pickHigherPriorityStatus(current: string, next: string): string 
   return nxt > cur ? next : current;
 }
 
-const MAX_THREAD_CONTEXT_MESSAGES = 5;
+// Thread-context window for the classifier. We send the first N (the original
+// sourcing email + earliest replies, which carry intent) plus the last N
+// (the most recent activity) so Claude sees the conversation arc instead of a
+// recency-biased slice. Dedup if the thread is shorter than the sum.
+const THREAD_CONTEXT_HEAD = 4;
+const THREAD_CONTEXT_TAIL = 4;
+
+/**
+ * Pick the first HEAD and last TAIL messages from a chronologically-sorted
+ * (oldest → newest) array, deduplicating any overlap. Returns messages in
+ * chronological order. Used for the classifier prompt context.
+ */
+export function pickHeadTail<T>(messagesAsc: T[], head: number, tail: number): T[] {
+  if (messagesAsc.length <= head + tail) return messagesAsc;
+  const headSlice = messagesAsc.slice(0, head);
+  const tailSlice = messagesAsc.slice(-tail);
+  return [...headSlice, ...tailSlice];
+}
 
 /**
  * Classify a newly-stored inbound message and create/update the associated
@@ -373,15 +408,22 @@ async function classifyAndDraft(opts: {
   });
 
   // Previous messages = everything except the one we're classifying right now.
-  const previousMessages = allMessages
-    .filter((m) => m.externalMessageId !== parsed.externalMessageId)
-    .slice(-MAX_THREAD_CONTEXT_MESSAGES)
-    .map((m) => ({
-      fromAddress: m.fromAddress,
-      fromName: m.fromName,
-      bodyText: m.bodyText,
-      receivedAt: m.receivedAt,
-    }));
+  // Take first 4 + last 4 (deduped if the thread is shorter) so Claude sees
+  // both the conversation's origin (sourcing email, early replies) and the
+  // most recent activity, rather than a purely-recent slice.
+  const priorAsc = allMessages.filter(
+    (m) => m.externalMessageId !== parsed.externalMessageId
+  );
+  const previousMessages = pickHeadTail(
+    priorAsc,
+    THREAD_CONTEXT_HEAD,
+    THREAD_CONTEXT_TAIL
+  ).map((m) => ({
+    fromAddress: m.fromAddress,
+    fromName: m.fromName,
+    bodyText: m.bodyText,
+    receivedAt: m.receivedAt,
+  }));
 
   // Existing draft check happens BEFORE we burn Claude tokens — if there is
   // already a PENDING/APPROVED draft on this thread, we just log + bail.
@@ -835,14 +877,32 @@ export async function syncIncremental(
       pageToken = historyRes.data.nextPageToken ?? undefined;
     } while (pageToken);
   } catch (err) {
-    // Gmail returns 404 if startHistoryId is too old (>7d). Fall back to full sync.
-    const errObj = err as { code?: number; status?: number };
-    if (errObj?.code === 404 || errObj?.status === 404) {
-      console.warn(
-        `[Gmail] historyId expired for ${mailbox.emailAddress}, falling back to full sync`
+    // Gmail returns 404 if startHistoryId is too old (Gmail retains ~30d of
+    // history but in practice paused/idle mailboxes hit this earlier). Fall
+    // back to the 7-day full sync — syncMessages updates mailbox.lastHistoryId
+    // to the new baseline after it completes, so subsequent webhooks run
+    // incrementally again.
+    const errObj = err as {
+      code?: number;
+      status?: number;
+      response?: { status?: number };
+    };
+    const status = errObj?.code ?? errObj?.status ?? errObj?.response?.status;
+    if (status === 404) {
+      await logEvent(
+        'HISTORY_ID_EXPIRED',
+        {
+          mailboxId,
+          emailAddress: mailbox.emailAddress,
+          startHistoryId,
+        },
+        'WARN'
       );
-      await syncMessages(mailboxId);
-      return 0;
+      console.warn(
+        `[Gmail] historyId expired for ${mailbox.emailAddress} (startHistoryId=${startHistoryId}), falling back to full sync`
+      );
+      const result = await syncMessages(mailboxId);
+      return result.messagesStored;
     }
     throw err;
   }
@@ -1190,6 +1250,51 @@ export async function sendDraft(mailboxId: string, externalDraftId: string): Pro
   });
 }
 
+// In-memory idempotency cache for Pub/Sub deliveries. Pub/Sub guarantees
+// at-least-once delivery, so the same (mailboxId, historyId) pair routinely
+// arrives 2–3× within seconds. A short-lived LRU lets us skip the duplicate
+// work without a DB round-trip. Best-effort: a process restart or multi-
+// instance deploy weakens the guarantee, but the common case (retries hitting
+// the same warm process) is eliminated.
+const WEBHOOK_IDEMPOTENCY_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const WEBHOOK_IDEMPOTENCY_MAX_ENTRIES = 1000;
+const webhookIdempotencyCache = new Map<string, number>();
+
+export function isWebhookDuplicate(
+  mailboxId: string,
+  historyId: string,
+  now: number = Date.now()
+): boolean {
+  const key = `${mailboxId}:${historyId}`;
+  const seenAt = webhookIdempotencyCache.get(key);
+  if (seenAt !== undefined && now - seenAt < WEBHOOK_IDEMPOTENCY_TTL_MS) {
+    // Bump recency by reinserting (Map preserves insertion order → LRU).
+    webhookIdempotencyCache.delete(key);
+    webhookIdempotencyCache.set(key, seenAt);
+    return true;
+  }
+  webhookIdempotencyCache.set(key, now);
+  // Drop expired entries first, then trim to cap.
+  for (const [k, ts] of webhookIdempotencyCache) {
+    if (now - ts >= WEBHOOK_IDEMPOTENCY_TTL_MS) {
+      webhookIdempotencyCache.delete(k);
+    } else {
+      break; // Map iteration is insertion-ordered → oldest first.
+    }
+  }
+  while (webhookIdempotencyCache.size > WEBHOOK_IDEMPOTENCY_MAX_ENTRIES) {
+    const oldestKey = webhookIdempotencyCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    webhookIdempotencyCache.delete(oldestKey);
+  }
+  return false;
+}
+
+// Test-only: reset cache between unit tests.
+export function _resetWebhookIdempotencyCache(): void {
+  webhookIdempotencyCache.clear();
+}
+
 export async function processWebhook(data: { message: { data: string } }): Promise<void> {
   try {
     const decoded = Buffer.from(data.message.data, 'base64').toString('utf-8');
@@ -1201,6 +1306,17 @@ export async function processWebhook(data: { message: { data: string } }): Promi
 
     if (!mailbox) {
       console.warn(`[Gmail Webhook] No mailbox found for ${notification.emailAddress}`);
+      return;
+    }
+
+    // Pub/Sub at-least-once: skip if we've already processed this exact
+    // (mailbox, historyId) in the last 5 minutes.
+    if (isWebhookDuplicate(mailbox.id, notification.historyId)) {
+      await logEvent(
+        'WEBHOOK_DUPLICATE_SKIPPED',
+        { mailboxId: mailbox.id, historyId: notification.historyId },
+        'INFO'
+      );
       return;
     }
 

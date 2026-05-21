@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../db/client';
 import { createError } from '../middleware/error';
 import { logEvent } from '../services/monitoring.service';
+import { serializeEmailMessages } from '../lib/emailMessageSerializer';
 import { z } from 'zod';
 
 const router = Router();
@@ -133,7 +134,14 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
       return next(createError('Candidate not found', 404));
     }
 
-    res.json({ success: true, data: candidate });
+    const data = {
+      ...candidate,
+      threads: candidate.threads.map((t) => ({
+        ...t,
+        messages: serializeEmailMessages(t.messages),
+      })),
+    };
+    res.json({ success: true, data });
   } catch (err) {
     next(err);
   }
