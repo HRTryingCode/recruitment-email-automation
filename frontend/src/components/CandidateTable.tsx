@@ -27,6 +27,7 @@ import {
   Users,
 } from 'lucide-react';
 import { StatusBadge, type StatusVariant } from './ui/StatusBadge';
+import { Tooltip } from './ui/Tooltip';
 
 function ReplyStatusBadge({ candidate }: { candidate: Candidate }) {
   const derived: NonNullable<Candidate['replyStatus']> =
@@ -449,16 +450,17 @@ function IgnoreConfirmButton({
 }) {
   return (
     <AlertDialog.Root>
-      <AlertDialog.Trigger asChild>
-        <button
-          disabled={disabled}
-          title="Ignore candidate (mute future drafts; reversible)"
-          aria-label="Ignore candidate"
-          className="flex h-7 w-7 items-center justify-center rounded-md text-ink-400 transition-colors hover:bg-rose-500/15 hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          <EyeOff className="h-3.5 w-3.5" />
-        </button>
-      </AlertDialog.Trigger>
+      <Tooltip content="Ignore candidate (mute future drafts; reversible)">
+        <AlertDialog.Trigger asChild>
+          <button
+            disabled={disabled}
+            aria-label="Ignore candidate"
+            className="flex h-7 w-7 items-center justify-center rounded-md text-ink-400 transition-colors hover:bg-rose-500/15 hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <EyeOff className="h-3.5 w-3.5" />
+          </button>
+        </AlertDialog.Trigger>
+      </Tooltip>
       <AlertDialog.Portal>
         <AlertDialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-fade-in" />
         <AlertDialog.Content className="fixed left-1/2 top-1/2 z-50 w-[440px] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-white/[0.08] bg-ink-900/95 p-6 shadow-2xl backdrop-blur-xl data-[state=open]:animate-fade-in">
