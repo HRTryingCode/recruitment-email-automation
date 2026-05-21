@@ -1,9 +1,11 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMemo, useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   fetchCandidates,
   fetchMailboxes,
   fetchDrafts,
   fetchSyncHealth,
+  approveDraft,
   type Candidate,
   type Mailbox,
   type EmailDraft,
@@ -11,180 +13,225 @@ import {
 } from '../lib/api';
 import { cn } from '../lib/utils';
 import {
+  toastSuccess,
+  toastError,
+  extractApiErrorMessage,
+} from '../lib/toast';
+import {
   Mail,
-  Users,
-  Send,
   Clock,
   AlertCircle,
   FileText,
   AlertTriangle,
   Activity,
   Inbox,
-  ArrowUpRight,
   ChevronRight,
+  ChevronDown,
   Sparkles,
+  Check,
+  CheckCircle2,
 } from 'lucide-react';
-import { StatusBadge } from './ui/StatusBadge';
 
 interface Props {
   mailboxId?: string;
   onRefetchMailboxes: () => void;
   onSwitchToDrafts?: () => void;
+  onSwitchToCandidates?: (filter?: string) => void;
   onOpenDraftForCandidate?: (candidateId: string) => void;
+  onOpenDraft?: (draftId: string) => void;
 }
 
-// ---------- Metric ----------
+// ---------- Action pill (the new hero) ----------
 
-function MetricCard({
+function ActionPill({
+  count,
   label,
-  value,
-  icon: Icon,
-  accent,
-  loading,
   hint,
+  icon: Icon,
+  tone,
+  loading,
+  onClick,
+  testId,
 }: {
+  count: number;
   label: string;
-  value: number | string;
+  hint: string;
   icon: React.ComponentType<{ className?: string }>;
-  accent: string;
+  tone: 'accent' | 'amber' | 'emerald';
   loading?: boolean;
-  hint?: string;
+  onClick?: () => void;
+  testId?: string;
 }) {
+  const toneRing = {
+    accent: 'hover:border-accent-400/40 group-hover:text-accent-200',
+    amber: 'hover:border-amber-400/40 group-hover:text-amber-200',
+    emerald: 'hover:border-emerald-400/40 group-hover:text-emerald-200',
+  }[tone];
+  const toneIcon = {
+    accent: 'bg-accent-500/12 text-accent-300 ring-accent-500/20',
+    amber: 'bg-amber-500/12 text-amber-300 ring-amber-500/20',
+    emerald: 'bg-emerald-500/12 text-emerald-300 ring-emerald-500/20',
+  }[tone];
+  const toneNumber = {
+    accent: 'text-white group-hover:text-accent-50',
+    amber: 'text-white group-hover:text-amber-50',
+    emerald: 'text-white group-hover:text-emerald-50',
+  }[tone];
+
   return (
-    <div className="group relative overflow-hidden rounded-xl border border-white/[0.06] bg-ink-900/60 p-5 transition-all hover:border-white/[0.1]">
-      <div className="flex items-start justify-between">
-        <div className="min-w-0">
-          <p className="text-[11px] font-medium uppercase tracking-[0.1em] text-ink-400">
-            {label}
-          </p>
+    <button
+      data-testid={testId}
+      onClick={onClick}
+      className={cn(
+        'group relative flex w-full items-center gap-4 overflow-hidden rounded-2xl border border-white/[0.06] bg-ink-900/60 p-5 text-left transition-all hover:-translate-y-0.5 hover:bg-ink-900/80 hover:shadow-card-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/40',
+        toneRing
+      )}
+    >
+      <div
+        className={cn(
+          'flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl ring-1 ring-inset transition-transform group-hover:scale-105',
+          toneIcon
+        )}
+      >
+        <Icon className="h-[18px] w-[18px]" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-2">
           {loading ? (
-            <div className="mt-3 h-8 w-16 skeleton" />
+            <div className="h-8 w-12 skeleton" />
           ) : (
-            <p className="mt-2 font-display text-3xl font-semibold tabular-nums tracking-tight text-white">
-              {value}
-            </p>
+            <span
+              className={cn(
+                'font-display text-[34px] font-semibold leading-none tabular-nums tracking-tight transition-colors',
+                toneNumber
+              )}
+            >
+              {count}
+            </span>
           )}
-          {hint && !loading && (
-            <p className="mt-1 text-[11px] text-ink-500">{hint}</p>
-          )}
+          <span className="text-[13px] font-medium text-ink-200">{label}</span>
         </div>
-        <div
-          className={cn(
-            'flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg ring-1 ring-inset',
-            accent
-          )}
+        <p className="mt-1.5 text-[11.5px] text-ink-400">{hint}</p>
+      </div>
+      <ChevronRight className="h-4 w-4 flex-shrink-0 text-ink-500 transition-all group-hover:translate-x-0.5 group-hover:text-ink-200" />
+    </button>
+  );
+}
+
+// ---------- Quick triage row ----------
+
+function initialsFor(name?: string, email?: string): string {
+  const seed = (name || email || '?').trim();
+  return (
+    seed
+      .split(/\s+/)
+      .map((s) => s[0])
+      .slice(0, 2)
+      .join('')
+      .toUpperCase() || '?'
+  );
+}
+
+function firstNonEmptyLine(body: string): string {
+  return body.split('\n').find((l) => l.trim().length > 0) ?? '';
+}
+
+function QuickTriageRow({
+  draft,
+  onApprove,
+  onOpen,
+  approving,
+}: {
+  draft: EmailDraft;
+  onApprove: (id: string) => void;
+  onOpen: (id: string) => void;
+  approving: boolean;
+}) {
+  const candidate = draft.thread?.candidate;
+  const name = candidate?.name ?? 'Unknown candidate';
+  const subjectLine = firstNonEmptyLine(draft.bodyText) || draft.subject;
+  return (
+    <div
+      className="group flex cursor-pointer items-center gap-3 border-b border-white/[0.04] px-4 py-3 transition-colors last:border-b-0 hover:bg-white/[0.02]"
+      onClick={() => onOpen(draft.id)}
+    >
+      <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-accent-500/70 to-accent-700/70 text-[11px] font-semibold text-white ring-1 ring-inset ring-white/[0.08]">
+        {initialsFor(name, candidate?.email)}
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-[13px] font-medium text-white">{name}</p>
+        <p className="truncate text-[12px] text-ink-400">{subjectLine}</p>
+      </div>
+      <div
+        className="flex flex-shrink-0 items-center gap-1"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          onClick={() => onApprove(draft.id)}
+          disabled={approving}
+          aria-label={`Approve draft for ${name}`}
+          className="flex items-center gap-1.5 rounded-md bg-emerald-500/10 px-2.5 py-1 text-[12px] font-medium text-emerald-300 ring-1 ring-inset ring-emerald-500/20 transition-colors hover:bg-emerald-500/15 hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <Icon className="h-4 w-4" />
-        </div>
+          <Check className="h-3.5 w-3.5" />
+          Approve
+        </button>
+        <button
+          onClick={() => onOpen(draft.id)}
+          aria-label={`Open draft for ${name} in pane`}
+          className="flex h-7 w-7 items-center justify-center rounded-md text-ink-500 transition-colors hover:bg-white/[0.06] hover:text-ink-100"
+        >
+          <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+        </button>
       </div>
     </div>
   );
 }
 
-// ---------- Account Pipeline ----------
+// ---------- Account Pipelines (condensed row) ----------
 
-function AccountCard({
+function AccountRow({
   mailbox,
-  candidates,
-  drafts,
+  candidateCount,
+  pendingDraftCount,
   onSwitchToDrafts,
 }: {
   mailbox: Mailbox;
-  candidates: Candidate[];
-  drafts: EmailDraft[];
+  candidateCount: number;
+  pendingDraftCount: number;
   onSwitchToDrafts?: () => void;
 }) {
-  const interested = candidates.filter((c) => c.status === 'INTERESTED').length;
-  const notInterested = candidates.filter((c) => c.status === 'NOT_INTERESTED').length;
-  const replied = candidates.filter((c) => c.status === 'REPLIED').length;
-  const pending = candidates.filter(
-    (c) => c.status === 'PENDING' || c.status === 'NEUTRAL'
-  ).length;
-
-  const pendingDraftCount = drafts.filter((d) => {
-    const threadMailbox = d.thread?.mailbox;
-    return d.status === 'PENDING' && threadMailbox?.id === mailbox.id;
-  }).length;
-
-  const total = candidates.length;
-
-  function Bar({ count, color }: { count: number; color: string }) {
-    if (total === 0 || count === 0) return null;
-    return (
-      <div
-        className={cn('h-full', color)}
-        style={{ width: `${Math.max(2, (count / total) * 100)}%` }}
-        title={`${count}`}
-      />
-    );
-  }
-
   return (
-    <div className="group relative space-y-4 overflow-hidden rounded-xl border border-white/[0.06] bg-ink-900/60 p-5 transition-all hover:border-white/[0.1]">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-accent-500/10 text-accent-300 ring-1 ring-inset ring-accent-500/20">
-            <Mail className="h-4 w-4" />
-          </div>
-          <div className="min-w-0">
-            <p className="truncate font-mono text-[13px] font-medium text-white">
-              {mailbox.emailAddress}
-            </p>
-            <p className="mt-0.5 text-[11px] text-ink-400">
-              {total} candidate{total !== 1 ? 's' : ''} tracked
-            </p>
-          </div>
-        </div>
-        {pendingDraftCount > 0 && (
-          <button
-            onClick={onSwitchToDrafts}
-            className="flex flex-shrink-0 items-center gap-1 rounded-full bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-300 ring-1 ring-inset ring-amber-500/20 transition-colors hover:bg-amber-500/15"
-          >
-            <AlertCircle className="h-3 w-3" />
-            {pendingDraftCount}
-          </button>
-        )}
+    <div
+      className="group flex items-center gap-3 border-b border-white/[0.04] px-4 py-3 transition-colors last:border-b-0 hover:bg-white/[0.02]"
+    >
+      <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-accent-500/10 text-accent-300 ring-1 ring-inset ring-accent-500/20">
+        <Mail className="h-4 w-4" />
       </div>
-
-      <div className="space-y-2.5">
-        <div className="flex h-1.5 gap-[2px] overflow-hidden rounded-full bg-white/[0.04]">
-          <Bar count={interested} color="bg-emerald-400" />
-          <Bar count={pending} color="bg-amber-400" />
-          <Bar count={replied} color="bg-sky-400" />
-          <Bar count={notInterested} color="bg-rose-400" />
-        </div>
-        <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-ink-400">
-          {interested > 0 && (
-            <span className="flex items-center gap-1.5">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400" />
-              {interested} interested
-            </span>
-          )}
-          {pending > 0 && (
-            <span className="flex items-center gap-1.5">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400" />
-              {pending} pending
-            </span>
-          )}
-          {replied > 0 && (
-            <span className="flex items-center gap-1.5">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-sky-400" />
-              {replied} replied
-            </span>
-          )}
-          {notInterested > 0 && (
-            <span className="flex items-center gap-1.5">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-rose-400" />
-              {notInterested} declined
-            </span>
-          )}
-        </div>
+      <div className="min-w-0 flex-1">
+        <p className="truncate font-mono text-[13px] font-medium text-white">
+          {mailbox.emailAddress}
+        </p>
+        <p className="mt-0.5 text-[11.5px] text-ink-400">
+          <span className="tabular-nums">{candidateCount}</span>{' '}
+          candidate{candidateCount !== 1 ? 's' : ''}
+          <span className="mx-1.5 text-ink-700">·</span>
+          <span className="tabular-nums">{pendingDraftCount}</span> pending draft{pendingDraftCount !== 1 ? 's' : ''}
+        </p>
       </div>
+      {pendingDraftCount > 0 && (
+        <button
+          onClick={onSwitchToDrafts}
+          className="flex flex-shrink-0 items-center gap-1.5 rounded-md bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-300 ring-1 ring-inset ring-amber-500/20 transition-colors hover:bg-amber-500/15"
+        >
+          <AlertCircle className="h-3 w-3" />
+          Review
+        </button>
+      )}
     </div>
   );
 }
 
-// ---------- Sync Health ----------
+// ---------- Mailbox health helpers ----------
 
 function watchExpiryTone(hours: number | null): string {
   if (hours === null) return 'text-ink-500';
@@ -201,130 +248,181 @@ function formatWatchExpiry(h: number | null): string {
   return `${Math.round(h / 24)}d`;
 }
 
-function MailboxHealthSection({
+function summarizeHealth(data: MailboxSyncHealth[]): {
+  tone: 'emerald' | 'amber' | 'rose' | 'neutral';
+  label: string;
+} {
+  if (data.length === 0) return { tone: 'neutral', label: 'No mailbox health data' };
+  const expiringSoon = data.filter(
+    (d) => d.watchExpiresInHours !== null && d.watchExpiresInHours < 24
+  ).length;
+  const drift = data.some((d) => d.lastReconciliationFoundMissing > 0);
+  const webhookErrors = data.some((d) => d.webhookErrorsLast24h > 0);
+
+  if (webhookErrors) return { tone: 'rose', label: 'Webhook errors today' };
+  if (drift) return { tone: 'amber', label: 'Drift detected' };
+  if (expiringSoon > 0)
+    return {
+      tone: 'amber',
+      label: `${expiringSoon} watch${expiringSoon === 1 ? '' : 'es'} expiring soon`,
+    };
+  return { tone: 'emerald', label: 'All mailboxes healthy' };
+}
+
+function HealthPill({
+  summary,
+}: {
+  summary: ReturnType<typeof summarizeHealth>;
+}) {
+  const toneClass = {
+    emerald: 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/20',
+    amber: 'bg-amber-500/10 text-amber-300 ring-amber-500/20',
+    rose: 'bg-rose-500/10 text-rose-300 ring-rose-500/20',
+    neutral: 'bg-white/[0.04] text-ink-300 ring-white/[0.06]',
+  }[summary.tone];
+  const Icon =
+    summary.tone === 'emerald'
+      ? CheckCircle2
+      : summary.tone === 'rose'
+        ? AlertCircle
+        : summary.tone === 'amber'
+          ? AlertTriangle
+          : Activity;
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11.5px] font-medium ring-1 ring-inset',
+        toneClass
+      )}
+    >
+      <Icon className="h-3 w-3" />
+      {summary.label}
+    </span>
+  );
+}
+
+function MailboxHealthAccordion({
   data,
   loading,
 }: {
   data: MailboxSyncHealth[];
   loading: boolean;
 }) {
+  const [open, setOpen] = useState(false);
   if (!loading && data.length === 0) return null;
-  const anyDrift = data.some((d) => d.lastReconciliationFoundMissing > 0);
-  const anyWebhookErrors = data.some((d) => d.webhookErrorsLast24h > 0);
 
   return (
-    <section>
-      <SectionHeader
-        icon={Activity}
-        iconClass="text-emerald-300 bg-emerald-500/10 ring-emerald-500/20"
-        title="Mailbox Health"
-        right={
-          <div className="flex items-center gap-1.5">
-            {anyDrift && (
-              <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300 ring-1 ring-inset ring-amber-500/20">
-                drift detected
-              </span>
-            )}
-            {anyWebhookErrors && (
-              <span className="rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300 ring-1 ring-inset ring-rose-500/20">
-                webhook errors today
-              </span>
-            )}
-          </div>
-        }
-      />
-      {loading ? (
-        <div className="h-24 skeleton rounded-xl" />
-      ) : (
-        <div className="overflow-hidden rounded-xl border border-white/[0.06] bg-ink-900/60">
-          <table className="w-full text-[13px]">
-            <thead>
-              <tr className="border-b border-white/[0.06] text-[11px] font-medium uppercase tracking-[0.08em] text-ink-400">
-                <th className="px-4 py-2.5 text-left">Mailbox</th>
-                <th className="px-4 py-2.5 text-left">Watch expires</th>
-                <th className="hidden px-4 py-2.5 text-left sm:table-cell">
-                  Msgs / 24h
-                </th>
-                <th className="hidden px-4 py-2.5 text-left md:table-cell">
-                  Last reconciled
-                </th>
-                <th className="px-4 py-2.5 text-left">Drift</th>
-                <th className="px-4 py-2.5 text-left">Webhook errors / 24h</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/[0.04]">
-              {data.map((row) => {
-                const driftTone =
-                  row.lastReconciliationFoundMissing > 0
-                    ? 'text-amber-300'
-                    : 'text-ink-500';
-                const webhookErrTone =
-                  row.webhookErrorsLast24h > 0
-                    ? 'text-rose-300'
-                    : 'text-ink-500';
-                const recon = row.lastReconciliationAt
-                  ? new Date(row.lastReconciliationAt).toLocaleString(undefined, {
-                      month: 'short',
-                      day: 'numeric',
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })
-                  : '—';
-                return (
-                  <tr
-                    key={row.mailboxId}
-                    className="transition-colors hover:bg-white/[0.02]"
-                  >
-                    <td className="px-4 py-2.5">
-                      <p className="max-w-[200px] truncate font-mono text-[12px] text-ink-100">
-                        {row.emailAddress}
-                      </p>
-                      {!row.isActive && (
-                        <span className="text-[10px] text-rose-300">inactive</span>
-                      )}
-                    </td>
-                    <td
-                      className={cn(
-                        'px-4 py-2.5 font-mono tabular-nums',
-                        watchExpiryTone(row.watchExpiresInHours)
-                      )}
-                    >
-                      {formatWatchExpiry(row.watchExpiresInHours)}
-                    </td>
-                    <td className="hidden px-4 py-2.5 font-mono tabular-nums text-ink-200 sm:table-cell">
-                      {row.messagesLast24h}
-                    </td>
-                    <td className="hidden px-4 py-2.5 text-ink-400 md:table-cell">
-                      {recon}
-                    </td>
-                    <td
-                      className={cn(
-                        'px-4 py-2.5 font-mono tabular-nums',
-                        driftTone
-                      )}
-                    >
-                      {row.lastReconciliationFoundMissing}
-                    </td>
-                    <td
-                      className={cn(
-                        'px-4 py-2.5 font-mono tabular-nums',
-                        webhookErrTone
-                      )}
-                    >
-                      {row.webhookErrorsLast24h}
-                    </td>
+    <section className="overflow-hidden rounded-xl border border-white/[0.06] bg-ink-900/40">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-controls="mailbox-health-detail"
+        className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-white/[0.015]"
+      >
+        <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-300 ring-1 ring-inset ring-emerald-500/20">
+          <Activity className="h-3.5 w-3.5" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-[13px] font-medium text-white">Mailbox health</p>
+          <p className="mt-0.5 text-[11.5px] text-ink-400">
+            Watch tokens, reconciliation drift, webhook errors per mailbox.
+          </p>
+        </div>
+        <ChevronDown
+          className={cn(
+            'h-4 w-4 flex-shrink-0 text-ink-400 transition-transform',
+            open && 'rotate-180 text-ink-100'
+          )}
+        />
+      </button>
+      {open && (
+        <div id="mailbox-health-detail" className="border-t border-white/[0.06]">
+          {loading ? (
+            <div className="h-24 skeleton" />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-[13px]">
+                <thead>
+                  <tr className="border-b border-white/[0.06] text-[11px] font-medium uppercase tracking-[0.08em] text-ink-400">
+                    <th className="px-4 py-2.5 text-left">Mailbox</th>
+                    <th className="px-4 py-2.5 text-left">Watch expires</th>
+                    <th className="hidden px-4 py-2.5 text-left sm:table-cell">
+                      Msgs / 24h
+                    </th>
+                    <th className="hidden px-4 py-2.5 text-left md:table-cell">
+                      Last reconciled
+                    </th>
+                    <th className="px-4 py-2.5 text-left">Drift</th>
+                    <th className="px-4 py-2.5 text-left">Errors / 24h</th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                </thead>
+                <tbody className="divide-y divide-white/[0.04]">
+                  {data.map((row) => {
+                    const driftTone =
+                      row.lastReconciliationFoundMissing > 0
+                        ? 'text-amber-300'
+                        : 'text-ink-500';
+                    const webhookErrTone =
+                      row.webhookErrorsLast24h > 0
+                        ? 'text-rose-300'
+                        : 'text-ink-500';
+                    const recon = row.lastReconciliationAt
+                      ? new Date(row.lastReconciliationAt).toLocaleString(undefined, {
+                          month: 'short',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })
+                      : '—';
+                    return (
+                      <tr
+                        key={row.mailboxId}
+                        className="transition-colors hover:bg-white/[0.02]"
+                      >
+                        <td className="px-4 py-2.5">
+                          <p className="max-w-[220px] truncate font-mono text-[12px] text-ink-100">
+                            {row.emailAddress}
+                          </p>
+                          {!row.isActive && (
+                            <span className="text-[10px] text-rose-300">
+                              inactive
+                            </span>
+                          )}
+                        </td>
+                        <td
+                          className={cn(
+                            'px-4 py-2.5 font-mono tabular-nums',
+                            watchExpiryTone(row.watchExpiresInHours)
+                          )}
+                        >
+                          {formatWatchExpiry(row.watchExpiresInHours)}
+                        </td>
+                        <td className="hidden px-4 py-2.5 font-mono tabular-nums text-ink-200 sm:table-cell">
+                          {row.messagesLast24h}
+                        </td>
+                        <td className="hidden px-4 py-2.5 text-ink-400 md:table-cell">
+                          {recon}
+                        </td>
+                        <td className={cn('px-4 py-2.5 font-mono tabular-nums', driftTone)}>
+                          {row.lastReconciliationFoundMissing}
+                        </td>
+                        <td className={cn('px-4 py-2.5 font-mono tabular-nums', webhookErrTone)}>
+                          {row.webhookErrorsLast24h}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
     </section>
   );
 }
 
-// ---------- Section Header ----------
+// ---------- Section header ----------
 
 function SectionHeader({
   icon: Icon,
@@ -340,7 +438,7 @@ function SectionHeader({
   right?: React.ReactNode;
 }) {
   return (
-    <div className="mb-4 flex items-center justify-between">
+    <div className="mb-3 flex items-center justify-between">
       <div className="flex items-center gap-2.5">
         <div
           className={cn(
@@ -364,29 +462,36 @@ function SectionHeader({
   );
 }
 
-// ---------- Empty States ----------
+// ---------- Empty state ----------
 
 function EmptyState({
   icon: Icon,
   title,
   description,
   action,
+  compact,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   title: string;
   description: string;
   action?: React.ReactNode;
+  compact?: boolean;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-white/[0.08] bg-ink-900/30 px-6 py-12 text-center">
-      <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-white/[0.04] text-ink-300 ring-1 ring-inset ring-white/[0.06]">
+    <div
+      className={cn(
+        'flex flex-col items-center justify-center rounded-xl border border-dashed border-white/[0.08] bg-ink-900/30 px-6 text-center',
+        compact ? 'py-8' : 'py-12'
+      )}
+    >
+      <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-2xl bg-white/[0.04] text-ink-300 ring-1 ring-inset ring-white/[0.06]">
         <Icon className="h-5 w-5" />
       </div>
-      <p className="font-display text-[15px] font-medium text-ink-100">{title}</p>
-      <p className="mt-1.5 max-w-xs text-[13px] leading-relaxed text-ink-400">
+      <p className="font-display text-[14.5px] font-medium text-ink-100">{title}</p>
+      <p className="mt-1.5 max-w-xs text-[12.5px] leading-relaxed text-ink-400">
         {description}
       </p>
-      {action && <div className="mt-5">{action}</div>}
+      {action && <div className="mt-4">{action}</div>}
     </div>
   );
 }
@@ -396,8 +501,12 @@ function EmptyState({
 export default function Dashboard({
   mailboxId,
   onSwitchToDrafts,
+  onSwitchToCandidates,
   onOpenDraftForCandidate,
+  onOpenDraft,
 }: Props) {
+  const queryClient = useQueryClient();
+
   const { data: candidatesData, isLoading: loadingCandidates } = useQuery({
     queryKey: ['candidates', { mailboxId }],
     queryFn: () => fetchCandidates({ mailboxId, limit: 500 }),
@@ -426,9 +535,8 @@ export default function Dashboard({
   const candidates = candidatesData?.data ?? [];
   const allDrafts = draftsData?.data ?? [];
   const mailboxes = mailboxesData?.data ?? [];
+  const syncHealth = syncHealthData?.data ?? [];
 
-  const total = candidates.length;
-  const needReply = candidates.filter((c) => c.status === 'INTERESTED').length;
   const awaitingReply = candidates.filter((c) => {
     const status =
       c.replyStatus ??
@@ -436,12 +544,20 @@ export default function Dashboard({
     return status === 'AWAITING_REPLY';
   }).length;
   const needsReview = candidates.filter((c) => c.status === 'NEEDS_REVIEW').length;
-  const pendingDrafts = allDrafts.filter((d) => d.status === 'PENDING').length;
+  const pendingDrafts = allDrafts.filter((d) => d.status === 'PENDING');
+  const pendingDraftCount = pendingDrafts.length;
 
-  const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const sentThisWeek = allDrafts.filter(
-    (d) => d.status === 'SENT' && d.sentAt && new Date(d.sentAt) >= oneWeekAgo
-  ).length;
+  // Top 5 most-recent pending drafts for the quick triage panel
+  const triageDrafts = useMemo(
+    () =>
+      [...pendingDrafts]
+        .sort(
+          (a, b) =>
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        )
+        .slice(0, 5),
+    [pendingDrafts]
+  );
 
   const mailboxCandidateMap: Record<string, Candidate[]> = {};
   for (const c of candidates) {
@@ -450,116 +566,158 @@ export default function Dashboard({
     mailboxCandidateMap[c.mailboxId].push(c);
   }
 
-  // Map candidate email -> the candidate's most recent pending draft (if any)
-  const draftByCandidateEmail = new Map<string, EmailDraft>();
-  for (const d of allDrafts) {
-    if (d.status !== 'PENDING') continue;
-    const email = d.thread?.candidate?.email;
-    if (!email) continue;
-    const existing = draftByCandidateEmail.get(email);
-    if (!existing || new Date(d.createdAt) > new Date(existing.createdAt)) {
-      draftByCandidateEmail.set(email, d);
-    }
+  const pendingDraftCountByMailbox: Record<string, number> = {};
+  for (const d of pendingDrafts) {
+    const mbId = d.thread?.mailbox?.id;
+    if (!mbId) continue;
+    pendingDraftCountByMailbox[mbId] = (pendingDraftCountByMailbox[mbId] ?? 0) + 1;
   }
 
-  const priorityQueue = candidates
-    .filter((c) => c.status === 'INTERESTED')
-    .sort(
-      (a, b) =>
-        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-    );
+  const healthSummary = summarizeHealth(syncHealth);
 
-  const mailboxById: Record<string, Mailbox> = {};
-  for (const m of mailboxes) {
-    mailboxById[m.id] = m;
-  }
+  const approveMutation = useMutation({
+    mutationFn: approveDraft,
+    onSuccess: (_data, id) => {
+      const d = pendingDrafts.find((x) => x.id === id);
+      const who = d?.thread?.candidate?.name ?? 'candidate';
+      toastSuccess(
+        'Draft approved',
+        `Saved as a Gmail draft — review in ${who}'s thread before sending.`
+      );
+      void queryClient.invalidateQueries({ queryKey: ['drafts'] });
+    },
+    onError: (err) => {
+      toastError(
+        'Could not approve draft',
+        extractApiErrorMessage(err, 'Please try again.')
+      );
+    },
+  });
 
-  const handleCandidateClick = (candidate: Candidate) => {
-    if (onOpenDraftForCandidate) {
-      onOpenDraftForCandidate(candidate.id);
-    } else if (onSwitchToDrafts) {
-      onSwitchToDrafts();
+  const handleOpenDraft = (draftId: string) => {
+    if (onOpenDraft) {
+      onOpenDraft(draftId);
+      return;
     }
+    const draft = pendingDrafts.find((d) => d.id === draftId);
+    const cid = draft?.thread?.candidate?.id;
+    if (cid && onOpenDraftForCandidate) {
+      onOpenDraftForCandidate(cid);
+      return;
+    }
+    onSwitchToDrafts?.();
   };
 
   return (
-    <div className="space-y-10">
-      {/* Hero greeting */}
-      <div className="flex items-baseline justify-between gap-4">
+    <div className="space-y-8">
+      {/* Hero — greeting + health pill */}
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl font-semibold tracking-tight text-white sm:text-[28px]">
             Pipeline overview
           </h1>
           <p className="mt-1 text-[13.5px] text-ink-400">
-            A live view of recruiter mailboxes, candidate replies, and draft activity.
+            Drafts to approve, replies waiting, and conversations needing
+            attention.
           </p>
         </div>
+        {!loadingSyncHealth && <HealthPill summary={healthSummary} />}
       </div>
 
-      {/* Metric cards */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        <MetricCard
-          label="Total"
-          value={total}
-          icon={Users}
-          accent="bg-accent-500/10 text-accent-300 ring-accent-500/20"
-          loading={loadingCandidates}
-          hint="candidates"
-        />
-        <MetricCard
-          label="Need reply"
-          value={needReply}
-          icon={AlertCircle}
-          accent="bg-emerald-500/10 text-emerald-300 ring-emerald-500/20"
-          loading={loadingCandidates}
-          hint="interested"
-        />
-        <MetricCard
-          label="Awaiting"
-          value={awaitingReply}
-          icon={Clock}
-          accent="bg-amber-500/10 text-amber-300 ring-amber-500/20"
-          loading={loadingCandidates}
-          hint="sent, no reply"
-        />
-        <MetricCard
-          label="Review"
-          value={needsReview}
-          icon={AlertTriangle}
-          accent="bg-amber-500/10 text-amber-300 ring-amber-500/20"
-          loading={loadingCandidates}
-          hint="needs attention"
-        />
-        <MetricCard
-          label="Drafts"
-          value={pendingDrafts}
+      {/* Action pills — the new hero */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <ActionPill
+          testId="action-pill-drafts"
+          count={pendingDraftCount}
+          label="drafts pending"
+          hint="Ready for one-click approval"
           icon={FileText}
-          accent="bg-accent-500/10 text-accent-300 ring-accent-500/20"
+          tone="accent"
           loading={loadingDrafts}
-          hint="pending"
+          onClick={onSwitchToDrafts}
         />
-        <MetricCard
-          label="Sent"
-          value={sentThisWeek}
-          icon={Send}
-          accent="bg-sky-500/10 text-sky-300 ring-sky-500/20"
-          loading={loadingDrafts}
-          hint="this week"
+        <ActionPill
+          testId="action-pill-awaiting"
+          count={awaitingReply}
+          label="awaiting reply"
+          hint="Sent — no candidate response yet"
+          icon={Clock}
+          tone="amber"
+          loading={loadingCandidates}
+          onClick={() => onSwitchToCandidates?.('AWAITING_REPLY')}
+        />
+        <ActionPill
+          testId="action-pill-review"
+          count={needsReview}
+          label="needs review"
+          hint="Low-confidence classifications"
+          icon={AlertTriangle}
+          tone="emerald"
+          loading={loadingCandidates}
+          onClick={() => onSwitchToCandidates?.('NEEDS_REVIEW')}
         />
       </div>
 
-      {/* Account Pipelines */}
+      {/* Quick triage */}
+      <section>
+        <SectionHeader
+          icon={Sparkles}
+          iconClass="text-accent-300 bg-accent-500/10 ring-accent-500/20"
+          title="Quick triage"
+          count={pendingDraftCount}
+          right={
+            pendingDraftCount > 0 ? (
+              <button
+                onClick={onSwitchToDrafts}
+                className="text-[12px] font-medium text-ink-400 transition-colors hover:text-ink-100"
+              >
+                View all →
+              </button>
+            ) : null
+          }
+        />
+        {loadingDrafts ? (
+          <div className="space-y-1 rounded-xl border border-white/[0.06] bg-ink-900/40">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="h-14 skeleton" />
+            ))}
+          </div>
+        ) : triageDrafts.length === 0 ? (
+          <EmptyState
+            compact
+            icon={CheckCircle2}
+            title="All caught up"
+            description="No pending drafts right now. New drafts appear here as candidates reply."
+          />
+        ) : (
+          <div className="overflow-hidden rounded-xl border border-white/[0.06] bg-ink-900/40">
+            {triageDrafts.map((draft) => (
+              <QuickTriageRow
+                key={draft.id}
+                draft={draft}
+                onApprove={(id) => approveMutation.mutate(id)}
+                onOpen={handleOpenDraft}
+                approving={
+                  approveMutation.isPending && approveMutation.variables === draft.id
+                }
+              />
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* Account Pipelines (condensed) */}
       <section>
         <SectionHeader
           icon={Mail}
           iconClass="text-accent-300 bg-accent-500/10 ring-accent-500/20"
-          title="Account Pipelines"
+          title="Account pipelines"
           count={mailboxes.length}
         />
         {loadingMailboxes ? (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="space-y-1 rounded-xl border border-white/[0.06] bg-ink-900/40">
             {[1, 2, 3].map((i) => (
-              <div key={i} className="h-32 skeleton rounded-xl" />
+              <div key={i} className="h-14 skeleton" />
             ))}
           </div>
         ) : mailboxes.length === 0 ? (
@@ -569,13 +727,13 @@ export default function Dashboard({
             description="Connect a Gmail account to start syncing candidate replies and generating drafts automatically."
           />
         ) : (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="overflow-hidden rounded-xl border border-white/[0.06] bg-ink-900/40">
             {mailboxes.map((mailbox) => (
-              <AccountCard
+              <AccountRow
                 key={mailbox.id}
                 mailbox={mailbox}
-                candidates={mailboxCandidateMap[mailbox.id] ?? []}
-                drafts={allDrafts}
+                candidateCount={(mailboxCandidateMap[mailbox.id] ?? []).length}
+                pendingDraftCount={pendingDraftCountByMailbox[mailbox.id] ?? 0}
                 onSwitchToDrafts={onSwitchToDrafts}
               />
             ))}
@@ -583,123 +741,8 @@ export default function Dashboard({
         )}
       </section>
 
-      <MailboxHealthSection
-        data={syncHealthData?.data ?? []}
-        loading={loadingSyncHealth}
-      />
-
-      {/* Priority queue */}
-      <section>
-        <SectionHeader
-          icon={Clock}
-          iconClass="text-amber-300 bg-amber-500/10 ring-amber-500/20"
-          title="Candidates Needing Replies"
-          count={needReply}
-          right={
-            pendingDrafts > 0 && (
-              <button
-                onClick={onSwitchToDrafts}
-                className="group flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-accent-300 transition-colors hover:bg-accent-500/10"
-              >
-                View all drafts
-                <ArrowUpRight className="h-3 w-3 transition-transform group-hover:-translate-y-px group-hover:translate-x-px" />
-              </button>
-            )
-          }
-        />
-
-        {loadingCandidates ? (
-          <div className="space-y-2">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="h-16 skeleton rounded-xl" />
-            ))}
-          </div>
-        ) : priorityQueue.length === 0 ? (
-          <EmptyState
-            icon={Sparkles}
-            title="All caught up"
-            description="No interested candidates need a reply right now. Drafts will appear here as new responses come in."
-          />
-        ) : (
-          <div className="overflow-hidden rounded-xl border border-white/[0.06] bg-ink-900/60">
-            <table className="w-full text-[13px]">
-              <thead>
-                <tr className="border-b border-white/[0.06] text-[11px] font-medium uppercase tracking-[0.08em] text-ink-400">
-                  <th className="px-4 py-3 text-left">Candidate</th>
-                  <th className="hidden px-4 py-3 text-left sm:table-cell">
-                    Mailbox
-                  </th>
-                  <th className="px-4 py-3 text-left">Status</th>
-                  <th className="hidden px-4 py-3 text-left md:table-cell">
-                    Notes
-                  </th>
-                  <th className="px-4 py-3 text-left">Draft</th>
-                  <th className="px-2 py-3" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/[0.04]">
-                {priorityQueue.map((candidate) => {
-                  const mailbox = candidate.mailboxId
-                    ? mailboxById[candidate.mailboxId]
-                    : undefined;
-                  const draft = draftByCandidateEmail.get(candidate.email);
-                  const hasDraft = !!draft;
-                  return (
-                    <tr
-                      key={candidate.id}
-                      onClick={() => handleCandidateClick(candidate)}
-                      className="group cursor-pointer transition-colors hover:bg-white/[0.02]"
-                    >
-                      <td className="px-4 py-3">
-                        <p className="font-medium text-white">
-                          {candidate.name}
-                        </p>
-                        <p className="mt-0.5 text-[12px] text-ink-400">
-                          {candidate.email}
-                        </p>
-                      </td>
-                      <td className="hidden px-4 py-3 sm:table-cell">
-                        {mailbox ? (
-                          <span className="font-mono text-[12px] text-ink-300">
-                            {mailbox.emailAddress}
-                          </span>
-                        ) : (
-                          <span className="text-[12px] text-ink-600">—</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        <StatusBadge status={candidate.status} />
-                      </td>
-                      <td className="hidden px-4 py-3 md:table-cell">
-                        {candidate.notes ? (
-                          <span className="line-clamp-2 max-w-xs text-[12px] text-ink-400">
-                            {candidate.notes}
-                          </span>
-                        ) : (
-                          <span className="text-[12px] text-ink-600">—</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        {hasDraft ? (
-                          <span className="inline-flex items-center gap-1.5 rounded-full bg-accent-500/10 px-2 py-0.5 text-[11px] font-medium text-accent-300 ring-1 ring-inset ring-accent-500/20">
-                            <FileText className="h-3 w-3" />
-                            Draft ready
-                          </span>
-                        ) : (
-                          <span className="text-[12px] text-ink-600">—</span>
-                        )}
-                      </td>
-                      <td className="px-2 py-3 pr-4">
-                        <ChevronRight className="h-4 w-4 text-ink-600 transition-all group-hover:translate-x-0.5 group-hover:text-ink-300" />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+      {/* Mailbox health (collapsible) */}
+      <MailboxHealthAccordion data={syncHealth} loading={loadingSyncHealth} />
     </div>
   );
 }

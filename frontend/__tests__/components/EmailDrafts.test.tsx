@@ -10,6 +10,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import EmailDrafts from '../../src/components/EmailDrafts';
+import { TooltipProvider } from '../../src/components/ui/Tooltip';
 import type { EmailDraft } from '../../src/lib/api';
 import * as api from '../../src/lib/api';
 
@@ -32,7 +33,8 @@ function makeDraft(overrides: Partial<EmailDraft> = {}): EmailDraft {
     id: 'draft-1',
     threadId: 'thread-1',
     subject: 'Re: Senior Engineer role',
-    bodyText: 'Hi Ada,\n\nThanks for reaching out — happy to chat next week.',
+    bodyText:
+      'Hi Ada,\n\nThanks for reaching out — happy to chat next week.',
     classification: 'INTERESTED',
     confidence: 0.92,
     status: 'PENDING',
@@ -70,7 +72,7 @@ const DRAFTS: EmailDraft[] = [
   makeDraft({
     id: 'draft-2',
     subject: 'Re: Staff Engineer opening',
-    bodyText: 'Hi Marie,\n\nThanks!',
+    bodyText: 'Hi Marie,\n\nThanks for getting back to me.',
     thread: {
       id: 'thread-2',
       mailboxId: 'mb-1',
@@ -99,10 +101,25 @@ function renderDrafts() {
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={['/']}>
-        <EmailDrafts />
+        <TooltipProvider>
+          <EmailDrafts />
+        </TooltipProvider>
       </MemoryRouter>
     </QueryClientProvider>
   );
+}
+
+async function openFirstDraft() {
+  // The first list row is rendered as a button containing the candidate name.
+  const row = (await screen.findByText('Ada Lovelace')).closest('button');
+  expect(row).not.toBeNull();
+  fireEvent.click(row!);
+  // Pane (role=dialog) appears
+  return await screen.findByRole('dialog');
+}
+
+function getPane(): HTMLElement {
+  return screen.getByRole('dialog');
 }
 
 describe('<EmailDrafts />', () => {
@@ -124,63 +141,74 @@ describe('<EmailDrafts />', () => {
     vi.clearAllMocks();
   });
 
-  it('renders a draft card for each draft fixture', async () => {
+  it('renders a flat list row for each draft fixture', async () => {
     renderDrafts();
     expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
     expect(screen.getByText('Marie Curie')).toBeInTheDocument();
+    expect(screen.getByText('Re: Senior Engineer role')).toBeInTheDocument();
+    expect(screen.getByText('Re: Staff Engineer opening')).toBeInTheDocument();
+  });
+
+  it('clicking a row opens the side-pane with the draft body', async () => {
+    const pane = await (async () => {
+      renderDrafts();
+      return openFirstDraft();
+    })();
+
+    // The pane header surfaces the candidate name + email.
+    expect(within(pane).getByText('Ada Lovelace')).toBeInTheDocument();
+    expect(within(pane).getByText('ada@example.com')).toBeInTheDocument();
+
+    // The original message block is visible.
+    expect(within(pane).getByText(/original message/i)).toBeInTheDocument();
     expect(
-      screen.getByText('Re: Senior Engineer role')
+      within(pane).getByText(/Hello — yes, very interested\./)
     ).toBeInTheDocument();
+
+    // The draft body is also visible in the pane.
     expect(
-      screen.getByText('Re: Staff Engineer opening')
+      within(pane).getByText(/happy to chat next week/i)
     ).toBeInTheDocument();
   });
 
-  it('clicking Approve invokes the approveDraft mutation with the right id', async () => {
+  it('clicking Approve inside the pane invokes the approveDraft mutation with the right id', async () => {
     renderDrafts();
+    const pane = await openFirstDraft();
 
-    await screen.findByText('Ada Lovelace');
-    const approveButtons = screen.getAllByRole('button', {
+    const approveBtn = within(pane).getByRole('button', {
       name: /^approve draft$/i,
     });
-    fireEvent.click(approveButtons[0]);
+    fireEvent.click(approveBtn);
 
-    // React Query v5 calls `mutationFn(variables, context)` — when the
-    // component passes the api function directly we receive both, so
-    // assert against the first argument only.
     await waitFor(() => {
       expect(approveDraftMock).toHaveBeenCalled();
     });
     expect(approveDraftMock.mock.calls[0][0]).toBe('draft-1');
   });
 
-  it('clicking Discard + confirming invokes the discardDraft mutation', async () => {
+  it('clicking Discard inside the pane and confirming invokes the discardDraft mutation', async () => {
     const user = userEvent.setup();
     renderDrafts();
+    const pane = await openFirstDraft();
 
-    await screen.findByText('Ada Lovelace');
-    const discardButtons = screen.getAllByRole('button', {
+    const discardBtn = within(pane).getByRole('button', {
       name: /^discard draft$/i,
     });
-    await user.click(discardButtons[0]);
+    await user.click(discardBtn);
 
-    // The trigger and the confirm button share an accessible name; scope
-    // to the alertdialog Radix portals to <body>.
     const dialog = await screen.findByRole('alertdialog');
     const confirm = within(dialog).getByRole('button', {
       name: /^discard draft$/i,
     });
     await user.click(confirm);
 
-    // mutationFn is passed directly to useMutation, so React Query passes
-    // a context object as a second argument; verify only the first arg.
     await waitFor(() => {
       expect(discardDraftMock).toHaveBeenCalled();
     });
     expect(discardDraftMock.mock.calls[0][0]).toBe('draft-1');
   });
 
-  it('clicking Regenerate shows the spinning loading state while the mutation is in-flight', async () => {
+  it('clicking Regenerate inside the pane shows the spinning state while the mutation is in-flight', async () => {
     let resolveRegenerate: (value: unknown) => void = () => {};
     regenerateDraftMock.mockImplementation(
       () =>
@@ -191,46 +219,22 @@ describe('<EmailDrafts />', () => {
 
     const user = userEvent.setup();
     const { container } = renderDrafts();
+    const pane = await openFirstDraft();
 
-    await screen.findByText('Ada Lovelace');
-    const regenerateButtons = screen.getAllByLabelText(/regenerate draft/i);
-    await user.click(regenerateButtons[0]);
+    const regenerateBtn = within(pane).getByRole('button', {
+      name: /regenerate draft/i,
+    });
+    await user.click(regenerateBtn);
 
-    // While the mutation is pending, the RefreshCw icon gets `animate-spin`.
     await waitFor(() => {
       expect(container.querySelector('.animate-spin')).not.toBeNull();
     });
-    // And the regenerate trigger is disabled.
-    expect(regenerateButtons[0]).toBeDisabled();
+    expect(regenerateBtn).toBeDisabled();
 
-    // Resolve the mutation; the spinning state should clear.
     resolveRegenerate({ success: true, data: makeDraft({ id: 'draft-1' }) });
     await waitFor(() => {
       expect(container.querySelector('.animate-spin')).toBeNull();
     });
-  });
-
-  it('renders the Original message block inside the expanded card', async () => {
-    const user = userEvent.setup();
-    renderDrafts();
-
-    // The card is collapsed by default; click the header to expand.
-    const adaName = await screen.findByText('Ada Lovelace');
-    const card = adaName.closest('div.group')!;
-    const header = within(card as HTMLElement).getByText(
-      'Re: Senior Engineer role'
-    );
-    await user.click(header);
-
-    // Once expanded, the OriginalMessageBlock renders the labeled headers
-    // and the original message body.
-    expect(
-      await screen.findByText(/original message/i)
-    ).toBeInTheDocument();
-    expect(screen.getByText(/Ada Lovelace <ada@example.com>/)).toBeInTheDocument();
-    expect(
-      screen.getByText(/Hello — yes, very interested\./)
-    ).toBeInTheDocument();
   });
 
   it('switching status tabs refetches drafts for the selected status', async () => {
@@ -267,6 +271,34 @@ describe('<EmailDrafts />', () => {
       expect(fetchDraftsMock).toHaveBeenCalledWith(
         expect.objectContaining({ status: 'APPROVED' })
       );
+    });
+  });
+
+  // --- Keyboard shortcuts -------------------------------------------------
+
+  it('pressing "a" with the pane open approves the draft', async () => {
+    renderDrafts();
+    await openFirstDraft();
+
+    // Ensure focus is on the body element so the global keydown listener fires
+    document.body.focus();
+    fireEvent.keyDown(window, { key: 'a' });
+
+    await waitFor(() => {
+      expect(approveDraftMock).toHaveBeenCalled();
+    });
+    expect(approveDraftMock.mock.calls[0][0]).toBe('draft-1');
+  });
+
+  it('pressing Escape closes the side-pane', async () => {
+    renderDrafts();
+    await openFirstDraft();
+    expect(getPane()).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
   });
 });
