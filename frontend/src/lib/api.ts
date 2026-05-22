@@ -313,22 +313,6 @@ interface AuthResponse {
   user: User;
 }
 
-export async function signup(
-  email: string,
-  password: string,
-  name?: string
-): Promise<AuthResponse> {
-  const res = await api.post('/auth/signup', { email, password, name });
-  const body = res.data as SingleResponse<AuthResponse>;
-  return body.data;
-}
-
-export async function login(email: string, password: string): Promise<AuthResponse> {
-  const res = await api.post('/auth/login', { email, password });
-  const body = res.data as SingleResponse<AuthResponse>;
-  return body.data;
-}
-
 export async function loginWithGoogle(idToken: string): Promise<AuthResponse> {
   const res = await api.post('/auth/google', { idToken });
   const body = res.data as SingleResponse<AuthResponse>;

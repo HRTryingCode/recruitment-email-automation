@@ -97,7 +97,7 @@ function OriginalMessageBlock({ original }: { original: OriginalMessage }) {
           <Mail className="h-3 w-3" />
           Original message
         </div>
-        <div className="space-y-0.5 font-mono text-[11.5px] leading-relaxed">
+        <div className="flex flex-col gap-0.5 font-mono text-[11.5px] leading-relaxed">
           <div className="flex">
             <span className="w-14 flex-shrink-0 text-fg-subtle">From</span>
             <span className="truncate text-fg-default">{senderLabel}</span>
@@ -341,12 +341,12 @@ export default function DraftReviewPane({
         {/* Body — scrollable */}
         <div className="flex-1 overflow-y-auto px-5 py-5">
           {!draft ? (
-            <div className="space-y-3">
+            <div className="flex flex-col gap-3">
               <div className="h-24 skeleton rounded-xl" />
               <div className="h-40 skeleton rounded-xl" />
             </div>
           ) : (
-            <div className="space-y-5">
+            <div className="flex flex-col gap-5">
               {draft.originalMessage && (
                 <OriginalMessageBlock original={draft.originalMessage} />
               )}
@@ -363,7 +363,7 @@ export default function DraftReviewPane({
                   </span>
                 </p>
                 {editing ? (
-                  <div className="space-y-3">
+                  <div className="flex flex-col gap-3">
                     <textarea
                       value={editedBody}
                       onChange={(e) => setEditedBody(e.target.value)}
