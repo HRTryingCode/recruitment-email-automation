@@ -238,7 +238,12 @@ interface ParsedGmailMessage {
   bodyText: string;
   bodyHtml: string;
   receivedAt: Date;
-  headers: Record<string, string>;
+  headers: {
+    messageId: string;
+    inReplyTo: string;
+    references: string;
+    cc: string;
+  };
 }
 
 function parseGmailMessage(
@@ -260,6 +265,7 @@ function parseGmailMessage(
   const subject = getHeader('Subject') || '(no subject)';
   const fromRaw = getHeader('From');
   const toRaw = getHeader('To');
+  const ccRaw = getHeader('Cc');
   const messageId = getHeader('Message-ID');
   const inReplyTo = getHeader('In-Reply-To');
   const references = getHeader('References');
@@ -306,7 +312,7 @@ function parseGmailMessage(
     bodyText,
     bodyHtml,
     receivedAt: dateStr ? new Date(dateStr) : new Date(),
-    headers: { messageId, inReplyTo, references },
+    headers: { messageId, inReplyTo, references, cc: ccRaw },
   };
 }
 
@@ -617,9 +623,66 @@ async function classifyAndDraft(opts: {
     return;
   }
 
-  // 5. Existing behavior: only auto-draft for INTERESTED candidates.
+  // 5. Only auto-draft for INTERESTED candidates.
   if (classification !== 'INTERESTED') return;
 
+  // 6. For non-Sofia inboxes (Aaron, Paul, Ethan…): only draft when Sofia is
+  //    already in the loop on this conversation. Her presence in the TO or CC
+  //    of the candidate's reply is the signal that this is real recruiting
+  //    outreach, not warm-up automation noise.
+  const ccEmail = config.draftCcEmail.toLowerCase();
+  const isHandoffInbox = mailbox.emailAddress.toLowerCase() !== ccEmail;
+  if (isHandoffInbox) {
+    const toStr = parsed.toAddresses.join(',').toLowerCase();
+    const ccStr = parsed.headers.cc.toLowerCase();
+    if (!toStr.includes(ccEmail) && !ccStr.includes(ccEmail)) {
+      await logEvent(
+        'DRAFT_SKIPPED_SOFIA_NOT_IN_LOOP',
+        { mailboxId: mailbox.id, threadId: thread.id },
+        'INFO'
+      );
+      return;
+    }
+  }
+
+  // 7. For non-Sofia inboxes, use the fixed handoff template — no Claude needed.
+  //    Sofia is CC'd on every sent draft via the createDraft helper.
+  if (isHandoffInbox) {
+    const content = buildHandoffDraftContent(
+      candidate.name,
+      mailbox.displayName,
+      mailbox.emailAddress,
+      thread.subject
+    );
+    const inReplyToMessageId = parsed.headers.messageId || null;
+    const existingRefs = parsed.headers.references ?? '';
+    const referencesHeader = existingRefs
+      ? `${existingRefs} ${inReplyToMessageId ?? ''}`.trim()
+      : inReplyToMessageId;
+
+    await prisma.emailDraft.create({
+      data: {
+        threadId: thread.id,
+        inReplyToMessageId,
+        referencesHeader,
+        subject: content.subject,
+        bodyText: content.bodyText,
+        bodyHtml: content.bodyHtml,
+        classification,
+        confidence,
+        status: 'PENDING',
+      },
+    });
+
+    await logEvent(
+      'DRAFT_CREATED',
+      { mailboxId: mailbox.id, candidateId: candidate.id, threadId: thread.id, messageType, confidence, via: 'handoff_template' },
+      'INFO'
+    );
+    return;
+  }
+
+  // 8. Sofia's inbox: use Claude with style examples.
   try {
     const examples = await fetchExamplesForMailbox(mailbox.id, mailbox.emailAddress, classification);
     const draftReply = await generateDraftReply(
@@ -1339,6 +1402,33 @@ const SOFIA_EMAIL = 'sofia@archive.com';
  * These are passed as few-shot style examples to Claude so drafts mirror how
  * the recruiter actually writes instead of using the generic style guide.
  */
+/**
+ * Build the fixed handoff reply used for Aaron/Paul/Ethan's inboxes.
+ * "I'm looping in Sofia…" — no Claude needed, consistent every time.
+ */
+export function buildHandoffDraftContent(
+  candidateName: string,
+  recruiterDisplayName: string | null,
+  recruiterEmail: string,
+  threadSubject: string
+): { subject: string; bodyText: string; bodyHtml: string } {
+  const firstName = candidateName.split(/\s+/)[0] ?? candidateName;
+  const displaySeed = (recruiterDisplayName ?? '').trim();
+  const looksLikeEmail = displaySeed.toLowerCase() === recruiterEmail.toLowerCase();
+  const recruiterFirst =
+    displaySeed.length > 0 && !looksLikeEmail
+      ? (displaySeed.split(/\s+/)[0] ?? displaySeed)
+      : ((recruiterEmail.split('@')[0] ?? '').split(/[._-]/)[0] ?? 'there');
+
+  const subject = threadSubject.startsWith('Re:') ? threadSubject : `Re: ${threadSubject}`;
+  const bodyText =
+    `Hi ${firstName},\n\nI hope you're doing well.\n\nI'm looping in Sofia from the recruitment team here to schedule time with you and share more about the position.\n\nBest,\n${recruiterFirst}`;
+  const bodyHtml =
+    `<p>Hi ${firstName},</p>\n<p>I hope you're doing well.</p>\n<p>I'm looping in Sofia from the recruitment team here to schedule time with you and share more about the position.</p>\n<p>Best,<br>${recruiterFirst}</p>`;
+
+  return { subject, bodyText, bodyHtml };
+}
+
 export async function fetchExamplesForMailbox(
   mailboxId: string,
   mailboxEmail: string,

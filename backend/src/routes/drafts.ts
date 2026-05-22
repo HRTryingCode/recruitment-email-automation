@@ -1,8 +1,9 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../db/client';
 import { createError } from '../middleware/error';
-import { createDraft, sendDraft as gmailSendDraft, fetchExamplesForMailbox } from '../services/gmail.service';
+import { createDraft, sendDraft as gmailSendDraft, fetchExamplesForMailbox, buildHandoffDraftContent } from '../services/gmail.service';
 import { classifyReply, generateDraftReply } from '../services/claude.service';
+import { config } from '../config';
 import { logEvent } from '../services/monitoring.service';
 import { serializeEmailMessages } from '../lib/emailMessageSerializer';
 import { requireAdmin } from '../middleware/requireAdmin';
@@ -371,32 +372,54 @@ async function regenerateDraftById(id: string): Promise<RegenerateOk | Regenerat
       receivedAt: m.receivedAt,
     }));
 
-  const examples = await fetchExamplesForMailbox(
-    mailbox.id,
-    mailbox.emailAddress,
-    classificationResult.classification
-  );
+  const isHandoffInbox =
+    mailbox.emailAddress.toLowerCase() !== config.draftCcEmail.toLowerCase();
 
-  const draftReply = await generateDraftReply(
-    {
-      subject: thread.subject,
-      messages: allMessagesAsc,
-      candidateName: candidate.name,
-      classification: classificationResult.classification,
-      examples,
-    },
-    {
-      email: mailbox.emailAddress,
-      displayName: mailbox.displayName,
-    }
-  );
+  let replySubject: string;
+  let replyBodyText: string;
+  let replyBodyHtml: string | undefined;
+
+  if (isHandoffInbox && classificationResult.classification === 'INTERESTED') {
+    // Non-Sofia + INTERESTED → always use the fixed handoff template
+    const content = buildHandoffDraftContent(
+      candidate.name,
+      mailbox.displayName,
+      mailbox.emailAddress,
+      thread.subject
+    );
+    replySubject = content.subject;
+    replyBodyText = content.bodyText;
+    replyBodyHtml = content.bodyHtml;
+  } else {
+    const examples = await fetchExamplesForMailbox(
+      mailbox.id,
+      mailbox.emailAddress,
+      classificationResult.classification
+    );
+    const draftReply = await generateDraftReply(
+      {
+        subject: thread.subject,
+        messages: allMessagesAsc,
+        candidateName: candidate.name,
+        classification: classificationResult.classification,
+        examples,
+      },
+      {
+        email: mailbox.emailAddress,
+        displayName: mailbox.displayName,
+      }
+    );
+    replySubject = draftReply.subject;
+    replyBodyText = draftReply.bodyText;
+    replyBodyHtml = draftReply.bodyHtml;
+  }
 
   const updated = await prisma.emailDraft.update({
     where: { id },
     data: {
-      subject: draftReply.subject,
-      bodyText: draftReply.bodyText,
-      bodyHtml: draftReply.bodyHtml,
+      subject: replySubject,
+      bodyText: replyBodyText,
+      bodyHtml: replyBodyHtml,
       classification: classificationResult.classification,
       confidence: classificationResult.confidence,
     },
