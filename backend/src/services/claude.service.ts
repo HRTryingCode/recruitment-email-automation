@@ -151,6 +151,8 @@ export interface ThreadContext {
   classification: 'INTERESTED' | 'NOT_INTERESTED' | 'NEUTRAL';
   /** Real sent replies from the same mailbox/Sofia used as few-shot style examples. */
   examples?: ExampleReply[];
+  /** HTML signature from Gmail settings — when provided, Claude omits the name sign-off and the caller appends the real signature. */
+  signatureHtml?: string | null;
 }
 
 /**
@@ -457,7 +459,7 @@ Requirements:
 - Be appropriate for the classification (${thread.classification})
 - Subject should be prefixed with "Re: " if replying to existing thread
 - HTML version should use simple formatting (no complex CSS)
-- Sign off with ${firstName}. Do not invent or mention any other person from Archive's team.`,
+- ${thread.signatureHtml ? `End the email body with "Best," on its own line. Do NOT write a name or any contact details after it — the recruiter's full Gmail signature will be appended automatically.` : `Sign off with ${firstName}.`} Do not invent or mention any other person from Archive's team.`,
       },
     ],
   });

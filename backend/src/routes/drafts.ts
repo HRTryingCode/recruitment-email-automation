@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../db/client';
 import { createError } from '../middleware/error';
-import { createDraft, sendDraft as gmailSendDraft, fetchExamplesForMailbox, buildHandoffDraftContent, fetchMailboxSignature } from '../services/gmail.service';
+import { createDraft, sendDraft as gmailSendDraft, fetchExamplesForMailbox, buildHandoffDraftContent, fetchMailboxSignature, htmlSignatureToPlainText } from '../services/gmail.service';
 import { classifyReply, generateDraftReply } from '../services/claude.service';
 import { config } from '../config';
 import { logEvent } from '../services/monitoring.service';
@@ -393,11 +393,14 @@ async function regenerateDraftById(id: string): Promise<RegenerateOk | Regenerat
     replyBodyText = content.bodyText;
     replyBodyHtml = content.bodyHtml;
   } else {
-    const examples = await fetchExamplesForMailbox(
-      mailbox.id,
-      mailbox.emailAddress,
-      classificationResult.classification
-    );
+    const [examples, signatureHtml] = await Promise.all([
+      fetchExamplesForMailbox(
+        mailbox.id,
+        mailbox.emailAddress,
+        classificationResult.classification
+      ),
+      fetchMailboxSignature(mailbox.id),
+    ]);
     const draftReply = await generateDraftReply(
       {
         subject: thread.subject,
@@ -405,12 +408,18 @@ async function regenerateDraftById(id: string): Promise<RegenerateOk | Regenerat
         candidateName: candidate.name,
         classification: classificationResult.classification,
         examples,
+        signatureHtml,
       },
       {
         email: mailbox.emailAddress,
         displayName: mailbox.displayName,
       }
     );
+    // Append the real Gmail signature if we fetched one successfully.
+    if (signatureHtml) {
+      draftReply.bodyText = `${draftReply.bodyText}\n${htmlSignatureToPlainText(signatureHtml)}`;
+      draftReply.bodyHtml = `${draftReply.bodyHtml ?? ''}${signatureHtml}`;
+    }
     replySubject = draftReply.subject;
     replyBodyText = draftReply.bodyText;
     replyBodyHtml = draftReply.bodyHtml;

@@ -686,9 +686,12 @@ async function classifyAndDraft(opts: {
     return;
   }
 
-  // 8. Sofia's inbox: use Claude with style examples.
+  // 8. Sofia's inbox: use Claude with style examples, then append the mailbox signature.
   try {
-    const examples = await fetchExamplesForMailbox(mailbox.id, mailbox.emailAddress, classification);
+    const [examples, signatureHtml] = await Promise.all([
+      fetchExamplesForMailbox(mailbox.id, mailbox.emailAddress, classification),
+      fetchMailboxSignature(mailbox.id),
+    ]);
     const draftReply = await generateDraftReply(
       {
         subject: thread.subject,
@@ -701,6 +704,7 @@ async function classifyAndDraft(opts: {
         candidateName: candidate.name,
         classification,
         examples,
+        signatureHtml,
       },
       // Ghostwrite the draft as the mailbox owner (Paul / Em / etc.), not as a
       // fixed company-wide persona. Sofia is the CC recipient (Phase I), not
@@ -710,6 +714,12 @@ async function classifyAndDraft(opts: {
         displayName: mailbox.displayName,
       }
     );
+
+    // Append the real Gmail signature if we fetched one successfully.
+    if (signatureHtml) {
+      draftReply.bodyText = `${draftReply.bodyText}\n${htmlSignatureToPlainText(signatureHtml)}`;
+      draftReply.bodyHtml = `${draftReply.bodyHtml ?? ''}${signatureHtml}`;
+    }
 
     const inReplyToMessageId = parsed.headers.messageId || null;
     const existingRefs = parsed.headers.references ?? '';
@@ -1412,24 +1422,58 @@ const SOFIA_EMAIL = 'sofia@archive.com';
  * (e.g. the token predates the gmail.settings.basic scope).
  */
 export async function fetchMailboxSignature(mailboxId: string): Promise<string | null> {
+  const mailbox = await prisma.mailbox.findUnique({ where: { id: mailboxId } });
+  if (!mailbox) return null;
+
+  // Primary: use service-account DWD (works for workspace mailboxes without
+  // re-authorization, as long as gmail.settings.basic is in the DWD scope list
+  // under Google Admin Console > Security > API controls > Domain-wide delegation).
+  const keyJson = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON;
+  if (keyJson) {
+    try {
+      const saAuthOptions: { scopes: string[]; subject: string; credentials: Record<string, unknown> } = {
+        scopes: [
+          'https://www.googleapis.com/auth/gmail.modify',
+          'https://www.googleapis.com/auth/gmail.settings.basic',
+        ],
+        subject: mailbox.emailAddress,
+        credentials: JSON.parse(keyJson) as Record<string, unknown>,
+      };
+      const saAuth = new google.auth.GoogleAuth(saAuthOptions);
+      const saClient = await saAuth.getClient();
+      const saGmail = google.gmail({ version: 'v1', auth: saClient as Parameters<typeof google.gmail>[0]['auth'] });
+      const res = await saGmail.users.settings.sendAs.list({ userId: 'me' });
+      const primary =
+        (res.data.sendAs ?? []).find((s) => s.isPrimary) ?? (res.data.sendAs ?? [])[0];
+      if (primary?.signature) return primary.signature;
+    } catch (err) {
+      console.warn(
+        `[Gmail] fetchMailboxSignature via service account failed for ${mailbox.emailAddress} — ` +
+        `ensure gmail.settings.basic is granted in Google Admin DWD:`,
+        err instanceof Error ? err.message : err
+      );
+    }
+  }
+
+  // Fallback: OAuth2 token (works for mailboxes re-authorized after gmail.settings.basic was added to scope).
   try {
-    const mailbox = await prisma.mailbox.findUnique({ where: { id: mailboxId } });
-    if (!mailbox) return null;
     const credentials = parseCredentials(mailbox);
     const auth = getAuthenticatedClient(credentials);
     const gmail = google.gmail({ version: 'v1', auth });
     const res = await gmail.users.settings.sendAs.list({ userId: 'me' });
-    const sendAsEntries = res.data.sendAs ?? [];
-    // Prefer the primary send-as address; fall back to the first entry.
     const primary =
-      sendAsEntries.find((s) => s.isPrimary) ?? sendAsEntries[0];
+      (res.data.sendAs ?? []).find((s) => s.isPrimary) ?? (res.data.sendAs ?? [])[0];
     return primary?.signature ?? null;
-  } catch {
+  } catch (err) {
+    console.warn(
+      `[Gmail] fetchMailboxSignature via OAuth failed for ${mailbox.emailAddress}:`,
+      err instanceof Error ? err.message : err
+    );
     return null;
   }
 }
 
-function htmlSignatureToPlainText(html: string): string {
+export function htmlSignatureToPlainText(html: string): string {
   return html
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/(p|div|li|tr)>/gi, '\n')
@@ -1466,8 +1510,8 @@ export function buildHandoffDraftContent(
 
   const subject = threadSubject.startsWith('Re:') ? threadSubject : `Re: ${threadSubject}`;
 
-  const sigPlainText = signatureHtml ? '\n' + htmlSignatureToPlainText(signatureHtml) : recruiterFirst;
-  const sigHtml = signatureHtml ? `\n${signatureHtml}` : recruiterFirst;
+  const sigPlainText = signatureHtml ? '\n' + htmlSignatureToPlainText(signatureHtml) : '\n' + recruiterFirst;
+  const sigHtml = signatureHtml ? `\n${signatureHtml}` : `\n${recruiterFirst}`;
 
   const bodyText =
     `Hi ${firstName},\n\nI hope you're doing well.\n\nI'm looping in Sofia from the recruitment team here to schedule time with you and share more about the position.\n\nBest,${sigPlainText}`;

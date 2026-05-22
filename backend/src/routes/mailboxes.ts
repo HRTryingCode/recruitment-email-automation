@@ -7,6 +7,7 @@ import {
   resolveMailboxDisplayName,
   serializeCredentials,
   syncMessages,
+  fetchMailboxSignature,
 } from '../services/gmail.service';
 import { storeOAuthState } from '../lib/oauthState';
 import { createError } from '../middleware/error';
@@ -302,6 +303,20 @@ router.post(
     }
   }
 );
+
+// GET /api/mailboxes/:id/signature
+// Returns the raw HTML signature for the mailbox so the frontend can preview it.
+router.get('/:id/signature', requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = String(req.params.id);
+    const mailbox = await prisma.mailbox.findUnique({ where: { id } });
+    if (!mailbox) return next(createError('Mailbox not found', 404));
+    const signatureHtml = await fetchMailboxSignature(id);
+    res.json({ success: true, data: { signatureHtml } });
+  } catch (err) {
+    next(err);
+  }
+});
 
 // DELETE /api/mailboxes/:id
 router.delete('/:id', requireAdmin, async (req: Request, res: Response, next: NextFunction) => {

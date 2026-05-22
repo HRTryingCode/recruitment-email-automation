@@ -218,6 +218,11 @@ export async function deleteMailbox(id: string): Promise<{ success: boolean; mes
   return res.data as { success: boolean; message: string };
 }
 
+export async function fetchMailboxSignatureHtml(id: string): Promise<{ signatureHtml: string | null }> {
+  const res = await api.get(`/mailboxes/${id}/signature`);
+  return (res.data as { success: boolean; data: { signatureHtml: string | null } }).data;
+}
+
 // Threads
 export async function fetchThreads(filters?: {
   mailboxId?: string;
