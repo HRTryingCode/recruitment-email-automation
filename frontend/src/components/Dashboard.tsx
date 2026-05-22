@@ -633,7 +633,7 @@ export default function Dashboard({
   };
 
   return (
-    <div className="space-y-8">
+    <div className="flex flex-col gap-8">
       {/* Hero — greeting + health pill */}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
@@ -701,7 +701,7 @@ export default function Dashboard({
           }
         />
         {loadingDrafts ? (
-          <div className="space-y-1 rounded-xl border border-line bg-surface-raised/60">
+          <div className="flex flex-col gap-1 rounded-xl border border-line bg-surface-raised/60">
             {[1, 2, 3].map((i) => (
               <Skeleton key={i} className="h-14 rounded-none" />
             ))}
@@ -739,7 +739,7 @@ export default function Dashboard({
           count={mailboxes.length}
         />
         {loadingMailboxes ? (
-          <div className="space-y-1 rounded-xl border border-line bg-surface-raised/60">
+          <div className="flex flex-col gap-1 rounded-xl border border-line bg-surface-raised/60">
             {[1, 2, 3].map((i) => (
               <Skeleton key={i} className="h-14 rounded-none" />
             ))}

@@ -582,7 +582,7 @@ export default function EmailDrafts({ mailboxId: _mailboxId }: Props) {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
       <div className="flex items-baseline justify-between gap-4">
         <div>
           <h1 className="font-display text-2xl font-semibold tracking-tight text-fg-strong sm:text-[28px]">

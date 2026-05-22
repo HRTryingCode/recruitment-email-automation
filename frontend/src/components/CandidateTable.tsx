@@ -90,7 +90,7 @@ function ThreadView({ threadId }: { threadId: string }) {
 
   if (isLoading) {
     return (
-      <div className="space-y-2 p-4">
+      <div className="flex flex-col gap-2 p-4">
         {[1, 2].map((i) => (
           <Skeleton key={i} className="h-16 rounded-lg" />
         ))}
@@ -102,7 +102,7 @@ function ThreadView({ threadId }: { threadId: string }) {
   const messages = thread?.messages ?? [];
 
   return (
-    <div className="max-h-72 space-y-2.5 overflow-y-auto p-4">
+    <div className="max-h-72 flex flex-col gap-2.5 overflow-y-auto p-4">
       {messages.length === 0 ? (
         <p className="text-[13px] text-fg-subtle">No messages yet</p>
       ) : (
@@ -360,7 +360,7 @@ export default function CandidateTable({ mailboxId }: Props) {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
       <div className="flex items-baseline justify-between gap-4">
         <div>
           <h1 className="font-display text-2xl font-semibold tracking-tight text-fg-strong sm:text-[28px]">

@@ -2,27 +2,12 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { OAuth2Client } from 'google-auth-library';
 import { prisma } from '../db/client';
-import {
-  hashPassword,
-  issueToken,
-  verifyPassword,
-} from '../services/auth.service';
+import { issueToken } from '../services/auth.service';
 import { requireAuth } from '../middleware/requireAuth';
 import { createError } from '../middleware/error';
 import { config } from '../config';
 
 const router = Router();
-
-const signupSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(8).max(128),
-  name: z.string().min(1).max(200).optional(),
-});
-
-const loginSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(1).max(128),
-});
 
 const googleSchema = z.object({
   idToken: z.string().min(1),
@@ -48,69 +33,11 @@ function publicUser(user: {
   };
 }
 
-// POST /api/auth/signup
-router.post(
-  '/signup',
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const parsed = signupSchema.safeParse(req.body);
-      if (!parsed.success) {
-        return next(createError(parsed.error.errors[0]?.message ?? 'Invalid input', 400));
-      }
-      const { email, password, name } = parsed.data;
-
-      const existing = await prisma.user.findUnique({ where: { email } });
-      if (existing) {
-        return next(createError('Email already registered', 409));
-      }
-
-      const passwordHash = await hashPassword(password);
-      const user = await prisma.user.create({
-        data: { email, passwordHash, name: name ?? null },
-      });
-
-      const token = issueToken(user.id);
-      res.status(201).json({
-        success: true,
-        data: { token, user: publicUser(user) },
-      });
-    } catch (err) {
-      next(err);
-    }
-  }
-);
-
-// POST /api/auth/login
-router.post(
-  '/login',
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const parsed = loginSchema.safeParse(req.body);
-      if (!parsed.success) {
-        return next(createError(parsed.error.errors[0]?.message ?? 'Invalid input', 400));
-      }
-      const { email, password } = parsed.data;
-
-      const user = await prisma.user.findUnique({ where: { email } });
-      if (!user || !user.passwordHash) {
-        return next(createError('Invalid email or password', 401));
-      }
-
-      const ok = await verifyPassword(password, user.passwordHash);
-      if (!ok) {
-        return next(createError('Invalid email or password', 401));
-      }
-
-      const token = issueToken(user.id);
-      res.json({
-        success: true,
-        data: { token, user: publicUser(user) },
-      });
-    } catch (err) {
-      next(err);
-    }
-  }
-);
+// Password-based signup + login were removed in Phase AX. The UI only ever
+// used /api/auth/google; the dormant /signup endpoint accepted ANY email
+// (no @archive.com restriction), so anyone on the internet could create a
+// JWT with full access to all tenant data — single-tenant isolation was
+// only enforced by the OAuth path.
 
 // POST /api/auth/google
 router.post(
