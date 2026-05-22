@@ -72,6 +72,8 @@ export function getAuthUrl(state: string): string {
     // derives the draft signing persona from this field.
     'https://www.googleapis.com/auth/userinfo.profile',
     'https://www.googleapis.com/auth/userinfo.email',
+    // Needed to read Gmail send-as signatures for handoff draft templates.
+    'https://www.googleapis.com/auth/gmail.settings.basic',
   ];
 
   return oauth2Client.generateAuthUrl({
@@ -648,11 +650,13 @@ async function classifyAndDraft(opts: {
   // 7. For non-Sofia inboxes, use the fixed handoff template — no Claude needed.
   //    Sofia is CC'd on every sent draft via the createDraft helper.
   if (isHandoffInbox) {
+    const signatureHtml = await fetchMailboxSignature(mailbox.id);
     const content = buildHandoffDraftContent(
       candidate.name,
       mailbox.displayName,
       mailbox.emailAddress,
-      thread.subject
+      thread.subject,
+      signatureHtml
     );
     const inReplyToMessageId = parsed.headers.messageId || null;
     const existingRefs = parsed.headers.references ?? '';
@@ -1403,14 +1407,54 @@ const SOFIA_EMAIL = 'sofia@archive.com';
  * the recruiter actually writes instead of using the generic style guide.
  */
 /**
+ * Fetch the Gmail send-as signature for a mailbox.
+ * Returns the HTML signature string, or null if unavailable
+ * (e.g. the token predates the gmail.settings.basic scope).
+ */
+export async function fetchMailboxSignature(mailboxId: string): Promise<string | null> {
+  try {
+    const mailbox = await prisma.mailbox.findUnique({ where: { id: mailboxId } });
+    if (!mailbox) return null;
+    const credentials = parseCredentials(mailbox);
+    const auth = getAuthenticatedClient(credentials);
+    const gmail = google.gmail({ version: 'v1', auth });
+    const res = await gmail.users.settings.sendAs.list({ userId: 'me' });
+    const sendAsEntries = res.data.sendAs ?? [];
+    // Prefer the primary send-as address; fall back to the first entry.
+    const primary =
+      sendAsEntries.find((s) => s.isPrimary) ?? sendAsEntries[0];
+    return primary?.signature ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function htmlSignatureToPlainText(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li|tr)>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/**
  * Build the fixed handoff reply used for Aaron/Paul/Ethan's inboxes.
  * "I'm looping in Sofia…" — no Claude needed, consistent every time.
+ * Pass signatureHtml (from fetchMailboxSignature) to include the real signature.
  */
 export function buildHandoffDraftContent(
   candidateName: string,
   recruiterDisplayName: string | null,
   recruiterEmail: string,
-  threadSubject: string
+  threadSubject: string,
+  signatureHtml: string | null = null
 ): { subject: string; bodyText: string; bodyHtml: string } {
   const firstName = candidateName.split(/\s+/)[0] ?? candidateName;
   const displaySeed = (recruiterDisplayName ?? '').trim();
@@ -1421,10 +1465,14 @@ export function buildHandoffDraftContent(
       : ((recruiterEmail.split('@')[0] ?? '').split(/[._-]/)[0] ?? 'there');
 
   const subject = threadSubject.startsWith('Re:') ? threadSubject : `Re: ${threadSubject}`;
+
+  const sigPlainText = signatureHtml ? '\n' + htmlSignatureToPlainText(signatureHtml) : recruiterFirst;
+  const sigHtml = signatureHtml ? `\n${signatureHtml}` : recruiterFirst;
+
   const bodyText =
-    `Hi ${firstName},\n\nI hope you're doing well.\n\nI'm looping in Sofia from the recruitment team here to schedule time with you and share more about the position.\n\nBest,\n${recruiterFirst}`;
+    `Hi ${firstName},\n\nI hope you're doing well.\n\nI'm looping in Sofia from the recruitment team here to schedule time with you and share more about the position.\n\nBest,${sigPlainText}`;
   const bodyHtml =
-    `<p>Hi ${firstName},</p>\n<p>I hope you're doing well.</p>\n<p>I'm looping in Sofia from the recruitment team here to schedule time with you and share more about the position.</p>\n<p>Best,<br>${recruiterFirst}</p>`;
+    `<p>Hi ${firstName},</p>\n<p>I hope you're doing well.</p>\n<p>I'm looping in Sofia from the recruitment team here to schedule time with you and share more about the position.</p>\n<p>Best,</p>${sigHtml}`;
 
   return { subject, bodyText, bodyHtml };
 }

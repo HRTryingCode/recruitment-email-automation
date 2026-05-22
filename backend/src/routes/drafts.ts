@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../db/client';
 import { createError } from '../middleware/error';
-import { createDraft, sendDraft as gmailSendDraft, fetchExamplesForMailbox, buildHandoffDraftContent } from '../services/gmail.service';
+import { createDraft, sendDraft as gmailSendDraft, fetchExamplesForMailbox, buildHandoffDraftContent, fetchMailboxSignature } from '../services/gmail.service';
 import { classifyReply, generateDraftReply } from '../services/claude.service';
 import { config } from '../config';
 import { logEvent } from '../services/monitoring.service';
@@ -381,11 +381,13 @@ async function regenerateDraftById(id: string): Promise<RegenerateOk | Regenerat
 
   if (isHandoffInbox && classificationResult.classification === 'INTERESTED') {
     // Non-Sofia + INTERESTED → always use the fixed handoff template
+    const signatureHtml = await fetchMailboxSignature(mailbox.id);
     const content = buildHandoffDraftContent(
       candidate.name,
       mailbox.displayName,
       mailbox.emailAddress,
-      thread.subject
+      thread.subject,
+      signatureHtml
     );
     replySubject = content.subject;
     replyBodyText = content.bodyText;
