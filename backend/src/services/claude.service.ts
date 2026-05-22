@@ -133,6 +133,12 @@ export interface DraftReplyResult {
   bodyHtml: string;
 }
 
+export interface ExampleReply {
+  candidateName: string;
+  candidateMessage: string;
+  ourReply: string;
+}
+
 export interface ThreadContext {
   subject: string;
   messages: Array<{
@@ -143,6 +149,8 @@ export interface ThreadContext {
   }>;
   candidateName: string;
   classification: 'INTERESTED' | 'NOT_INTERESTED' | 'NEUTRAL';
+  /** Real sent replies from the same mailbox/Sofia used as few-shot style examples. */
+  examples?: ExampleReply[];
 }
 
 /**
@@ -404,6 +412,18 @@ export async function generateDraftReply(
 
   const firstName = deriveFirstName(caller);
 
+  // Build few-shot examples block from real sent replies
+  let examplesBlock = '';
+  if (thread.examples && thread.examples.length > 0) {
+    const exampleLines = thread.examples
+      .map(
+        (ex, i) =>
+          `EXAMPLE ${i + 1}:\nCandidate wrote:\n"${ex.candidateMessage.trim()}"\n\nWe replied:\n"${ex.ourReply.trim()}"`
+      )
+      .join('\n\n---\n\n');
+    examplesBlock = `\n\nSTYLE EXAMPLES — real replies ${firstName} has sent before. Mirror this exact writing style, length, and tone. If they are short, be short. If they skip pleasantries, skip them:\n\n${exampleLines}`;
+  }
+
   const response = await client.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 2048,
@@ -420,7 +440,7 @@ Persona to write as:
 Generate a personalized reply email for candidate ${thread.candidateName}.
 
 Thread subject: ${thread.subject}
-Classification: ${thread.classification}
+Classification: ${thread.classification}${examplesBlock}
 
 Full conversation thread:
 ${messagesContext}
@@ -433,12 +453,11 @@ Respond with a JSON object in this exact format:
 }
 
 Requirements:
-- Follow Archive's communication style
+- Match the style and length of the examples above if provided — they are ground truth for how ${firstName} writes
 - Be appropriate for the classification (${thread.classification})
-- Keep it concise and action-oriented
 - Subject should be prefixed with "Re: " if replying to existing thread
 - HTML version should use simple formatting (no complex CSS)
-- Sign off with the persona's first name (${firstName}). Do not invent or mention any other person from Archive's team.`,
+- Sign off with ${firstName}. Do not invent or mention any other person from Archive's team.`,
       },
     ],
   });

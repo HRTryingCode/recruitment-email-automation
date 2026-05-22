@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../db/client';
 import { createError } from '../middleware/error';
-import { createDraft, sendDraft as gmailSendDraft } from '../services/gmail.service';
+import { createDraft, sendDraft as gmailSendDraft, fetchExamplesForMailbox } from '../services/gmail.service';
 import { classifyReply, generateDraftReply } from '../services/claude.service';
 import { logEvent } from '../services/monitoring.service';
 import { serializeEmailMessages } from '../lib/emailMessageSerializer';
@@ -371,12 +371,19 @@ async function regenerateDraftById(id: string): Promise<RegenerateOk | Regenerat
       receivedAt: m.receivedAt,
     }));
 
+  const examples = await fetchExamplesForMailbox(
+    mailbox.id,
+    mailbox.emailAddress,
+    classificationResult.classification
+  );
+
   const draftReply = await generateDraftReply(
     {
       subject: thread.subject,
       messages: allMessagesAsc,
       candidateName: candidate.name,
       classification: classificationResult.classification,
+      examples,
     },
     {
       email: mailbox.emailAddress,

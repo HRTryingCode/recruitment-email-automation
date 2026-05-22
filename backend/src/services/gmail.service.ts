@@ -2,7 +2,7 @@ import { google } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 import { config } from '../config';
 import { prisma } from '../db/client';
-import { classifyReply, generateDraftReply } from './claude.service';
+import { classifyReply, generateDraftReply, type ExampleReply } from './claude.service';
 import { logEvent } from './monitoring.service';
 import { decrypt, encrypt } from '../lib/crypto';
 import type { Mailbox, EmailThread } from '@prisma/client';
@@ -621,6 +621,7 @@ async function classifyAndDraft(opts: {
   if (classification !== 'INTERESTED') return;
 
   try {
+    const examples = await fetchExamplesForMailbox(mailbox.id, mailbox.emailAddress, classification);
     const draftReply = await generateDraftReply(
       {
         subject: thread.subject,
@@ -632,6 +633,7 @@ async function classifyAndDraft(opts: {
         })),
         candidateName: candidate.name,
         classification,
+        examples,
       },
       // Ghostwrite the draft as the mailbox owner (Paul / Em / etc.), not as a
       // fixed company-wide persona. Sofia is the CC recipient (Phase I), not
@@ -1327,6 +1329,66 @@ export function isWebhookDuplicate(
 // Test-only: reset cache between unit tests.
 export function _resetWebhookIdempotencyCache(): void {
   webhookIdempotencyCache.clear();
+}
+
+const SOFIA_EMAIL = 'sofia@archive.com';
+
+/**
+ * Fetch up to 3 real sent replies from this mailbox (or Sofia's inbox, since
+ * she handles continuations across all accounts) for the given classification.
+ * These are passed as few-shot style examples to Claude so drafts mirror how
+ * the recruiter actually writes instead of using the generic style guide.
+ */
+export async function fetchExamplesForMailbox(
+  mailboxId: string,
+  mailboxEmail: string,
+  classification: 'INTERESTED' | 'NOT_INTERESTED' | 'NEUTRAL'
+): Promise<ExampleReply[]> {
+  const mailboxIds = [mailboxId];
+  if (mailboxEmail.toLowerCase() !== SOFIA_EMAIL) {
+    const sofiaMailbox = await prisma.mailbox.findUnique({ where: { emailAddress: SOFIA_EMAIL } });
+    if (sofiaMailbox) mailboxIds.push(sofiaMailbox.id);
+  }
+
+  const sentDrafts = await prisma.emailDraft.findMany({
+    where: {
+      status: 'SENT',
+      classification,
+      thread: { mailboxId: { in: mailboxIds } },
+    },
+    include: {
+      thread: {
+        include: {
+          messages: { orderBy: { receivedAt: 'asc' } },
+          candidate: { select: { name: true, email: true } },
+          mailbox: { select: { emailAddress: true } },
+        },
+      },
+    },
+    orderBy: { sentAt: 'desc' },
+    take: 6,
+  });
+
+  const examples: ExampleReply[] = [];
+  for (const draft of sentDrafts) {
+    const recruiterDomain = draft.thread.mailbox.emailAddress.split('@')[1] ?? '';
+    const candidateEmail = draft.thread.candidate?.email ?? '';
+    // The candidate message is any message not from the recruiter's domain
+    const candidateMessages = draft.thread.messages.filter(
+      (m) => !m.fromAddress.toLowerCase().endsWith(`@${recruiterDomain}`) ||
+             m.fromAddress.toLowerCase() === candidateEmail.toLowerCase()
+    );
+    const lastCandidateMsg = candidateMessages[candidateMessages.length - 1];
+    if (!lastCandidateMsg?.bodyText || !draft.bodyText) continue;
+
+    examples.push({
+      candidateName: draft.thread.candidate?.name ?? 'the candidate',
+      candidateMessage: lastCandidateMsg.bodyText.slice(0, 800).trim(),
+      ourReply: draft.bodyText.slice(0, 600).trim(),
+    });
+    if (examples.length >= 3) break;
+  }
+  return examples;
 }
 
 export async function processWebhook(data: { message: { data: string } }): Promise<void> {
