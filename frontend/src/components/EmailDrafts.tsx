@@ -1,7 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import * as Dialog from '@radix-ui/react-dialog';
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './ui/empty';
+import { Skeleton } from './ui/skeleton';
+import { Button } from './ui/button';
 import {
   fetchDrafts,
   approveDraft,
@@ -168,17 +179,19 @@ function EmptyDraftsState({ status }: { status: DraftStatus }) {
 
   const Icon = config.icon;
   return (
-    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-line-strong bg-surface-raised/40 px-6 py-16 text-center">
-      <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-fg-strong/[0.04] text-accent-600 ring-1 ring-inset ring-fg-strong/[0.06] dark:text-accent-300">
-        <Icon className="h-5 w-5" />
-      </div>
-      <p className="font-display text-[15px] font-medium text-fg-strong">
-        {config.title}
-      </p>
-      <p className="mt-1.5 max-w-md text-[13px] leading-relaxed text-fg-muted">
-        {config.description}
-      </p>
-    </div>
+    <Empty className="border border-dashed border-line-strong bg-surface-raised/40">
+      <EmptyHeader>
+        <EmptyMedia variant="icon" className="bg-fg-strong/[0.04] text-accent-600 dark:text-accent-300">
+          <Icon className="size-5" />
+        </EmptyMedia>
+        <EmptyTitle className="font-display text-[15px] font-medium text-fg-strong">
+          {config.title}
+        </EmptyTitle>
+        <EmptyDescription className="max-w-md text-[13px] leading-relaxed text-fg-muted">
+          {config.description}
+        </EmptyDescription>
+      </EmptyHeader>
+    </Empty>
   );
 }
 
@@ -202,48 +215,45 @@ function ShortcutsDialog({
   onOpenChange: (next: boolean) => void;
 }) {
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/50 backdrop-blur-sm data-[state=open]:animate-fade-in" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-[70] w-[480px] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-line bg-surface-elevated/95 p-6 shadow-2xl backdrop-blur-xl data-[state=open]:animate-fade-in">
-          <Dialog.Title className="font-display text-[16px] font-semibold text-fg-strong">
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="font-display text-[16px] font-semibold">
             Keyboard shortcuts
-          </Dialog.Title>
-          <Dialog.Description className="mt-1 text-[12.5px] text-fg-muted">
+          </DialogTitle>
+          <DialogDescription className="text-[12.5px]">
             Available on the Drafts tab and while the review pane is open.
-          </Dialog.Description>
-          <div className="mt-5 space-y-2.5">
-            {SHORTCUTS.map((s) => (
-              <div
-                key={s.label}
-                className="flex items-center justify-between gap-3"
-              >
-                <span className="text-[13px] text-fg-default">{s.label}</span>
-                <div className="flex items-center gap-1">
-                  {s.keys.map((k, i) => (
-                    <span key={i} className="flex items-center gap-1">
-                      {i > 0 && (
-                        <span className="text-[11px] text-fg-subtle">or</span>
-                      )}
-                      <kbd className="rounded-md border border-line bg-surface-base px-2 py-0.5 font-mono text-[11px] font-medium text-fg-strong shadow-sm">
-                        {k}
-                      </kbd>
-                    </span>
-                  ))}
-                </div>
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-2.5">
+          {SHORTCUTS.map((s) => (
+            <div
+              key={s.label}
+              className="flex items-center justify-between gap-3"
+            >
+              <span className="text-[13px] text-fg-default">{s.label}</span>
+              <div className="flex items-center gap-1">
+                {s.keys.map((k, i) => (
+                  <span key={i} className="flex items-center gap-1">
+                    {i > 0 && (
+                      <span className="text-[11px] text-fg-subtle">or</span>
+                    )}
+                    <kbd className="rounded-md border border-line bg-surface-base px-2 py-0.5 font-mono text-[11px] font-medium text-fg-strong shadow-sm">
+                      {k}
+                    </kbd>
+                  </span>
+                ))}
               </div>
-            ))}
-          </div>
-          <div className="mt-6 flex justify-end">
-            <Dialog.Close asChild>
-              <button className="rounded-lg bg-fg-strong/[0.05] px-4 py-2 text-[13px] font-medium text-fg-default transition-colors hover:bg-fg-strong/[0.09]">
-                Got it
-              </button>
-            </Dialog.Close>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+            </div>
+          ))}
+        </div>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="secondary">Got it</Button>
+          </DialogClose>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -558,12 +568,15 @@ export default function EmailDrafts({ mailboxId: _mailboxId }: Props) {
     return (
       <div className="rounded-xl border border-line bg-surface-raised p-10 text-center">
         <p className="mb-3 text-rose-700 dark:text-rose-300">Failed to load drafts</p>
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
           onClick={() => refetch()}
-          className="mx-auto flex items-center gap-2 rounded-lg bg-fg-strong/[0.05] px-3 py-1.5 text-[13px] text-fg-default transition-colors hover:bg-fg-strong/[0.09]"
+          className="mx-auto"
         >
-          <RefreshCw className="h-4 w-4" /> Retry
-        </button>
+          <RefreshCw data-icon="inline-start" />
+          Retry
+        </Button>
       </div>
     );
   }
@@ -617,7 +630,7 @@ export default function EmailDrafts({ mailboxId: _mailboxId }: Props) {
         {isLoading ? (
           <div className="divide-y divide-line-soft">
             {Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className="h-16 skeleton" />
+              <Skeleton key={i} className="h-16 rounded-none" />
             ))}
           </div>
         ) : drafts.length === 0 ? (

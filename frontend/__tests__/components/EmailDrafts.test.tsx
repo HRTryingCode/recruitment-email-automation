@@ -10,7 +10,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import EmailDrafts from '../../src/components/EmailDrafts';
-import { TooltipProvider } from '../../src/components/ui/Tooltip';
+import { TooltipProvider } from '../../src/components/ui/tooltip';
 import type { EmailDraft } from '../../src/lib/api';
 import * as api from '../../src/lib/api';
 

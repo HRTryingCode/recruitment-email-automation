@@ -1,6 +1,16 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import * as AlertDialog from '@radix-ui/react-alert-dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from './ui/alert-dialog';
 import {
   fetchCandidates,
   fetchMessages,
@@ -30,7 +40,11 @@ import {
   ArrowDown,
 } from 'lucide-react';
 import { StatusBadge, type StatusVariant } from './ui/StatusBadge';
-import { Tooltip } from './ui/Tooltip';
+import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import { Skeleton } from './ui/skeleton';
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './ui/empty';
 
 function ReplyStatusBadge({ candidate }: { candidate: Candidate }) {
   const derived: NonNullable<Candidate['replyStatus']> =
@@ -43,10 +57,10 @@ function ReplyStatusBadge({ candidate }: { candidate: Candidate }) {
 
   const styles = {
     REPLIED:
-      'bg-emerald-500/10 text-emerald-700 ring-emerald-500/20 dark:text-emerald-300',
+      'bg-emerald-500/10 text-emerald-700 ring-1 ring-inset ring-emerald-500/20 dark:text-emerald-300',
     AWAITING_REPLY:
-      'bg-amber-500/10 text-amber-700 ring-amber-500/20 dark:text-amber-300',
-    NEW: 'bg-fg-strong/[0.04] text-fg-muted ring-fg-strong/[0.06]',
+      'bg-amber-500/10 text-amber-700 ring-1 ring-inset ring-amber-500/20 dark:text-amber-300',
+    NEW: 'bg-fg-strong/[0.04] text-fg-muted ring-1 ring-inset ring-fg-strong/[0.06]',
   }[derived];
 
   const label = {
@@ -56,14 +70,14 @@ function ReplyStatusBadge({ candidate }: { candidate: Candidate }) {
   }[derived];
 
   return (
-    <span
+    <Badge
       className={cn(
-        'inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset',
+        'h-auto border-transparent px-2 py-0.5 text-[11px]',
         styles
       )}
     >
       {label}
-    </span>
+    </Badge>
   );
 }
 
@@ -78,7 +92,7 @@ function ThreadView({ threadId }: { threadId: string }) {
     return (
       <div className="space-y-2 p-4">
         {[1, 2].map((i) => (
-          <div key={i} className="h-16 skeleton rounded-lg" />
+          <Skeleton key={i} className="h-16 rounded-lg" />
         ))}
       </div>
     );
@@ -332,12 +346,15 @@ export default function CandidateTable({ mailboxId }: Props) {
     return (
       <div className="rounded-xl border border-line bg-surface-raised p-10 text-center">
         <p className="mb-3 text-rose-700 dark:text-rose-300">Failed to load candidates</p>
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
           onClick={() => refetch()}
-          className="mx-auto flex items-center gap-2 rounded-lg bg-fg-strong/[0.05] px-3 py-1.5 text-[13px] text-fg-default transition-colors hover:bg-fg-strong/[0.09]"
+          className="mx-auto"
         >
-          <RefreshCw className="h-4 w-4" /> Retry
-        </button>
+          <RefreshCw data-icon="inline-start" />
+          Retry
+        </Button>
       </div>
     );
   }
@@ -414,7 +431,7 @@ export default function CandidateTable({ mailboxId }: Props) {
                   <tr key={i}>
                     {Array.from({ length: 7 }).map((_, j) => (
                       <td key={j} className="px-4 py-3">
-                        <div className="h-4 skeleton" />
+                        <Skeleton className="h-4" />
                       </td>
                     ))}
                   </tr>
@@ -448,19 +465,21 @@ export default function CandidateTable({ mailboxId }: Props) {
         </table>
 
         {!isLoading && candidates.length === 0 && (
-          <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
-            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-fg-strong/[0.04] text-fg-muted ring-1 ring-inset ring-fg-strong/[0.06]">
-              <Users className="h-5 w-5" />
-            </div>
-            <p className="font-display text-[15px] font-medium text-fg-strong">
-              No candidates found
-            </p>
-            <p className="mt-1.5 max-w-sm text-[13px] leading-relaxed text-fg-muted">
-              {statusFilter
-                ? 'Try a different filter — or wait for new emails to be classified.'
-                : 'Candidates show up here as soon as their first email is processed.'}
-            </p>
-          </div>
+          <Empty className="px-6 py-16">
+            <EmptyHeader>
+              <EmptyMedia variant="icon" className="bg-fg-strong/[0.04] text-fg-muted">
+                <Users className="size-5" />
+              </EmptyMedia>
+              <EmptyTitle className="font-display text-[15px] font-medium text-fg-strong">
+                No candidates found
+              </EmptyTitle>
+              <EmptyDescription className="max-w-sm text-[13px] leading-relaxed text-fg-muted">
+                {statusFilter
+                  ? 'Try a different filter — or wait for new emails to be classified.'
+                  : 'Candidates show up here as soon as their first email is processed.'}
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
         )}
 
         <PaginationFooter
@@ -682,45 +701,39 @@ function IgnoreConfirmButton({
   disabled: boolean;
 }) {
   return (
-    <AlertDialog.Root>
-      <Tooltip content="Ignore candidate (mute future drafts; reversible)">
-        <AlertDialog.Trigger asChild>
-          <button
-            disabled={disabled}
-            aria-label="Ignore candidate"
-            className="flex h-7 w-7 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-rose-500/15 hover:text-rose-700 dark:hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <EyeOff className="h-3.5 w-3.5" />
-          </button>
-        </AlertDialog.Trigger>
+    <AlertDialog>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <AlertDialogTrigger asChild>
+            <button
+              disabled={disabled}
+              aria-label="Ignore candidate"
+              className="flex size-7 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-rose-500/15 hover:text-rose-700 dark:hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <EyeOff className="h-3.5 w-3.5" />
+            </button>
+          </AlertDialogTrigger>
+        </TooltipTrigger>
+        <TooltipContent>Ignore candidate (mute future drafts; reversible)</TooltipContent>
       </Tooltip>
-      <AlertDialog.Portal>
-        <AlertDialog.Overlay className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm data-[state=open]:animate-fade-in" />
-        <AlertDialog.Content className="fixed left-1/2 top-1/2 z-50 w-[440px] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-line bg-surface-elevated/95 p-6 shadow-2xl backdrop-blur-xl data-[state=open]:animate-fade-in">
-          <AlertDialog.Title className="font-display text-[16px] font-semibold text-fg-strong">
-            Ignore {candidateName}?
-          </AlertDialog.Title>
-          <AlertDialog.Description className="mt-2 text-[13.5px] leading-relaxed text-fg-muted">
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Ignore {candidateName}?</AlertDialogTitle>
+          <AlertDialogDescription>
             They'll be hidden from the dashboard and any pending drafts will be
             discarded. You can restore them at any time.
-          </AlertDialog.Description>
-          <div className="mt-6 flex justify-end gap-2">
-            <AlertDialog.Cancel asChild>
-              <button className="rounded-lg bg-fg-strong/[0.05] px-4 py-2 text-[13px] font-medium text-fg-default transition-colors hover:bg-fg-strong/[0.09]">
-                Cancel
-              </button>
-            </AlertDialog.Cancel>
-            <AlertDialog.Action asChild>
-              <button
-                onClick={onConfirm}
-                className="rounded-lg bg-rose-500 px-4 py-2 text-[13px] font-medium text-white transition-colors hover:bg-rose-400"
-              >
-                Ignore candidate
-              </button>
-            </AlertDialog.Action>
-          </div>
-        </AlertDialog.Content>
-      </AlertDialog.Portal>
-    </AlertDialog.Root>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            onClick={onConfirm}
+          >
+            Ignore candidate
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
