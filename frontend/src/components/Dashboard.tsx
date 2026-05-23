@@ -398,6 +398,9 @@ function MailboxHealthAccordion({
                           <p className="max-w-[220px] truncate font-mono text-[12px] text-fg-strong">
                             {row.emailAddress}
                           </p>
+                          <p className="font-mono text-[10px] text-fg-subtle select-all">
+                            {row.mailboxId}
+                          </p>
                           {!row.isActive && (
                             <span className="text-[10px] text-rose-700 dark:text-rose-300">
                               inactive

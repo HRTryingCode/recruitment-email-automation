@@ -1328,21 +1328,11 @@ export async function createDraft(
 
   let rawEmail: string;
   if (draft.bodyHtml) {
-    // Send as multipart/alternative so email clients render the HTML version
-    // (which includes the logo, Archive link, and signature styling) while
-    // plain-text clients still get a readable fallback.
-    const boundary = `----=_Part_${Date.now().toString(36)}`;
-    headers.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
-    rawEmail =
-      headers.join('\r\n') +
-      '\r\n\r\n' +
-      `--${boundary}\r\n` +
-      `Content-Type: text/plain; charset=utf-8\r\n\r\n` +
-      draft.bodyText +
-      `\r\n\r\n--${boundary}\r\n` +
-      `Content-Type: text/html; charset=utf-8\r\n\r\n` +
-      draft.bodyHtml +
-      `\r\n\r\n--${boundary}--`;
+    // Send as HTML-only so every email client renders the styled version with
+    // the signature logo and link. text/plain fallbacks cause clients to show
+    // the plain-text part (which word-wraps mid-sentence).
+    headers.push(`Content-Type: text/html; charset=utf-8`);
+    rawEmail = headers.join('\r\n') + '\r\n\r\n' + draft.bodyHtml;
   } else {
     headers.push(`Content-Type: text/plain; charset=utf-8`);
     rawEmail = headers.join('\r\n') + '\r\n\r\n' + draft.bodyText;
@@ -1665,12 +1655,24 @@ export function buildHandoffDraftContent(
   const subject = threadSubject.startsWith('Re:') ? threadSubject : `Re: ${threadSubject}`;
 
   const sigPlainText = signatureHtml ? '\n' + htmlSignatureToPlainText(signatureHtml) : '\n' + recruiterFirst;
-  const sigHtml = signatureHtml ? `\n${signatureHtml}` : `\n${recruiterFirst}`;
+  const sigHtmlBlock = signatureHtml
+    ? `<div style="margin-top:8px">${signatureHtml}</div>`
+    : `<span>${recruiterFirst}</span>`;
 
   const bodyText =
     `Hi ${firstName},\n\nI hope you're doing well.\n\nI'm looping in Sofia from the recruitment team here to schedule time with you and share more about the position.\n\nBest,${sigPlainText}`;
-  const bodyHtml =
-    `<p>Hi ${firstName},</p>\n<p>I hope you're doing well.</p>\n<p>I'm looping in Sofia from the recruitment team here to schedule time with you and share more about the position.</p>\n<p>Best,</p>${sigHtml}`;
+
+  // Use a simple inline-style layout that renders consistently across Gmail,
+  // Superhuman, Outlook, and Apple Mail — no external CSS, no block elements
+  // that add unwanted spacing. Line-height and margin on <p> kept minimal so
+  // the email looks like a real person wrote it, not a newsletter.
+  const bodyHtml = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;font-size:14px;line-height:1.5;color:#1a1a1a">` +
+    `<p style="margin:0 0 14px 0">Hi ${firstName},</p>` +
+    `<p style="margin:0 0 14px 0">I hope you're doing well.</p>` +
+    `<p style="margin:0 0 14px 0">I'm looping in Sofia from the recruitment team here to schedule time with you and share more about the position.</p>` +
+    `<p style="margin:0 0 6px 0">Best,</p>` +
+    sigHtmlBlock +
+    `</div>`;
 
   return { subject, bodyText, bodyHtml };
 }
