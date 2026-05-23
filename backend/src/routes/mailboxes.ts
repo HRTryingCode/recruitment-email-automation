@@ -305,14 +305,25 @@ router.post(
 );
 
 // GET /api/mailboxes/:id/signature
-// Returns the raw HTML signature for the mailbox so the frontend can preview it.
+// Returns the raw HTML signature (and diagnostics) for a mailbox.
+// Useful for verifying the signature before it goes into a draft.
 router.get('/:id/signature', requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = String(req.params.id);
     const mailbox = await prisma.mailbox.findUnique({ where: { id } });
     if (!mailbox) return next(createError('Mailbox not found', 404));
     const signatureHtml = await fetchMailboxSignature(id);
-    res.json({ success: true, data: { signatureHtml } });
+    res.json({
+      success: true,
+      data: {
+        mailboxEmail: mailbox.emailAddress,
+        signatureHtml,
+        found: signatureHtml !== null,
+        previewUrl: signatureHtml
+          ? `data:text/html;charset=utf-8,${encodeURIComponent(`<!DOCTYPE html><html><body style="font-family:sans-serif">${signatureHtml}</body></html>`)}`
+          : null,
+      },
+    });
   } catch (err) {
     next(err);
   }

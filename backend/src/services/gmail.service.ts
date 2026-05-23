@@ -1491,44 +1491,91 @@ export async function fetchMailboxSignature(mailboxId: string): Promise<string |
     );
   }
 
-  // Last resort: extract the Gmail signature block from a recent sent message
-  // already stored in the DB. When recruiters send via Gmail/Superhuman, Gmail
-  // injects the signature into the HTML body — we can mine it from there without
-  // any additional API scopes.
-  return extractSignatureFromSentMessages(mailbox.emailAddress);
+  // Last resort: fetch a recent sent message directly from Gmail using the
+  // existing gmail.modify scope and extract the signature block from its HTML.
+  // No extra scopes needed — we already have read access to all messages.
+  return fetchSignatureFromGmailSent(mailbox);
 }
 
 /**
- * Look at the recruiter's own recently-sent messages (stored in EmailMessage)
- * and extract the Gmail signature block from the HTML body.
- * Gmail wraps signatures in <div class="gmail_signature">…</div>.
+ * Query Gmail's SENT folder for the most recent HTML message and extract the
+ * <div class="gmail_signature"> block. Works with the gmail.modify scope we
+ * already have, so no additional OAuth grants or DWD changes are needed.
  */
-async function extractSignatureFromSentMessages(emailAddress: string): Promise<string | null> {
-  const mailbox = await prisma.mailbox.findUnique({ where: { emailAddress } });
-  if (!mailbox) return null;
-
-  // Grab the 10 most recent outbound messages from this mailbox.
-  const sentMessages = await prisma.emailMessage.findMany({
-    where: {
-      mailboxId: mailbox.id,
-      fromAddress: { contains: emailAddress.split('@')[0] ?? emailAddress, mode: 'insensitive' },
-      bodyHtml: { not: null },
-    },
-    orderBy: { receivedAt: 'desc' },
-    take: 10,
-    select: { bodyHtml: true },
-  });
-
-  for (const msg of sentMessages) {
-    if (!msg.bodyHtml) continue;
-    const sig = extractGmailSignatureBlock(msg.bodyHtml);
-    if (sig) {
-      console.log(`[Gmail] Extracted signature from sent message for ${emailAddress}`);
-      return sig;
+async function fetchSignatureFromGmailSent(mailbox: Mailbox): Promise<string | null> {
+  try {
+    const credentials = parseCredentials(mailbox);
+    // Service-account mailboxes store { type:'service_account', impersonating: email }.
+    // Use DWD for those; fall back to OAuth for personal mailboxes.
+    let gmail: ReturnType<typeof google.gmail>;
+    const credType = (credentials as Record<string, unknown>).type;
+    if (credType === 'service_account') {
+      const keyJson = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON;
+      if (!keyJson) {
+        console.warn(`[Gmail] fetchSignatureFromGmailSent: service account creds but no key JSON for ${mailbox.emailAddress}`);
+        return null;
+      }
+      const saAuthOptions: { scopes: string[]; subject: string; credentials: Record<string, unknown> } = {
+        scopes: ['https://www.googleapis.com/auth/gmail.modify'],
+        subject: mailbox.emailAddress,
+        credentials: JSON.parse(keyJson) as Record<string, unknown>,
+      };
+      const saAuth = new google.auth.GoogleAuth(saAuthOptions);
+      const saClient = await saAuth.getClient();
+      gmail = google.gmail({ version: 'v1', auth: saClient as Parameters<typeof google.gmail>[0]['auth'] });
+    } else {
+      const auth = getAuthenticatedClient(credentials);
+      gmail = google.gmail({ version: 'v1', auth });
     }
-  }
 
-  console.warn(`[Gmail] Could not find a Gmail signature block in sent messages for ${emailAddress}`);
+    // List the 10 most recent sent messages that have HTML content.
+    const listRes = await gmail.users.messages.list({
+      userId: 'me',
+      labelIds: ['SENT'],
+      maxResults: 10,
+    });
+
+    for (const stub of listRes.data.messages ?? []) {
+      if (!stub.id) continue;
+      const msg = await gmail.users.messages.get({
+        userId: 'me',
+        id: stub.id,
+        format: 'full',
+      });
+
+      const html = extractHtmlFromGmailPayload(msg.data.payload);
+      if (!html) continue;
+
+      const sig = extractGmailSignatureBlock(html);
+      if (sig) {
+        console.log(`[Gmail] fetchSignatureFromGmailSent: found signature for ${mailbox.emailAddress}`);
+        return sig;
+      }
+    }
+
+    console.warn(`[Gmail] fetchSignatureFromGmailSent: no signature found in SENT for ${mailbox.emailAddress}`);
+    return null;
+  } catch (err) {
+    console.warn(
+      `[Gmail] fetchSignatureFromGmailSent failed for ${mailbox.emailAddress}:`,
+      err instanceof Error ? err.message : err
+    );
+    return null;
+  }
+}
+
+/** Recursively walk a Gmail message payload and return the first text/html part body. */
+function extractHtmlFromGmailPayload(
+  payload: import('googleapis').gmail_v1.Schema$MessagePart | null | undefined
+): string | null {
+  if (!payload) return null;
+  if (payload.mimeType === 'text/html' && payload.body?.data) {
+    return Buffer.from(payload.body.data, 'base64').toString('utf-8');
+  }
+  for (const part of payload.parts ?? []) {
+    const found = extractHtmlFromGmailPayload(part);
+    if (found) return found;
+  }
   return null;
 }
 
