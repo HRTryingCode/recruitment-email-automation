@@ -1316,7 +1316,7 @@ export async function createDraft(
   }
 
   headers.push(`Subject: ${draft.subject}`);
-  headers.push(`Content-Type: text/plain; charset=utf-8`);
+  headers.push('MIME-Version: 1.0');
 
   // CRITICAL: Set In-Reply-To and References for Superhuman threading
   if (draft.inReplyToMessageId) {
@@ -1326,7 +1326,27 @@ export async function createDraft(
     headers.push(`References: ${draft.referencesHeader}`);
   }
 
-  const rawEmail = headers.join('\r\n') + '\r\n\r\n' + draft.bodyText;
+  let rawEmail: string;
+  if (draft.bodyHtml) {
+    // Send as multipart/alternative so email clients render the HTML version
+    // (which includes the logo, Archive link, and signature styling) while
+    // plain-text clients still get a readable fallback.
+    const boundary = `----=_Part_${Date.now().toString(36)}`;
+    headers.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
+    rawEmail =
+      headers.join('\r\n') +
+      '\r\n\r\n' +
+      `--${boundary}\r\n` +
+      `Content-Type: text/plain; charset=utf-8\r\n\r\n` +
+      draft.bodyText +
+      `\r\n\r\n--${boundary}\r\n` +
+      `Content-Type: text/html; charset=utf-8\r\n\r\n` +
+      draft.bodyHtml +
+      `\r\n\r\n--${boundary}--`;
+  } else {
+    headers.push(`Content-Type: text/plain; charset=utf-8`);
+    rawEmail = headers.join('\r\n') + '\r\n\r\n' + draft.bodyText;
+  }
   const encodedEmail = Buffer.from(rawEmail)
     .toString('base64')
     .replace(/\+/g, '-')
