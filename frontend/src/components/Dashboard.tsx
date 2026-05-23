@@ -6,6 +6,7 @@ import {
   fetchDrafts,
   fetchSyncHealth,
   approveDraft,
+  resyncMailbox,
   type Candidate,
   type Mailbox,
   type EmailDraft,
@@ -33,6 +34,7 @@ import {
   Sparkles,
   Check,
   CheckCircle2,
+  RefreshCw,
 } from 'lucide-react';
 
 interface Props {
@@ -319,11 +321,14 @@ function HealthPill({
 function MailboxHealthAccordion({
   data,
   loading,
+  onResync,
 }: {
   data: MailboxSyncHealth[];
   loading: boolean;
+  onResync: (mailboxId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [resyncing, setResyncing] = useState<string | null>(null);
   if (!loading && data.length === 0) return null;
 
   return (
@@ -406,6 +411,18 @@ function MailboxHealthAccordion({
                               inactive
                             </span>
                           )}
+                          <button
+                            onClick={() => {
+                              setResyncing(row.mailboxId);
+                              onResync(row.mailboxId);
+                              setTimeout(() => setResyncing(null), 4000);
+                            }}
+                            disabled={resyncing === row.mailboxId}
+                            className="mt-1 flex items-center gap-1 text-[10px] text-fg-muted hover:text-fg-strong disabled:opacity-50"
+                          >
+                            <RefreshCw className={cn('h-2.5 w-2.5', resyncing === row.mailboxId && 'animate-spin')} />
+                            {resyncing === row.mailboxId ? 'Resyncing…' : 'Resync'}
+                          </button>
                         </td>
                         <td
                           className={cn(
@@ -769,7 +786,20 @@ export default function Dashboard({
       </section>
 
       {/* Mailbox health (collapsible) */}
-      <MailboxHealthAccordion data={syncHealth} loading={loadingSyncHealth} />
+      <MailboxHealthAccordion
+        data={syncHealth}
+        loading={loadingSyncHealth}
+        onResync={async (mailboxId) => {
+          try {
+            await resyncMailbox(mailboxId);
+            toastSuccess('Resync started', 'Sent messages from the last 7 days are being imported.');
+            queryClient.invalidateQueries({ queryKey: ['candidates'] });
+            queryClient.invalidateQueries({ queryKey: ['drafts'] });
+          } catch {
+            toastError('Resync failed', 'Could not trigger resync. Check that you are an admin.');
+          }
+        }}
+      />
     </div>
   );
 }

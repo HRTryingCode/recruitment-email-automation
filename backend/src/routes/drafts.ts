@@ -1,4 +1,5 @@
 import { Router, Request, Response, NextFunction } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../db/client';
 import { createError } from '../middleware/error';
 import { createDraft, sendDraft as gmailSendDraft, fetchExamplesForMailbox, buildHandoffDraftContent, fetchMailboxSignature, htmlSignatureToPlainText } from '../services/gmail.service';
@@ -142,8 +143,18 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const { page, limit } = paged.data;
     const skip = (page - 1) * limit;
 
-    const where: Record<string, unknown> = {};
+    const where: Prisma.EmailDraftWhereInput = {};
     if (status) where.status = status;
+
+    // By default, hide drafts for candidates who have already been replied to
+    // (either via the app or directly from Gmail/Superhuman). Only show them
+    // if the caller explicitly passes ?includeReplied=true.
+    const includeReplied = qs(req.query.includeReplied) === 'true';
+    if (!includeReplied) {
+      where.thread = {
+        candidate: { repliedAt: null },
+      };
+    }
 
     const [drafts, total] = await Promise.all([
       prisma.emailDraft.findMany({

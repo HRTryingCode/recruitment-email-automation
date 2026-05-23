@@ -832,12 +832,21 @@ async function fetchAndStoreMessage(
     });
 
     if (isOutbound) {
-      // Recruiter replied via Gmail/Superhuman directly. If this thread maps
-      // to a candidate, mark the candidate as replied.
+      // Recruiter replied via Gmail/Superhuman directly.
       if (thread.candidateId) {
         await prisma.candidate.update({
           where: { id: thread.candidateId },
           data: { repliedAt: parsed.receivedAt },
+        });
+
+        // Discard any PENDING or APPROVED drafts on this thread — they're
+        // now stale because the recruiter already sent a manual reply.
+        await prisma.emailDraft.updateMany({
+          where: {
+            threadId: thread.id,
+            status: { in: ['PENDING', 'APPROVED'] },
+          },
+          data: { status: 'DISCARDED' },
         });
       }
       return true;
