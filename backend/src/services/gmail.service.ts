@@ -1455,7 +1455,7 @@ export async function fetchMailboxSignature(mailboxId: string): Promise<string |
     }
   }
 
-  // Fallback: OAuth2 token (works for mailboxes re-authorized after gmail.settings.basic was added to scope).
+  // Second attempt: OAuth2 token (works for mailboxes re-authorized after gmail.settings.basic was added to scope).
   try {
     const credentials = parseCredentials(mailbox);
     const auth = getAuthenticatedClient(credentials);
@@ -1463,14 +1463,101 @@ export async function fetchMailboxSignature(mailboxId: string): Promise<string |
     const res = await gmail.users.settings.sendAs.list({ userId: 'me' });
     const primary =
       (res.data.sendAs ?? []).find((s) => s.isPrimary) ?? (res.data.sendAs ?? [])[0];
-    return primary?.signature ?? null;
+    if (primary?.signature) return primary.signature;
   } catch (err) {
     console.warn(
       `[Gmail] fetchMailboxSignature via OAuth failed for ${mailbox.emailAddress}:`,
       err instanceof Error ? err.message : err
     );
-    return null;
   }
+
+  // Last resort: extract the Gmail signature block from a recent sent message
+  // already stored in the DB. When recruiters send via Gmail/Superhuman, Gmail
+  // injects the signature into the HTML body — we can mine it from there without
+  // any additional API scopes.
+  return extractSignatureFromSentMessages(mailbox.emailAddress);
+}
+
+/**
+ * Look at the recruiter's own recently-sent messages (stored in EmailMessage)
+ * and extract the Gmail signature block from the HTML body.
+ * Gmail wraps signatures in <div class="gmail_signature">…</div>.
+ */
+async function extractSignatureFromSentMessages(emailAddress: string): Promise<string | null> {
+  const mailbox = await prisma.mailbox.findUnique({ where: { emailAddress } });
+  if (!mailbox) return null;
+
+  // Grab the 10 most recent outbound messages from this mailbox.
+  const sentMessages = await prisma.emailMessage.findMany({
+    where: {
+      mailboxId: mailbox.id,
+      fromAddress: { contains: emailAddress.split('@')[0] ?? emailAddress, mode: 'insensitive' },
+      bodyHtml: { not: null },
+    },
+    orderBy: { receivedAt: 'desc' },
+    take: 10,
+    select: { bodyHtml: true },
+  });
+
+  for (const msg of sentMessages) {
+    if (!msg.bodyHtml) continue;
+    const sig = extractGmailSignatureBlock(msg.bodyHtml);
+    if (sig) {
+      console.log(`[Gmail] Extracted signature from sent message for ${emailAddress}`);
+      return sig;
+    }
+  }
+
+  console.warn(`[Gmail] Could not find a Gmail signature block in sent messages for ${emailAddress}`);
+  return null;
+}
+
+/**
+ * Pull the <div class="gmail_signature"> block out of an email's HTML body.
+ * Returns the inner HTML of the signature div, or null if not found.
+ */
+function extractGmailSignatureBlock(html: string): string | null {
+  // Match the entire <div class="gmail_signature"...>...</div> block.
+  // Gmail nests divs inside, so we use a simple "take until the matching closing
+  // div" approach rather than a regex (which can't handle nesting properly).
+  const startMarkers = [
+    /class="[^"]*gmail_signature[^"]*"/i,
+    /data-smartmail="gmail_signature"/i,
+  ];
+
+  for (const marker of startMarkers) {
+    const markerMatch = marker.exec(html);
+    if (!markerMatch) continue;
+
+    // Walk backwards to find the opening <div tag before this attribute.
+    const beforeMarker = html.slice(0, markerMatch.index);
+    const lastDivOpen = beforeMarker.lastIndexOf('<div');
+    if (lastDivOpen === -1) continue;
+
+    // Now find the matching closing </div> by counting nesting depth.
+    let depth = 0;
+    let pos = lastDivOpen;
+    while (pos < html.length) {
+      const nextOpen = html.indexOf('<div', pos + 1);
+      const nextClose = html.indexOf('</div>', pos + 1);
+      if (nextClose === -1) break;
+      if (nextOpen !== -1 && nextOpen < nextClose) {
+        depth += 1;
+        pos = nextOpen;
+      } else {
+        if (depth === 0) {
+          // Extract everything INSIDE the outer div (skip the outer wrapper).
+          const outerDiv = html.slice(lastDivOpen, nextClose + 6);
+          const innerMatch = outerDiv.match(/^<div[^>]*>([\s\S]*)<\/div>$/i);
+          return innerMatch ? innerMatch[1].trim() : outerDiv;
+        }
+        depth -= 1;
+        pos = nextClose;
+      }
+    }
+  }
+
+  return null;
 }
 
 export function htmlSignatureToPlainText(html: string): string {
