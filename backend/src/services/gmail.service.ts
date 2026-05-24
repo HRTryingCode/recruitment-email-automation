@@ -628,26 +628,10 @@ async function classifyAndDraft(opts: {
   // 5. Only auto-draft for INTERESTED candidates.
   if (classification !== 'INTERESTED') return;
 
-  // 6. For non-Sofia inboxes (Aaron, Paul, Ethan…): only draft when Sofia is
-  //    already in the loop on this conversation. Her presence in the TO or CC
-  //    of the candidate's reply is the signal that this is real recruiting
-  //    outreach, not warm-up automation noise.
   const ccEmail = config.draftCcEmail.toLowerCase();
   const isHandoffInbox = mailbox.emailAddress.toLowerCase() !== ccEmail;
-  if (isHandoffInbox) {
-    const toStr = parsed.toAddresses.join(',').toLowerCase();
-    const ccStr = parsed.headers.cc.toLowerCase();
-    if (!toStr.includes(ccEmail) && !ccStr.includes(ccEmail)) {
-      await logEvent(
-        'DRAFT_SKIPPED_SOFIA_NOT_IN_LOOP',
-        { mailboxId: mailbox.id, threadId: thread.id },
-        'INFO'
-      );
-      return;
-    }
-  }
 
-  // 7. For non-Sofia inboxes, use the fixed handoff template — no Claude needed.
+  // 6. For non-Sofia inboxes, use the fixed handoff template — no Claude needed.
   //    Sofia is CC'd on every sent draft via the createDraft helper.
   if (isHandoffInbox) {
     const signatureHtml = await fetchMailboxSignature(mailbox.id);
