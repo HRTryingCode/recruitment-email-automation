@@ -40,6 +40,8 @@ import {
   ArrowUp,
   ArrowDown,
   Sparkles,
+  Search,
+  X,
 } from 'lucide-react';
 import { StatusBadge, type StatusVariant } from './ui/StatusBadge';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
@@ -290,6 +292,7 @@ const PAGE_SIZE = 100;
 export default function CandidateTable({ mailboxId }: Props) {
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState<string>('');
+  const [search, setSearch] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<{ column: SortColumn; dir: SortDir }>({
@@ -313,17 +316,18 @@ export default function CandidateTable({ mailboxId }: Props) {
   // land on a page that no longer exists in the filtered view.
   useEffect(() => {
     setPage(1);
-  }, [mailboxId, statusFilter]);
+  }, [mailboxId, statusFilter, search]);
 
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ['candidates', { mailboxId, status: statusFilter, page }],
+    queryKey: ['candidates', { mailboxId, status: statusFilter, page, search }],
     queryFn: () =>
       fetchCandidates({
         mailboxId,
-        status: apiStatus,
-        includeIgnored,
+        status: search ? undefined : apiStatus,
+        includeIgnored: search ? true : includeIgnored,
         page,
         limit: PAGE_SIZE,
+        search: search || undefined,
       }),
     staleTime: 30_000,
   });
@@ -412,12 +416,13 @@ export default function CandidateTable({ mailboxId }: Props) {
       </div>
 
       {/* Filters */}
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <div className="relative">
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="appearance-none rounded-lg border border-line bg-surface-raised/70 py-1.5 pl-3 pr-9 text-[13px] text-fg-default transition-colors hover:border-line-strong focus:border-accent-400 focus:outline-none"
+            disabled={!!search}
+            className="appearance-none rounded-lg border border-line bg-surface-raised/70 py-1.5 pl-3 pr-9 text-[13px] text-fg-default transition-colors hover:border-line-strong focus:border-accent-400 focus:outline-none disabled:opacity-40"
           >
             <option value="">Active candidates</option>
             <option value="__ALL__">All (incl. ignored)</option>
@@ -430,6 +435,24 @@ export default function CandidateTable({ mailboxId }: Props) {
             <option value="IGNORED">Ignored</option>
           </select>
           <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg-muted" />
+        </div>
+        <div className="relative flex-1 min-w-[200px] max-w-xs">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg-muted" />
+          <input
+            type="text"
+            placeholder="Search by name or email…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full rounded-lg border border-line bg-surface-raised/70 py-1.5 pl-8 pr-8 text-[13px] text-fg-default placeholder:text-fg-subtle transition-colors hover:border-line-strong focus:border-accent-400 focus:outline-none"
+          />
+          {search && (
+            <button
+              onClick={() => setSearch('')}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-fg-muted hover:text-fg-strong"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
         <span className="font-mono text-[12px] tabular-nums text-fg-subtle">
           {data?.meta.total ?? 0} candidates
@@ -513,7 +536,9 @@ export default function CandidateTable({ mailboxId }: Props) {
                 No candidates found
               </EmptyTitle>
               <EmptyDescription className="max-w-sm text-[13px] leading-relaxed text-fg-muted">
-                {statusFilter
+                {search
+                  ? `No candidates match "${search}" — this email may not have been synced yet. Try resyncing from the Dashboard.`
+                  : statusFilter
                   ? 'Try a different filter — or wait for new emails to be classified.'
                   : 'Candidates show up here as soon as their first email is processed.'}
               </EmptyDescription>

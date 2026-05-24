@@ -90,9 +90,17 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const skip = (page - 1) * limit;
 
     const includeIgnored = qs(req.query.includeIgnored) === 'true';
+    const search = qs(req.query.search)?.trim() ?? '';
 
     const where: Record<string, unknown> = {};
-    if (status) {
+    if (search) {
+      // Search overrides status filter and includes all statuses (incl. ignored)
+      // so the user can find any candidate regardless of state.
+      where.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+      ];
+    } else if (status) {
       where.status = status;
     } else if (!includeIgnored) {
       // Default view hides ignored candidates so dismissed people don't clutter

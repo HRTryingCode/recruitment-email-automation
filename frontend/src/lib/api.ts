@@ -174,6 +174,7 @@ export async function fetchCandidates(filters?: {
   page?: number;
   limit?: number;
   includeIgnored?: boolean;
+  search?: string;
 }): Promise<PaginatedResponse<Candidate>> {
   const res = await api.get('/candidates', { params: filters });
   return res.data as PaginatedResponse<Candidate>;
