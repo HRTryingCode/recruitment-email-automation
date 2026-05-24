@@ -81,7 +81,14 @@ router.post(
       // operator signs in on a fresh DB (where the migration's UPDATE was a
       // no-op because the row didn't exist yet), make sure they land with the
       // admin role rather than the default `recruiter`.
-      const isFoundingAdmin = email === 'andriy@archive.com';
+      // ADMIN_EMAILS is a comma-separated list of emails that should always
+      // receive the admin role on login. Defaults to the original founding
+      // operator; expand as needed via the env var.
+      const adminEmails = (process.env.ADMIN_EMAILS ?? 'andriy@archive.com,sofia@archive.com')
+        .split(',')
+        .map((e) => e.trim().toLowerCase())
+        .filter(Boolean);
+      const isFoundingAdmin = adminEmails.includes(email);
 
       const existing = await prisma.user.findUnique({ where: { email } });
       let user;

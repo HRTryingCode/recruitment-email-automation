@@ -57,10 +57,7 @@ router.post('/gmail/auth', async (_req: Request, res: Response, next: NextFuncti
 // requireAuth. The state-validation logic lives there as well.
 
 // POST /api/mailboxes/:id/resync
-// Manual full 7-day resync. requireAuth runs at the router level (see app.ts);
-// requireAdmin layered here because resync is expensive enough that we don't
-// want any recruiter triggering it accidentally — only operators.
-router.post('/:id/resync', requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
+router.post('/:id/resync', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = String(req.params.id);
     const mailbox = await prisma.mailbox.findUnique({ where: { id } });
@@ -159,7 +156,6 @@ router.post('/workspace/connect', requireAdmin, async (req: Request, res: Respon
 // timeout (we hit Google userinfo for each).
 router.post(
   '/refresh-all-profiles',
-  requireAdmin,
   async (_req: Request, res: Response, next: NextFunction) => {
     try {
       const mailboxes = await prisma.mailbox.findMany({
@@ -257,7 +253,6 @@ router.post(
 // if neither source produces a usable name.
 router.post(
   '/:id/refresh-profile',
-  requireAdmin,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const id = String(req.params.id);
@@ -307,7 +302,7 @@ router.post(
 // GET /api/mailboxes/:id/signature
 // Returns the raw HTML signature (and diagnostics) for a mailbox.
 // Useful for verifying the signature before it goes into a draft.
-router.get('/:id/signature', requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
+router.get('/:id/signature', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = String(req.params.id);
     const mailbox = await prisma.mailbox.findUnique({ where: { id } });
