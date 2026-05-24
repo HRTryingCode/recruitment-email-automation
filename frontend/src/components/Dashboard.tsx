@@ -596,33 +596,55 @@ function EmptyState({
 
 function ResyncAllButton({ mailboxes }: { mailboxes: Mailbox[] }) {
   const [resyncing, setResyncing] = useState(false);
-  const [done, setDone] = useState(false);
+  const [results, setResults] = useState<{ email: string; ok: boolean; error?: string }[] | null>(null);
 
   const handleResyncAll = async () => {
     setResyncing(true);
-    setDone(false);
-    try {
-      await Promise.all(mailboxes.map((mb) => resyncMailbox(mb.id).catch(() => null)));
-      setDone(true);
-      setTimeout(() => setDone(false), 4000);
-    } finally {
-      setResyncing(false);
-    }
+    setResults(null);
+    const outcomes = await Promise.all(
+      mailboxes.map(async (mb) => {
+        try {
+          await resyncMailbox(mb.id);
+          return { email: mb.emailAddress, ok: true };
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { email: mb.emailAddress, ok: false, error: msg };
+        }
+      })
+    );
+    setResults(outcomes);
+    setResyncing(false);
   };
 
+  const allOk = results?.every((r) => r.ok);
+  const anyFailed = results?.some((r) => !r.ok);
+
   return (
-    <button
-      onClick={handleResyncAll}
-      disabled={resyncing}
-      className="flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-[12px] text-fg-muted transition-colors hover:bg-fg-strong/[0.04] hover:text-fg-strong disabled:opacity-50"
-    >
-      {done ? (
-        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-      ) : (
-        <RefreshCw className={cn('h-3.5 w-3.5', resyncing && 'animate-spin')} />
+    <div className="flex flex-col items-end gap-1">
+      <button
+        onClick={handleResyncAll}
+        disabled={resyncing}
+        className="flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-[12px] text-fg-muted transition-colors hover:bg-fg-strong/[0.04] hover:text-fg-strong disabled:opacity-50"
+      >
+        {allOk ? (
+          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+        ) : anyFailed ? (
+          <AlertCircle className="h-3.5 w-3.5 text-rose-500" />
+        ) : (
+          <RefreshCw className={cn('h-3.5 w-3.5', resyncing && 'animate-spin')} />
+        )}
+        {resyncing ? 'Resyncing…' : allOk ? 'Done — refresh page' : anyFailed ? 'Partial failure' : 'Resync all inboxes'}
+      </button>
+      {results && (
+        <div className="flex flex-col gap-0.5 text-right">
+          {results.map((r) => (
+            <p key={r.email} className={`text-[11px] ${r.ok ? 'text-emerald-600' : 'text-rose-600'}`}>
+              {r.email.split('@')[0]}: {r.ok ? '✓ synced' : `✗ ${r.error ?? 'failed'}`}
+            </p>
+          ))}
+        </div>
       )}
-      {resyncing ? 'Resyncing…' : done ? 'Done — refresh in 1 min' : 'Resync all inboxes'}
-    </button>
+    </div>
   );
 }
 
