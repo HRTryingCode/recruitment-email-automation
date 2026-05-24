@@ -16,6 +16,7 @@ import {
   fetchMessages,
   generateDraftForThread,
   updateCandidate,
+  clearRepliedAt,
   ignoreCandidate,
   unignoreCandidate,
   type Candidate,
@@ -380,6 +381,17 @@ export default function CandidateTable({ mailboxId }: Props) {
     },
   });
 
+  const clearRepliedMutation = useMutation({
+    mutationFn: (id: string) => clearRepliedAt(id),
+    onSuccess: () => {
+      toastSuccess('Reply status cleared', 'Candidate is now awaiting reply.');
+      void queryClient.invalidateQueries({ queryKey: ['candidates'] });
+    },
+    onError: (err) => {
+      toastError('Could not clear reply status', extractApiErrorMessage(err, 'Please try again.'));
+    },
+  });
+
   const candidatesRaw = data?.data ?? [];
   const candidates = [...candidatesRaw].sort((a, b) =>
     compareCandidates(a, b, sort.column, sort.dir)
@@ -513,6 +525,7 @@ export default function CandidateTable({ mailboxId }: Props) {
                     }
                     onIgnore={() => ignoreMutation.mutate(candidate.id)}
                     onUnignore={() => unignoreMutation.mutate(candidate.id)}
+                    onClearReplied={() => clearRepliedMutation.mutate(candidate.id)}
                     ignoring={
                       ignoreMutation.isPending &&
                       ignoreMutation.variables === candidate.id
@@ -616,6 +629,7 @@ interface CandidateRowProps {
   onChangeStatus: (status: Candidate['status']) => void;
   onIgnore: () => void;
   onUnignore: () => void;
+  onClearReplied: () => void;
   ignoring: boolean;
   unignoring: boolean;
 }
@@ -627,6 +641,7 @@ function CandidateRow({
   onChangeStatus,
   onIgnore,
   onUnignore,
+  onClearReplied,
   ignoring,
   unignoring,
 }: CandidateRowProps) {
@@ -689,8 +704,24 @@ function CandidateRow({
         <td className="px-4 py-3">
           <StatusBadge status={candidate.status as StatusVariant} />
         </td>
-        <td className="px-4 py-3">
-          <ReplyStatusBadge candidate={candidate} />
+        <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center gap-1.5">
+            <ReplyStatusBadge candidate={candidate} />
+            {(candidate.replyStatus === 'REPLIED' || candidate.repliedAt) && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={onClearReplied}
+                    className="text-fg-subtle hover:text-rose-600 transition-colors"
+                    aria-label="Clear replied status"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>Clear "Replied" — marks as awaiting reply again</TooltipContent>
+              </Tooltip>
+            )}
+          </div>
         </td>
         <td className="hidden px-4 py-3 lg:table-cell">
           <span className="font-mono text-[12px] tabular-nums text-fg-muted">

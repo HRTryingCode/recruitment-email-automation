@@ -26,6 +26,7 @@ const updateCandidateSchema = z.object({
   title: z.string().optional(),
   status: z.enum(CANDIDATE_STATUSES).optional(),
   notes: z.string().optional(),
+  repliedAt: z.null().optional(),
 });
 
 // Pagination bounds — clamp `page` and `limit` so an attacker (or a buggy

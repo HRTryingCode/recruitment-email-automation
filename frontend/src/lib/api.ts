@@ -187,9 +187,14 @@ export async function fetchCandidate(id: string): Promise<SingleResponse<Candida
 
 export async function updateCandidate(
   id: string,
-  data: Partial<Candidate>
+  data: Partial<Candidate> & { repliedAt?: null }
 ): Promise<SingleResponse<Candidate>> {
   const res = await api.patch(`/candidates/${id}`, data);
+  return res.data as SingleResponse<Candidate>;
+}
+
+export async function clearRepliedAt(id: string): Promise<SingleResponse<Candidate>> {
+  const res = await api.patch(`/candidates/${id}`, { repliedAt: null });
   return res.data as SingleResponse<Candidate>;
 }
 
