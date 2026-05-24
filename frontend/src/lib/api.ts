@@ -327,7 +327,7 @@ export interface MailboxSyncHealth {
 }
 
 export async function fetchSyncHealth(): Promise<SingleResponse<MailboxSyncHealth[]>> {
-  const res = await api.get('/internal/sync-health');
+  const res = await api.get('/internal/sync-health');  // maps to /api/internal/sync-health
   return res.data as SingleResponse<MailboxSyncHealth[]>;
 }
 

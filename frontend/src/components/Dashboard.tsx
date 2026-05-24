@@ -568,35 +568,52 @@ function MailboxHealthAccordion({
 
 function CandidateDebugResult({ data }: { data: unknown }) {
   const d = data as {
-    candidate?: { id: string; name: string; email: string; status: string; createdAt: string; threads?: { id: string; subject: string; messages?: { subject: string; fromAddress: string; receivedAt: string }[]; drafts?: { id: string; status: string; createdAt: string }[] }[] } | null;
+    candidate?: { id: string; name: string; email: string; status: string; createdAt: string; threads?: { id: string; subject: string; messages?: unknown[]; drafts?: { id: string; status: string }[] }[] } | null;
     messagesFromEmail?: { externalMessageId: string; subject: string; receivedAt: string; mailboxId: string; thread: { id: string; candidateId: string | null; subject: string } }[];
+    skipLogs?: { event: string; createdAt: string; details: string }[];
   };
 
   if (!d.candidate && (!d.messagesFromEmail || d.messagesFromEmail.length === 0)) {
-    return <span className="text-rose-600">Not found — no candidate record and no messages from this email in the DB. Sync has not stored anything from this sender yet.</span>;
+    return (
+      <div className="flex flex-col gap-1">
+        <span className="text-rose-600 font-semibold">Not in DB — no candidate record and no stored messages from this email.</span>
+        <span className="text-fg-muted">This means the reply was either: (a) never synced — try Resync all inboxes, or (b) the message exists in Gmail but couldn&apos;t be fetched.</span>
+      </div>
+    );
   }
 
   return (
     <div className="flex flex-col gap-2">
       {d.candidate ? (
-        <div>
-          <span className="text-emerald-600 font-semibold">Candidate found: </span>
-          <span>{d.candidate.name} &lt;{d.candidate.email}&gt; — status: <strong>{d.candidate.status}</strong> — created: {new Date(d.candidate.createdAt).toLocaleString()}</span>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-emerald-600 font-semibold">✓ Candidate found</span>
+          <span>{d.candidate.name} &lt;{d.candidate.email}&gt;</span>
+          <span>Status: <strong>{d.candidate.status}</strong> — created {new Date(d.candidate.createdAt).toLocaleString()}</span>
           {d.candidate.threads?.map((t) => (
-            <div key={t.id} className="ml-2 mt-1">
-              <span className="text-fg-muted">Thread: {t.subject} ({t.messages?.length ?? 0} msgs, {t.drafts?.length ?? 0} drafts)</span>
+            <div key={t.id} className="ml-2">
+              <span className="text-fg-muted">Thread: &quot;{t.subject}&quot; — {t.messages?.length ?? 0} msgs, {t.drafts?.length ?? 0} drafts</span>
             </div>
           ))}
         </div>
       ) : (
-        <span className="text-amber-600">No candidate record yet for this email.</span>
+        <span className="text-amber-600 font-semibold">No candidate record for this email.</span>
       )}
       {d.messagesFromEmail && d.messagesFromEmail.length > 0 && (
-        <div>
-          <span className="text-fg-muted">Messages from this email in DB: {d.messagesFromEmail.length}</span>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-fg-muted">Messages stored from this sender ({d.messagesFromEmail.length}):</span>
           {d.messagesFromEmail.map((m) => (
             <div key={m.externalMessageId} className="ml-2">
-              <span>{new Date(m.receivedAt).toLocaleString()} — &quot;{m.subject}&quot; — thread candidateId: {m.thread.candidateId ?? 'null'}</span>
+              <span>{new Date(m.receivedAt).toLocaleString()} — &quot;{m.subject}&quot;{m.thread.candidateId ? '' : ' — ⚠ no candidate linked'}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {d.skipLogs && d.skipLogs.length > 0 && (
+        <div className="flex flex-col gap-0.5">
+          <span className="text-amber-600 font-semibold">Classification events ({d.skipLogs.length}):</span>
+          {d.skipLogs.map((l, i) => (
+            <div key={i} className="ml-2">
+              <span>{new Date(l.createdAt).toLocaleString()} — <strong>{l.event}</strong></span>
             </div>
           ))}
         </div>

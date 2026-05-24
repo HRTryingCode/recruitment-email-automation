@@ -42,7 +42,7 @@ function parseDetails(raw: string): Record<string, unknown> {
 // per-mailbox sync health for the dashboard / debug tooling: watch-expiry
 // countdown, last sync time, last reconciliation result, message + draft +
 // review + webhook-error counts. Read-only — does not trigger any sync work.
-router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
+router.get('/sync-health', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const now = Date.now();
     const dayAgo = new Date(now - 24 * 60 * 60 * 1000);
@@ -243,20 +243,32 @@ router.get('/debug/candidate', async (req: Request, res: Response, next: NextFun
     });
 
     // Also look for any messages from this email even without a linked candidate
-    const messagesFromEmail = await prisma.emailMessage.findMany({
-      where: { fromAddress: email },
-      orderBy: { receivedAt: 'desc' },
-      take: 10,
-      select: {
-        externalMessageId: true,
-        subject: true,
-        receivedAt: true,
-        mailboxId: true,
-        thread: { select: { id: true, candidateId: true, subject: true } },
-      },
-    });
+    const [messagesFromEmail, skipLogs] = await Promise.all([
+      prisma.emailMessage.findMany({
+        where: { fromAddress: email },
+        orderBy: { receivedAt: 'desc' },
+        take: 10,
+        select: {
+          externalMessageId: true,
+          subject: true,
+          receivedAt: true,
+          mailboxId: true,
+          thread: { select: { id: true, candidateId: true, subject: true } },
+        },
+      }),
+      // Check if any messages from this sender were skipped by the classifier
+      prisma.systemLog.findMany({
+        where: {
+          event: { in: ['MESSAGE_SKIPPED_NOT_RECRUITING', 'CANDIDATE_CLASSIFIED', 'DRAFT_SKIPPED_NEEDS_REVIEW', 'DRAFT_SKIPPED_LOW_CONFIDENCE'] },
+          details: { contains: email },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+        select: { event: true, level: true, createdAt: true, details: true },
+      }),
+    ]);
 
-    res.json({ success: true, data: { candidate, messagesFromEmail } });
+    res.json({ success: true, data: { candidate, messagesFromEmail, skipLogs } });
   } catch (err) {
     next(err);
   }
