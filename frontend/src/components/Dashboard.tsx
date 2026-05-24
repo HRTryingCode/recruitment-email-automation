@@ -792,9 +792,7 @@ export default function Dashboard({
         onResync={async (mailboxId) => {
           try {
             await resyncMailbox(mailboxId);
-            toastSuccess('Resync started', 'Sent messages from the last 7 days are being imported.');
-            queryClient.invalidateQueries({ queryKey: ['candidates'] });
-            queryClient.invalidateQueries({ queryKey: ['drafts'] });
+            toastSuccess('Resync started', 'Checking the last 7 days of sent mail. Refresh the page in a minute to see updated drafts.');
           } catch {
             toastError('Resync failed', 'Could not trigger resync. Check that you are an admin.');
           }
