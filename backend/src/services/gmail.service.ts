@@ -61,6 +61,18 @@ function getAuthenticatedClient(credentials: Record<string, unknown>): OAuth2Cli
   return oauth2Client;
 }
 
+/**
+ * Return an authenticated Gmail client for any mailbox, handling both
+ * OAuth mailboxes (personal) and service-account DWD mailboxes (workspace).
+ */
+async function getGmailClient(mailbox: Mailbox): Promise<ReturnType<typeof google.gmail>> {
+  const credentials = parseCredentials(mailbox);
+  if (credentials.type === 'service_account') {
+    return createServiceAccountClient(mailbox.emailAddress);
+  }
+  return google.gmail({ version: 'v1', auth: getAuthenticatedClient(credentials) });
+}
+
 export function getAuthUrl(state: string): string {
   const oauth2Client = createOAuth2Client();
   const scopes = [
@@ -882,9 +894,7 @@ export async function syncMessages(
   const mailbox = await prisma.mailbox.findUnique({ where: { id: mailboxId } });
   if (!mailbox || !mailbox.isActive) return { messagesSeen: 0, messagesStored: 0 };
 
-  const credentials = parseCredentials(mailbox);
-  const oauth2Client = getAuthenticatedClient(credentials);
-  const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+  const gmail = await getGmailClient(mailbox);
 
   // Get messages from the last N days
   const after = Math.floor((Date.now() - daysBack * 24 * 60 * 60 * 1000) / 1000);
@@ -947,9 +957,7 @@ export async function syncIncremental(
     return 0;
   }
 
-  const credentials = parseCredentials(mailbox);
-  const oauth2Client = getAuthenticatedClient(credentials);
-  const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+  const gmail = await getGmailClient(mailbox);
 
   const startHistoryId = mailbox.lastHistoryId;
   const newMessageIds = new Set<string>();
@@ -1096,9 +1104,7 @@ export async function watchMailbox(mailboxId: string): Promise<void> {
   const mailbox = await prisma.mailbox.findUnique({ where: { id: mailboxId } });
   if (!mailbox || !config.gmail.pubsubTopic) return;
 
-  const credentials = parseCredentials(mailbox);
-  const oauth2Client = getAuthenticatedClient(credentials);
-  const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+  const gmail = await getGmailClient(mailbox);
 
   const res = await gmail.users.watch({
     userId: 'me',
@@ -1163,9 +1169,7 @@ export async function reconcileMailbox(
     return { scannedFromGmail: 0, missingBefore: 0, ingested: 0 };
   }
 
-  const credentials = parseCredentials(mailbox);
-  const oauth2Client = getAuthenticatedClient(credentials);
-  const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+  const gmail = await getGmailClient(mailbox);
 
   // Gmail's `after:` only takes day precision, so subtracting 24h then taking
   // the date gives us a roughly 24–48h window depending on time of day. That
@@ -1286,9 +1290,7 @@ export async function createDraft(
   const mailbox = await prisma.mailbox.findUnique({ where: { id: mailboxId } });
   if (!mailbox) throw new Error('Mailbox not found');
 
-  const credentials = parseCredentials(mailbox);
-  const oauth2Client = getAuthenticatedClient(credentials);
-  const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+  const gmail = await getGmailClient(mailbox);
 
   // Build RFC 2822 email with proper threading headers
   const headers: string[] = [`To: ${draft.toAddress}`];
@@ -1354,9 +1356,7 @@ export async function sendDraft(mailboxId: string, externalDraftId: string): Pro
   const mailbox = await prisma.mailbox.findUnique({ where: { id: mailboxId } });
   if (!mailbox) throw new Error('Mailbox not found');
 
-  const credentials = parseCredentials(mailbox);
-  const oauth2Client = getAuthenticatedClient(credentials);
-  const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+  const gmail = await getGmailClient(mailbox);
 
   await gmail.users.drafts.send({
     userId: 'me',
