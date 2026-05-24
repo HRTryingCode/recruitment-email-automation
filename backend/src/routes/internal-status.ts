@@ -14,6 +14,8 @@ interface MailboxSyncHealth {
   lastReconciliationAt: string | null;
   lastReconciliationFoundMissing: number;
   messagesLast24h: number;
+  totalMessages: number;
+  totalCandidates: number;
   pendingDrafts: number;
   candidatesNeedsReview: number;
   webhookErrorsLast24h: number;
@@ -77,7 +79,7 @@ router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
     const health: MailboxSyncHealth[] = await Promise.all(
       mailboxes.map(async (mb) => {
         try {
-          const [lastMessage, messagesLast24h, pendingDrafts, candidatesNeedsReview] =
+          const [lastMessage, messagesLast24h, totalMessages, totalCandidates, pendingDrafts, candidatesNeedsReview] =
             await Promise.all([
               prisma.emailMessage.findFirst({
                 where: { mailboxId: mb.id },
@@ -87,6 +89,8 @@ router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
               prisma.emailMessage.count({
                 where: { mailboxId: mb.id, receivedAt: { gte: dayAgo } },
               }),
+              prisma.emailMessage.count({ where: { mailboxId: mb.id } }),
+              prisma.candidate.count({ where: { mailboxId: mb.id } }),
               prisma.emailDraft.count({
                 where: {
                   status: 'PENDING',
@@ -127,6 +131,8 @@ router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
               : null,
             lastReconciliationFoundMissing: missingFromLast,
             messagesLast24h,
+            totalMessages,
+            totalCandidates,
             pendingDrafts,
             candidatesNeedsReview,
             webhookErrorsLast24h: errorsByEmail.get(mb.emailAddress) ?? 0,
@@ -145,6 +151,8 @@ router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
             lastReconciliationAt: null,
             lastReconciliationFoundMissing: 0,
             messagesLast24h: 0,
+            totalMessages: 0,
+            totalCandidates: 0,
             pendingDrafts: 0,
             candidatesNeedsReview: 0,
             webhookErrorsLast24h: 0,
@@ -154,6 +162,101 @@ router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
     );
 
     res.status(200).json({ success: true, data: health });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/internal/debug/mailbox?email=aaronrampersad@archive.com
+// Admin-only debug: shows what messages + candidates the DB has for a mailbox.
+router.get('/debug/mailbox', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const email = typeof req.query.email === 'string' ? req.query.email.trim() : null;
+    if (!email) return res.status(400).json({ success: false, message: 'email query param required' });
+
+    const mailbox = await prisma.mailbox.findUnique({ where: { emailAddress: email } });
+    if (!mailbox) return res.status(404).json({ success: false, message: 'Mailbox not found' });
+
+    const [totalMessages, recentMessages, recentLogs, candidates] = await Promise.all([
+      prisma.emailMessage.count({ where: { mailboxId: mailbox.id } }),
+      prisma.emailMessage.findMany({
+        where: { mailboxId: mailbox.id },
+        orderBy: { receivedAt: 'desc' },
+        take: 20,
+        select: {
+          externalMessageId: true,
+          fromAddress: true,
+          fromName: true,
+          subject: true,
+          receivedAt: true,
+          thread: { select: { candidateId: true } },
+        },
+      }),
+      prisma.systemLog.findMany({
+        where: {
+          details: { contains: mailbox.id },
+          createdAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 50,
+        select: { event: true, level: true, createdAt: true, details: true },
+      }),
+      prisma.candidate.findMany({
+        where: { mailboxId: mailbox.id },
+        orderBy: { createdAt: 'desc' },
+        take: 50,
+        select: { id: true, name: true, email: true, status: true, createdAt: true },
+      }),
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        mailbox: { id: mailbox.id, emailAddress: mailbox.emailAddress, isActive: mailbox.isActive, lastHistoryId: mailbox.lastHistoryId },
+        totalMessages,
+        recentMessages,
+        candidates,
+        recentLogs,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/internal/debug/candidate?email=sofiadelgadosandoval@gmail.com
+router.get('/debug/candidate', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const email = typeof req.query.email === 'string' ? req.query.email.trim() : null;
+    if (!email) return res.status(400).json({ success: false, message: 'email query param required' });
+
+    const candidate = await prisma.candidate.findUnique({
+      where: { email },
+      include: {
+        threads: {
+          include: {
+            messages: { orderBy: { receivedAt: 'asc' }, take: 5 },
+            drafts: { orderBy: { createdAt: 'desc' }, take: 3 },
+          },
+        },
+      },
+    });
+
+    // Also look for any messages from this email even without a linked candidate
+    const messagesFromEmail = await prisma.emailMessage.findMany({
+      where: { fromAddress: email },
+      orderBy: { receivedAt: 'desc' },
+      take: 10,
+      select: {
+        externalMessageId: true,
+        subject: true,
+        receivedAt: true,
+        mailboxId: true,
+        thread: { select: { id: true, candidateId: true, subject: true } },
+      },
+    });
+
+    res.json({ success: true, data: { candidate, messagesFromEmail } });
   } catch (err) {
     next(err);
   }

@@ -318,6 +318,8 @@ export interface MailboxSyncHealth {
   lastReconciliationAt: string | null;
   lastReconciliationFoundMissing: number;
   messagesLast24h: number;
+  totalMessages: number;
+  totalCandidates: number;
   pendingDrafts: number;
   candidatesNeedsReview: number;
   webhookErrorsLast24h: number;
@@ -326,6 +328,16 @@ export interface MailboxSyncHealth {
 export async function fetchSyncHealth(): Promise<SingleResponse<MailboxSyncHealth[]>> {
   const res = await api.get('/internal/sync-health');
   return res.data as SingleResponse<MailboxSyncHealth[]>;
+}
+
+export async function debugMailbox(email: string): Promise<{ success: boolean; data: unknown }> {
+  const res = await api.get('/internal/debug/mailbox', { params: { email } });
+  return res.data as { success: boolean; data: unknown };
+}
+
+export async function debugCandidate(email: string): Promise<{ success: boolean; data: unknown }> {
+  const res = await api.get('/internal/debug/candidate', { params: { email } });
+  return res.data as { success: boolean; data: unknown };
 }
 
 // Auth

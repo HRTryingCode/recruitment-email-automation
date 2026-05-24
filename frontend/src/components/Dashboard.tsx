@@ -8,6 +8,7 @@ import {
   fetchMailboxSignatureHtml,
   approveDraft,
   resyncMailbox,
+  debugCandidate,
   type Candidate,
   type Mailbox,
   type EmailDraft,
@@ -336,6 +337,19 @@ function MailboxHealthAccordion({
   const [resyncing, setResyncing] = useState<string | null>(null);
   const [sigPreview, setSigPreview] = useState<{ mailboxId: string; html: string | null } | null>(null);
   const [loadingSig, setLoadingSig] = useState<string | null>(null);
+  const [debugEmail, setDebugEmail] = useState('');
+  const [debugResult, setDebugResult] = useState<{ loading: boolean; data?: unknown; error?: string } | null>(null);
+
+  const handleDebugEmail = async () => {
+    if (!debugEmail.trim()) return;
+    setDebugResult({ loading: true });
+    try {
+      const res = await debugCandidate(debugEmail.trim());
+      setDebugResult({ loading: false, data: res.data });
+    } catch (err: unknown) {
+      setDebugResult({ loading: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  };
 
   const handlePreviewSig = async (mailboxId: string) => {
     if (sigPreview?.mailboxId === mailboxId) { setSigPreview(null); return; }
@@ -392,7 +406,10 @@ function MailboxHealthAccordion({
                     <th className="px-4 py-2.5 text-left">Mailbox</th>
                     <th className="px-4 py-2.5 text-left">Watch expires</th>
                     <th className="hidden px-4 py-2.5 text-left sm:table-cell">
-                      Msgs / 24h
+                      Total msgs
+                    </th>
+                    <th className="hidden px-4 py-2.5 text-left sm:table-cell">
+                      Candidates
                     </th>
                     <th className="hidden px-4 py-2.5 text-left md:table-cell">
                       Last reconciled
@@ -490,8 +507,11 @@ function MailboxHealthAccordion({
                         >
                           {formatWatchExpiry(row.watchExpiresInHours)}
                         </td>
+                        <td className={cn('hidden px-4 py-2.5 font-mono tabular-nums sm:table-cell', row.totalMessages === 0 ? 'text-rose-600' : 'text-fg-default')}>
+                          {row.totalMessages}
+                        </td>
                         <td className="hidden px-4 py-2.5 font-mono tabular-nums text-fg-default sm:table-cell">
-                          {row.messagesLast24h}
+                          {row.totalCandidates}
                         </td>
                         <td className="hidden px-4 py-2.5 text-fg-muted md:table-cell">
                           {recon}
@@ -509,9 +529,79 @@ function MailboxHealthAccordion({
               </table>
             </div>
           )}
+          {!loading && !error && (
+            <div className="border-t border-line px-4 py-3 flex flex-col gap-2">
+              <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-fg-muted">Find candidate by email</p>
+              <div className="flex gap-2">
+                <input
+                  type="email"
+                  placeholder="e.g. sofiadelgadosandoval@gmail.com"
+                  value={debugEmail}
+                  onChange={(e) => setDebugEmail(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && void handleDebugEmail()}
+                  className="flex-1 rounded border border-line bg-surface px-2.5 py-1.5 text-[12px] font-mono placeholder:text-fg-subtle focus:outline-none focus:ring-1 focus:ring-accent-400"
+                />
+                <button
+                  onClick={() => void handleDebugEmail()}
+                  disabled={debugResult?.loading}
+                  className="rounded border border-line px-3 py-1.5 text-[12px] text-fg-muted hover:bg-fg-strong/[0.04] hover:text-fg-strong disabled:opacity-50"
+                >
+                  {debugResult?.loading ? 'Searching…' : 'Search'}
+                </button>
+              </div>
+              {debugResult && !debugResult.loading && (
+                <div className="rounded border border-line bg-surface p-2 text-[11px] font-mono">
+                  {debugResult.error ? (
+                    <span className="text-rose-600">{debugResult.error}</span>
+                  ) : (
+                    <CandidateDebugResult data={debugResult.data} />
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </section>
+  );
+}
+
+function CandidateDebugResult({ data }: { data: unknown }) {
+  const d = data as {
+    candidate?: { id: string; name: string; email: string; status: string; createdAt: string; threads?: { id: string; subject: string; messages?: { subject: string; fromAddress: string; receivedAt: string }[]; drafts?: { id: string; status: string; createdAt: string }[] }[] } | null;
+    messagesFromEmail?: { externalMessageId: string; subject: string; receivedAt: string; mailboxId: string; thread: { id: string; candidateId: string | null; subject: string } }[];
+  };
+
+  if (!d.candidate && (!d.messagesFromEmail || d.messagesFromEmail.length === 0)) {
+    return <span className="text-rose-600">Not found — no candidate record and no messages from this email in the DB. Sync has not stored anything from this sender yet.</span>;
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {d.candidate ? (
+        <div>
+          <span className="text-emerald-600 font-semibold">Candidate found: </span>
+          <span>{d.candidate.name} &lt;{d.candidate.email}&gt; — status: <strong>{d.candidate.status}</strong> — created: {new Date(d.candidate.createdAt).toLocaleString()}</span>
+          {d.candidate.threads?.map((t) => (
+            <div key={t.id} className="ml-2 mt-1">
+              <span className="text-fg-muted">Thread: {t.subject} ({t.messages?.length ?? 0} msgs, {t.drafts?.length ?? 0} drafts)</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <span className="text-amber-600">No candidate record yet for this email.</span>
+      )}
+      {d.messagesFromEmail && d.messagesFromEmail.length > 0 && (
+        <div>
+          <span className="text-fg-muted">Messages from this email in DB: {d.messagesFromEmail.length}</span>
+          {d.messagesFromEmail.map((m) => (
+            <div key={m.externalMessageId} className="ml-2">
+              <span>{new Date(m.receivedAt).toLocaleString()} — &quot;{m.subject}&quot; — thread candidateId: {m.thread.candidateId ?? 'null'}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
