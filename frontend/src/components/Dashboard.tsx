@@ -9,6 +9,7 @@ import {
   approveDraft,
   resyncMailbox,
   debugCandidate,
+  fixRepliedAt,
   type Candidate,
   type Mailbox,
   type EmailDraft,
@@ -702,6 +703,36 @@ function EmptyState({
 
 // ---------- Resync All Button ----------
 
+function FixRepliedAtButton() {
+  const [state, setState] = useState<{ running: boolean; result?: string }>({ running: false });
+
+  const handleFix = async () => {
+    setState({ running: true });
+    try {
+      const res = await fixRepliedAt();
+      setState({ running: false, result: `Fixed — cleared ${res.data.cleared} of ${res.data.checked} candidates` });
+    } catch {
+      setState({ running: false, result: 'Failed — check logs' });
+    }
+  };
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <button
+        onClick={() => void handleFix()}
+        disabled={state.running}
+        className="flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-[12px] text-fg-muted transition-colors hover:bg-fg-strong/[0.04] hover:text-fg-strong disabled:opacity-50"
+      >
+        <RefreshCw className={cn('h-3.5 w-3.5', state.running && 'animate-spin')} />
+        {state.running ? 'Fixing…' : 'Fix replied-at'}
+      </button>
+      {state.result && (
+        <p className="text-right text-[11px] text-fg-muted">{state.result}</p>
+      )}
+    </div>
+  );
+}
+
 function ResyncAllButton({ mailboxes }: { mailboxes: Mailbox[] }) {
   const [resyncing, setResyncing] = useState(false);
   const [results, setResults] = useState<{ email: string; ok: boolean; data?: ResyncResult; error?: string }[] | null>(null);
@@ -897,6 +928,7 @@ export default function Dashboard({
         {mailboxes.length > 0 && (
           <ResyncAllButton mailboxes={mailboxes} />
         )}
+        <FixRepliedAtButton />
       </div>
 
       {/* Action pills — the new hero */}

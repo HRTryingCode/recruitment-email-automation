@@ -331,6 +331,11 @@ export async function fetchSyncHealth(): Promise<SingleResponse<MailboxSyncHealt
   return res.data as SingleResponse<MailboxSyncHealth[]>;
 }
 
+export async function fixRepliedAt(): Promise<{ success: boolean; data: { checked: number; cleared: number } }> {
+  const res = await api.post('/internal/fix-replied-at');
+  return res.data as { success: boolean; data: { checked: number; cleared: number } };
+}
+
 export async function debugMailbox(email: string): Promise<{ success: boolean; data: unknown }> {
   const res = await api.get('/internal/debug/mailbox', { params: { email } });
   return res.data as { success: boolean; data: unknown };

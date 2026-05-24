@@ -828,22 +828,35 @@ async function fetchAndStoreMessage(
     });
 
     if (isOutbound) {
-      // Recruiter replied via Gmail/Superhuman directly.
       if (thread.candidateId) {
-        await prisma.candidate.update({
-          where: { id: thread.candidateId },
-          data: { repliedAt: parsed.receivedAt },
-        });
-
-        // Discard any PENDING or APPROVED drafts on this thread — they're
-        // now stale because the recruiter already sent a manual reply.
-        await prisma.emailDraft.updateMany({
+        // Only count this as a recruiter reply if the candidate already sent
+        // at least one inbound message before this outbound message.
+        // Without this check, the original outreach email would set repliedAt
+        // and mark the candidate as "Replied" before they've said anything.
+        const priorInbound = await prisma.emailMessage.findFirst({
           where: {
             threadId: thread.id,
-            status: { in: ['PENDING', 'APPROVED'] },
+            fromAddress: { not: mailbox.emailAddress },
+            receivedAt: { lt: parsed.receivedAt },
           },
-          data: { status: 'DISCARDED' },
         });
+
+        if (priorInbound) {
+          await prisma.candidate.update({
+            where: { id: thread.candidateId },
+            data: { repliedAt: parsed.receivedAt },
+          });
+
+          // Discard any PENDING or APPROVED drafts on this thread — they're
+          // now stale because the recruiter already sent a manual reply.
+          await prisma.emailDraft.updateMany({
+            where: {
+              threadId: thread.id,
+              status: { in: ['PENDING', 'APPROVED'] },
+            },
+            data: { status: 'DISCARDED' },
+          });
+        }
       }
       return true;
     }

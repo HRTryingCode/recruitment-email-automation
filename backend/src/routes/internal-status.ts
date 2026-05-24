@@ -274,4 +274,59 @@ router.get('/debug/candidate', async (req: Request, res: Response, next: NextFun
   }
 });
 
+// POST /api/internal/fix-replied-at
+// One-time fix: clears repliedAt on candidates where the only outbound messages
+// in their thread are the original outreach (no prior inbound from candidate).
+router.post('/fix-replied-at', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const candidates = await prisma.candidate.findMany({
+      where: { repliedAt: { not: null } },
+      include: {
+        threads: {
+          include: {
+            messages: { orderBy: { receivedAt: 'asc' } },
+          },
+        },
+      },
+    });
+
+    let cleared = 0;
+    for (const candidate of candidates) {
+      for (const thread of candidate.threads) {
+        const mailbox = await prisma.mailbox.findUnique({ where: { id: thread.mailboxId } });
+        if (!mailbox) continue;
+        const mailboxEmail = mailbox.emailAddress.toLowerCase();
+
+        // Find earliest outbound message in the thread
+        const outboundMsgs = thread.messages.filter(
+          (m) => m.fromAddress.toLowerCase() === mailboxEmail
+        );
+        if (outboundMsgs.length === 0) continue;
+        const earliestOutbound = outboundMsgs[0];
+
+        // Check if any inbound message exists before the earliest outbound
+        const hasInboundBefore = thread.messages.some(
+          (m) =>
+            m.fromAddress.toLowerCase() !== mailboxEmail &&
+            m.receivedAt < earliestOutbound.receivedAt
+        );
+
+        if (!hasInboundBefore) {
+          // All outbound messages are original outreach — clear repliedAt
+          await prisma.candidate.update({
+            where: { id: candidate.id },
+            data: { repliedAt: null },
+          });
+          cleared++;
+          break; // only need to process each candidate once
+        }
+      }
+    }
+
+    res.json({ success: true, data: { checked: candidates.length, cleared } });
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default router;
