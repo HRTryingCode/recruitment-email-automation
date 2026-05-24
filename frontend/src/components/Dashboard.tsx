@@ -535,6 +535,40 @@ function EmptyState({
   );
 }
 
+// ---------- Resync All Button ----------
+
+function ResyncAllButton({ mailboxes }: { mailboxes: Mailbox[] }) {
+  const [resyncing, setResyncing] = useState(false);
+  const [done, setDone] = useState(false);
+
+  const handleResyncAll = async () => {
+    setResyncing(true);
+    setDone(false);
+    try {
+      await Promise.all(mailboxes.map((mb) => resyncMailbox(mb.id).catch(() => null)));
+      setDone(true);
+      setTimeout(() => setDone(false), 4000);
+    } finally {
+      setResyncing(false);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleResyncAll}
+      disabled={resyncing}
+      className="flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-[12px] text-fg-muted transition-colors hover:bg-fg-strong/[0.04] hover:text-fg-strong disabled:opacity-50"
+    >
+      {done ? (
+        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+      ) : (
+        <RefreshCw className={cn('h-3.5 w-3.5', resyncing && 'animate-spin')} />
+      )}
+      {resyncing ? 'Resyncing…' : done ? 'Done — refresh in 1 min' : 'Resync all inboxes'}
+    </button>
+  );
+}
+
 // ---------- Main Dashboard ----------
 
 export default function Dashboard({
@@ -666,6 +700,9 @@ export default function Dashboard({
           </p>
         </div>
         {!loadingSyncHealth && <HealthPill summary={healthSummary} />}
+        {mailboxes.length > 0 && (
+          <ResyncAllButton mailboxes={mailboxes} />
+        )}
       </div>
 
       {/* Action pills — the new hero */}
