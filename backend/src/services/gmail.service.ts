@@ -1497,21 +1497,28 @@ export async function fetchMailboxSignature(mailboxId: string): Promise<string |
 }
 
 /**
- * Query Gmail's SENT folder for the most recent HTML message and extract the
+ * Query Gmail's SENT folder for a Gmail-compose message and extract the
  * <div class="gmail_signature"> block. Works with the gmail.modify scope we
  * already have, so no additional OAuth grants or DWD changes are needed.
+ *
+ * Strategy:
+ *  1. List the 50 most recent SENT messages.
+ *  2. Fetch metadata (headers only) in parallel to detect which messages were
+ *     composed in Gmail vs sent via the API. Gmail-composed messages are
+ *     multipart/mixed or multipart/alternative; API-sent ones are text/html.
+ *  3. Fetch full content for the gmail-composed candidates in parallel.
+ *  4. Resolve any CID inline image references to data URIs so the signature
+ *     logo renders when we re-use the HTML in new emails.
  */
 async function fetchSignatureFromGmailSent(mailbox: Mailbox): Promise<string | null> {
   try {
     const credentials = parseCredentials(mailbox);
-    // Service-account mailboxes store { type:'service_account', impersonating: email }.
-    // Use DWD for those; fall back to OAuth for personal mailboxes.
     let gmail: ReturnType<typeof google.gmail>;
     const credType = (credentials as Record<string, unknown>).type;
     if (credType === 'service_account') {
       const keyJson = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON;
       if (!keyJson) {
-        console.warn(`[Gmail] fetchSignatureFromGmailSent: service account creds but no key JSON for ${mailbox.emailAddress}`);
+        console.warn(`[Gmail] fetchSignatureFromGmailSent: no key JSON for ${mailbox.emailAddress}`);
         return null;
       }
       const saAuthOptions: { scopes: string[]; subject: string; credentials: Record<string, unknown> } = {
@@ -1523,29 +1530,52 @@ async function fetchSignatureFromGmailSent(mailbox: Mailbox): Promise<string | n
       const saClient = await saAuth.getClient();
       gmail = google.gmail({ version: 'v1', auth: saClient as Parameters<typeof google.gmail>[0]['auth'] });
     } else {
-      const auth = getAuthenticatedClient(credentials);
-      gmail = google.gmail({ version: 'v1', auth });
+      gmail = google.gmail({ version: 'v1', auth: getAuthenticatedClient(credentials) });
     }
 
-    // List the 10 most recent sent messages that have HTML content.
     const listRes = await gmail.users.messages.list({
       userId: 'me',
       labelIds: ['SENT'],
-      maxResults: 10,
+      maxResults: 50,
     });
+    const stubs = (listRes.data.messages ?? []).filter((s) => !!s.id);
+    if (stubs.length === 0) return null;
 
-    for (const stub of listRes.data.messages ?? []) {
-      if (!stub.id) continue;
-      const msg = await gmail.users.messages.get({
-        userId: 'me',
-        id: stub.id,
-        format: 'full',
-      });
+    // Step 1: fetch metadata for all stubs in parallel to check Content-Type.
+    const metaResults = await Promise.all(
+      stubs.map((s) =>
+        gmail.users.messages.get({ userId: 'me', id: s.id!, format: 'metadata', metadataHeaders: ['Content-Type'] })
+          .catch(() => null)
+      )
+    );
 
-      const html = extractHtmlFromGmailPayload(msg.data.payload);
+    // Step 2: separate gmail-composed (multipart) from app-sent (text/html).
+    // We check multipart first; if none found we fall back to any HTML message.
+    const multipartIds: string[] = [];
+    const htmlIds: string[] = [];
+    for (const meta of metaResults) {
+      if (!meta?.data.id) continue;
+      const ct = (meta.data.payload?.headers ?? [])
+        .find((h) => h.name?.toLowerCase() === 'content-type')?.value ?? '';
+      if (ct.toLowerCase().startsWith('multipart/')) multipartIds.push(meta.data.id);
+      else if (ct.toLowerCase().startsWith('text/html')) htmlIds.push(meta.data.id);
+    }
+
+    const candidateIds = multipartIds.length > 0 ? multipartIds.slice(0, 10) : htmlIds.slice(0, 5);
+
+    // Step 3: fetch full content in parallel for candidates.
+    const fullMessages = await Promise.all(
+      candidateIds.map((id) =>
+        gmail.users.messages.get({ userId: 'me', id, format: 'full' }).catch(() => null)
+      )
+    );
+
+    for (const msg of fullMessages) {
+      if (!msg?.data.payload) continue;
+      const { html, cids } = extractHtmlAndCids(msg.data.payload);
       if (!html) continue;
-
-      const sig = extractGmailSignatureBlock(html);
+      const resolvedHtml = resolveCidReferences(html, cids);
+      const sig = extractGmailSignatureBlock(resolvedHtml);
       if (sig) {
         console.log(`[Gmail] fetchSignatureFromGmailSent: found signature for ${mailbox.emailAddress}`);
         return sig;
@@ -1563,19 +1593,49 @@ async function fetchSignatureFromGmailSent(mailbox: Mailbox): Promise<string | n
   }
 }
 
-/** Recursively walk a Gmail message payload and return the first text/html part body. */
-function extractHtmlFromGmailPayload(
-  payload: import('googleapis').gmail_v1.Schema$MessagePart | null | undefined
-): string | null {
-  if (!payload) return null;
+/** Recursively extract the first text/html part and all inline CID image attachments. */
+function extractHtmlAndCids(
+  payload: import('googleapis').gmail_v1.Schema$MessagePart | null | undefined,
+  cids: Record<string, { mimeType: string; data: string }> = {}
+): { html: string | null; cids: Record<string, { mimeType: string; data: string }> } {
+  if (!payload) return { html: null, cids };
+
+  // Collect inline image attachments by their Content-ID header.
+  if (payload.mimeType?.startsWith('image/') && payload.body?.data) {
+    const contentIdHeader = (payload.headers ?? []).find(
+      (h) => h.name?.toLowerCase() === 'content-id'
+    );
+    if (contentIdHeader?.value) {
+      const cid = contentIdHeader.value.replace(/^<|>$/g, '');
+      cids[cid] = { mimeType: payload.mimeType, data: payload.body.data };
+    }
+  }
+
   if (payload.mimeType === 'text/html' && payload.body?.data) {
-    return Buffer.from(payload.body.data, 'base64').toString('utf-8');
+    const html = Buffer.from(payload.body.data, 'base64').toString('utf-8');
+    return { html, cids };
   }
+
+  let html: string | null = null;
   for (const part of payload.parts ?? []) {
-    const found = extractHtmlFromGmailPayload(part);
-    if (found) return found;
+    const result = extractHtmlAndCids(part, cids);
+    if (!html && result.html) html = result.html;
   }
-  return null;
+  return { html, cids };
+}
+
+/** Replace cid: image references with inline data URIs so they render in new emails. */
+function resolveCidReferences(
+  html: string,
+  cids: Record<string, { mimeType: string; data: string }>
+): string {
+  return html.replace(/src="cid:([^"]+)"/gi, (_match, cid: string) => {
+    const attachment = cids[cid];
+    if (attachment) {
+      return `src="data:${attachment.mimeType};base64,${attachment.data}"`;
+    }
+    return `src="cid:${cid}"`;
+  });
 }
 
 /**

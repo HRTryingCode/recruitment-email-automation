@@ -5,6 +5,7 @@ import {
   fetchMailboxes,
   fetchDrafts,
   fetchSyncHealth,
+  fetchMailboxSignatureHtml,
   approveDraft,
   resyncMailbox,
   type Candidate,
@@ -35,6 +36,7 @@ import {
   Check,
   CheckCircle2,
   RefreshCw,
+  Pen,
 } from 'lucide-react';
 
 interface Props {
@@ -331,6 +333,22 @@ function MailboxHealthAccordion({
 }) {
   const [open, setOpen] = useState(false);
   const [resyncing, setResyncing] = useState<string | null>(null);
+  const [sigPreview, setSigPreview] = useState<{ mailboxId: string; html: string | null } | null>(null);
+  const [loadingSig, setLoadingSig] = useState<string | null>(null);
+
+  const handlePreviewSig = async (mailboxId: string) => {
+    if (sigPreview?.mailboxId === mailboxId) { setSigPreview(null); return; }
+    setLoadingSig(mailboxId);
+    try {
+      const { signatureHtml } = await fetchMailboxSignatureHtml(mailboxId);
+      setSigPreview({ mailboxId, html: signatureHtml });
+    } catch {
+      setSigPreview({ mailboxId, html: null });
+    } finally {
+      setLoadingSig(null);
+    }
+  };
+
   if (!loading && !error && data.length === 0) return null;
 
   return (
@@ -429,6 +447,39 @@ function MailboxHealthAccordion({
                             <RefreshCw className={cn('h-2.5 w-2.5', resyncing === row.mailboxId && 'animate-spin')} />
                             {resyncing === row.mailboxId ? 'Resyncing…' : 'Resync'}
                           </button>
+                          <button
+                            onClick={() => handlePreviewSig(row.mailboxId)}
+                            disabled={loadingSig === row.mailboxId}
+                            className="mt-0.5 flex items-center gap-1 text-[10px] text-fg-muted hover:text-fg-strong disabled:opacity-50"
+                          >
+                            <Pen className="h-2.5 w-2.5" />
+                            {loadingSig === row.mailboxId ? 'Loading…' : sigPreview?.mailboxId === row.mailboxId ? 'Hide sig' : 'Preview sig'}
+                          </button>
+                          {sigPreview?.mailboxId === row.mailboxId && (
+                            <div className="mt-1.5 max-w-[280px] rounded border border-line bg-white p-2 text-[11px]">
+                              {sigPreview.html ? (
+                                <iframe
+                                  srcDoc={`<!DOCTYPE html><html><body style="margin:0;padding:0;font-family:sans-serif;font-size:13px">${sigPreview.html}</body></html>`}
+                                  sandbox="allow-same-origin"
+                                  className="w-full border-0"
+                                  style={{ minHeight: 60 }}
+                                  onLoad={(e) => {
+                                    const iframe = e.currentTarget;
+                                    const body = iframe.contentDocument?.body;
+                                    if (body) iframe.style.height = `${body.scrollHeight + 8}px`;
+                                  }}
+                                  title="Signature preview"
+                                />
+                              ) : (
+                                <span className="text-rose-600">No signature found — see notes below.</span>
+                              )}
+                            </div>
+                          )}
+                          {sigPreview?.mailboxId === row.mailboxId && !sigPreview.html && (
+                            <p className="mt-1 max-w-[280px] text-[10px] text-fg-muted leading-snug">
+                              Grant <code>gmail.settings.basic</code> in Google Admin Console → Security → API controls → Domain-wide delegation, then resync.
+                            </p>
+                          )}
                         </td>
                         <td
                           className={cn(
