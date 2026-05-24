@@ -45,22 +45,24 @@ router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
     const now = Date.now();
     const dayAgo = new Date(now - 24 * 60 * 60 * 1000);
 
-    // Pull all WEBHOOK_HANDLER_ERROR events in the last 24h once, then count
-    // per mailbox below by matching emailAddress in `details`. SystemLog
-    // doesn't have a mailboxId column for these so JS-side bucketing is the
-    // simplest correct option.
-    const [mailboxes, recentWebhookErrors] = await Promise.all([
+    // Fetch all shared data in one round-trip before the per-mailbox fan-out.
+    const [mailboxes, recentWebhookErrors, recentReconciliations] = await Promise.all([
       prisma.mailbox.findMany({
         where: { isActive: true },
         orderBy: { createdAt: 'asc' },
       }),
       prisma.systemLog.findMany({
-        where: {
-          event: 'WEBHOOK_HANDLER_ERROR',
-          createdAt: { gte: dayAgo },
-        },
+        where: { event: 'WEBHOOK_HANDLER_ERROR', createdAt: { gte: dayAgo } },
         select: { details: true },
         take: 500,
+      }),
+      // Fetched once here and shared across all mailboxes below — no need to
+      // re-query inside each mailbox's Promise.all.
+      prisma.systemLog.findMany({
+        where: { event: 'RECONCILIATION_RUN' },
+        orderBy: { createdAt: 'desc' },
+        select: { details: true, createdAt: true },
+        take: 200,
       }),
     ]);
 
@@ -74,71 +76,80 @@ router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
 
     const health: MailboxSyncHealth[] = await Promise.all(
       mailboxes.map(async (mb) => {
-        const [
-          lastMessage,
-          messagesLast24h,
-          pendingDrafts,
-          candidatesNeedsReview,
-          recentReconciliations,
-        ] = await Promise.all([
-          prisma.emailMessage.findFirst({
-            where: { mailboxId: mb.id },
-            orderBy: { receivedAt: 'desc' },
-            select: { receivedAt: true },
-          }),
-          prisma.emailMessage.count({
-            where: { mailboxId: mb.id, receivedAt: { gte: dayAgo } },
-          }),
-          prisma.emailDraft.count({
-            where: { status: 'PENDING', thread: { mailboxId: mb.id } },
-          }),
-          prisma.candidate.count({
-            where: { mailboxId: mb.id, status: 'NEEDS_REVIEW' },
-          }),
-          // Pull the most recent RECONCILIATION_RUN for this mailbox. SystemLog
-          // doesn't have a mailboxId column — the id is embedded in `details`
-          // JSON — so we filter in JS. Cap at 50 rows: more than enough to
-          // find the latest per-mailbox entry across a few hourly runs.
-          prisma.systemLog.findMany({
-            where: { event: 'RECONCILIATION_RUN' },
-            orderBy: { createdAt: 'desc' },
-            take: 50,
-          }),
-        ]);
+        try {
+          const [lastMessage, messagesLast24h, pendingDrafts, candidatesNeedsReview] =
+            await Promise.all([
+              prisma.emailMessage.findFirst({
+                where: { mailboxId: mb.id },
+                orderBy: { receivedAt: 'desc' },
+                select: { receivedAt: true },
+              }),
+              prisma.emailMessage.count({
+                where: { mailboxId: mb.id, receivedAt: { gte: dayAgo } },
+              }),
+              prisma.emailDraft.count({
+                where: {
+                  status: 'PENDING',
+                  thread: { mailboxId: mb.id },
+                },
+              }),
+              prisma.candidate.count({
+                where: { mailboxId: mb.id, status: 'NEEDS_REVIEW' },
+              }),
+            ]);
 
-        const lastReconForMailbox = recentReconciliations.find((log) => {
-          const details = parseDetails(log.details);
-          return details.mailboxId === mb.id;
-        });
-        const lastReconDetails = lastReconForMailbox
-          ? parseDetails(lastReconForMailbox.details)
-          : {};
-        const missingFromLast =
-          typeof lastReconDetails.missingBefore === 'number'
-            ? lastReconDetails.missingBefore
-            : 0;
+          const lastReconForMailbox = recentReconciliations.find((log) => {
+            const d = parseDetails(log.details);
+            return d.mailboxId === mb.id;
+          });
+          const lastReconDetails = lastReconForMailbox
+            ? parseDetails(lastReconForMailbox.details)
+            : {};
+          const missingFromLast =
+            typeof lastReconDetails.missingBefore === 'number'
+              ? lastReconDetails.missingBefore
+              : 0;
 
-        const watchExpiresInHours = mb.watchExpiry
-          ? Math.round(((mb.watchExpiry.getTime() - now) / (60 * 60 * 1000)) * 10) / 10
-          : null;
+          const watchExpiresInHours = mb.watchExpiry
+            ? Math.round(((mb.watchExpiry.getTime() - now) / (60 * 60 * 1000)) * 10) / 10
+            : null;
 
-        return {
-          mailboxId: mb.id,
-          emailAddress: mb.emailAddress,
-          displayName: mb.displayName,
-          isActive: mb.isActive,
-          watchExpiry: mb.watchExpiry ? mb.watchExpiry.toISOString() : null,
-          watchExpiresInHours,
-          lastSyncedMessageAt: lastMessage ? lastMessage.receivedAt.toISOString() : null,
-          lastReconciliationAt: lastReconForMailbox
-            ? lastReconForMailbox.createdAt.toISOString()
-            : null,
-          lastReconciliationFoundMissing: missingFromLast,
-          messagesLast24h,
-          pendingDrafts,
-          candidatesNeedsReview,
-          webhookErrorsLast24h: errorsByEmail.get(mb.emailAddress) ?? 0,
-        };
+          return {
+            mailboxId: mb.id,
+            emailAddress: mb.emailAddress,
+            displayName: mb.displayName,
+            isActive: mb.isActive,
+            watchExpiry: mb.watchExpiry ? mb.watchExpiry.toISOString() : null,
+            watchExpiresInHours,
+            lastSyncedMessageAt: lastMessage ? lastMessage.receivedAt.toISOString() : null,
+            lastReconciliationAt: lastReconForMailbox
+              ? lastReconForMailbox.createdAt.toISOString()
+              : null,
+            lastReconciliationFoundMissing: missingFromLast,
+            messagesLast24h,
+            pendingDrafts,
+            candidatesNeedsReview,
+            webhookErrorsLast24h: errorsByEmail.get(mb.emailAddress) ?? 0,
+          };
+        } catch (mbErr) {
+          // Return a degraded row rather than failing the whole response.
+          console.error(`[sync-health] Failed to compute health for mailbox ${mb.emailAddress}:`, mbErr);
+          return {
+            mailboxId: mb.id,
+            emailAddress: mb.emailAddress,
+            displayName: mb.displayName,
+            isActive: mb.isActive,
+            watchExpiry: mb.watchExpiry ? mb.watchExpiry.toISOString() : null,
+            watchExpiresInHours: null,
+            lastSyncedMessageAt: null,
+            lastReconciliationAt: null,
+            lastReconciliationFoundMissing: 0,
+            messagesLast24h: 0,
+            pendingDrafts: 0,
+            candidatesNeedsReview: 0,
+            webhookErrorsLast24h: 0,
+          };
+        }
       })
     );
 

@@ -321,15 +321,17 @@ function HealthPill({
 function MailboxHealthAccordion({
   data,
   loading,
+  error,
   onResync,
 }: {
   data: MailboxSyncHealth[];
   loading: boolean;
+  error?: boolean;
   onResync: (mailboxId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [resyncing, setResyncing] = useState<string | null>(null);
-  if (!loading && data.length === 0) return null;
+  if (!loading && !error && data.length === 0) return null;
 
   return (
     <section className="overflow-hidden rounded-xl border border-line bg-surface-raised/60">
@@ -359,6 +361,10 @@ function MailboxHealthAccordion({
         <div id="mailbox-health-detail" className="border-t border-line">
           {loading ? (
             <Skeleton className="h-24 rounded-none" />
+          ) : error ? (
+            <p className="px-4 py-4 text-[13px] text-fg-muted">
+              Could not load mailbox health data — the server returned an error. Check Vercel logs for details.
+            </p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-[13px]">
@@ -598,11 +604,11 @@ export default function Dashboard({
     staleTime: 60_000,
   });
 
-  const { data: syncHealthData, isLoading: loadingSyncHealth } = useQuery({
+  const { data: syncHealthData, isLoading: loadingSyncHealth, isError: syncHealthError } = useQuery({
     queryKey: ['sync-health'],
     queryFn: fetchSyncHealth,
     staleTime: 60_000,
-    retry: false,
+    retry: 1,
   });
 
   const candidates = candidatesData?.data ?? [];
@@ -699,7 +705,11 @@ export default function Dashboard({
             attention.
           </p>
         </div>
-        {!loadingSyncHealth && <HealthPill summary={healthSummary} />}
+        {!loadingSyncHealth && (
+          syncHealthError
+            ? <HealthPill summary={{ tone: 'neutral', label: 'Health data unavailable' }} />
+            : <HealthPill summary={healthSummary} />
+        )}
         {mailboxes.length > 0 && (
           <ResyncAllButton mailboxes={mailboxes} />
         )}
@@ -826,6 +836,7 @@ export default function Dashboard({
       <MailboxHealthAccordion
         data={syncHealth}
         loading={loadingSyncHealth}
+        error={syncHealthError}
         onResync={async (mailboxId) => {
           try {
             await resyncMailbox(mailboxId);
