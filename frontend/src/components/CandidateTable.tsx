@@ -14,6 +14,7 @@ import {
 import {
   fetchCandidates,
   fetchMessages,
+  generateDraftForThread,
   updateCandidate,
   ignoreCandidate,
   unignoreCandidate,
@@ -38,6 +39,7 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
+  Sparkles,
 } from 'lucide-react';
 import { StatusBadge, type StatusVariant } from './ui/StatusBadge';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
@@ -82,6 +84,11 @@ function ReplyStatusBadge({ candidate }: { candidate: Candidate }) {
 }
 
 function ThreadView({ threadId }: { threadId: string }) {
+  const queryClient = useQueryClient();
+  const [generating, setGenerating] = useState(false);
+  const [genError, setGenError] = useState<string | null>(null);
+  const [genDone, setGenDone] = useState(false);
+
   const { data, isLoading } = useQuery({
     queryKey: ['thread', threadId],
     queryFn: () => fetchMessages(threadId),
@@ -100,30 +107,62 @@ function ThreadView({ threadId }: { threadId: string }) {
 
   const thread = data?.data as EmailThread | undefined;
   const messages = thread?.messages ?? [];
+  const hasPendingDraft = thread?.drafts?.some((d) => d.status === 'PENDING' || d.status === 'APPROVED');
+
+  const handleGenerateDraft = async () => {
+    setGenerating(true);
+    setGenError(null);
+    try {
+      await generateDraftForThread(threadId);
+      setGenDone(true);
+      void queryClient.invalidateQueries({ queryKey: ['drafts'] });
+      void queryClient.invalidateQueries({ queryKey: ['thread', threadId] });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to generate draft';
+      setGenError(msg);
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   return (
-    <div className="max-h-72 flex flex-col gap-2.5 overflow-y-auto p-4">
-      {messages.length === 0 ? (
-        <p className="text-[13px] text-fg-subtle">No messages yet</p>
-      ) : (
-        messages.map((msg) => (
-          <div
-            key={msg.id}
-            className="rounded-lg border border-line-soft bg-surface-base/40 p-3"
-          >
-            <div className="mb-1 flex items-center justify-between">
-              <span className="text-[13px] font-medium text-fg-strong">
-                {msg.fromName ?? msg.fromAddress}
-              </span>
-              <span className="font-mono text-[11px] tabular-nums text-fg-subtle">
-                {formatTimeAgo(msg.receivedAt)}
-              </span>
+    <div className="flex flex-col gap-2.5 p-4">
+      <div className="max-h-56 flex flex-col gap-2.5 overflow-y-auto">
+        {messages.length === 0 ? (
+          <p className="text-[13px] text-fg-subtle">No messages yet</p>
+        ) : (
+          messages.map((msg) => (
+            <div
+              key={msg.id}
+              className="rounded-lg border border-line-soft bg-surface-base/40 p-3"
+            >
+              <div className="mb-1 flex items-center justify-between">
+                <span className="text-[13px] font-medium text-fg-strong">
+                  {msg.fromName ?? msg.fromAddress}
+                </span>
+                <span className="font-mono text-[11px] tabular-nums text-fg-subtle">
+                  {formatTimeAgo(msg.receivedAt)}
+                </span>
+              </div>
+              <p className="line-clamp-3 text-[12.5px] leading-relaxed text-fg-muted">
+                {msg.bodyText}
+              </p>
             </div>
-            <p className="line-clamp-3 text-[12.5px] leading-relaxed text-fg-muted">
-              {msg.bodyText}
-            </p>
-          </div>
-        ))
+          ))
+        )}
+      </div>
+      {!hasPendingDraft && messages.length > 0 && (
+        <div className="flex items-center gap-2 pt-1">
+          <button
+            onClick={handleGenerateDraft}
+            disabled={generating || genDone}
+            className="flex items-center gap-1.5 rounded-lg border border-line bg-surface-raised/60 px-3 py-1.5 text-[12px] text-fg-muted hover:border-fg-muted/30 hover:text-fg-strong disabled:opacity-50"
+          >
+            <Sparkles className={`h-3.5 w-3.5 ${generating ? 'animate-pulse' : ''}`} />
+            {generating ? 'Generating…' : genDone ? 'Draft created — check Drafts tab' : 'Generate draft'}
+          </button>
+          {genError && <span className="text-[11px] text-rose-600">{genError}</span>}
+        </div>
       )}
     </div>
   );

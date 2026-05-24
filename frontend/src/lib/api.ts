@@ -289,6 +289,12 @@ export async function regenerateDraft(id: string): Promise<SingleResponse<EmailD
   return res.data as SingleResponse<EmailDraft>;
 }
 
+// Threads
+export async function generateDraftForThread(threadId: string): Promise<SingleResponse<EmailDraft>> {
+  const res = await api.post(`/emails/threads/${threadId}/draft`);
+  return res.data as SingleResponse<EmailDraft>;
+}
+
 // Health
 export async function fetchHealth(): Promise<SingleResponse<HealthStatus>> {
   const res = await api.get('/health');
