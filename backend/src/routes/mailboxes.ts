@@ -67,7 +67,7 @@ router.post('/:id/resync', requireAdmin, async (req: Request, res: Response, nex
     if (!mailbox) {
       return next(createError('Mailbox not found', 404));
     }
-    const result = await syncMessages(id, { maxResults: 250, daysBack: 7 });
+    const result = await syncMessages(id, { maxResults: 250, daysBack: 30 });
     await logEvent('MAILBOX_RESYNCED', { mailboxId: id, ...result }, 'INFO');
     res.json({ success: true, data: result });
   } catch (err) {

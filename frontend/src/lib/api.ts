@@ -218,9 +218,14 @@ export async function deleteMailbox(id: string): Promise<{ success: boolean; mes
   return res.data as { success: boolean; message: string };
 }
 
-export async function resyncMailbox(id: string): Promise<{ success: boolean; data: unknown }> {
+export interface ResyncResult {
+  messagesSeen: number;
+  messagesStored: number;
+}
+
+export async function resyncMailbox(id: string): Promise<{ success: boolean; data: ResyncResult }> {
   const res = await api.post(`/mailboxes/${id}/resync`);
-  return res.data as { success: boolean; data: unknown };
+  return res.data as { success: boolean; data: ResyncResult };
 }
 
 export async function fetchMailboxSignatureHtml(id: string): Promise<{ signatureHtml: string | null }> {

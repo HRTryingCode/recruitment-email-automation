@@ -12,6 +12,7 @@ import {
   type Mailbox,
   type EmailDraft,
   type MailboxSyncHealth,
+  type ResyncResult,
 } from '../lib/api';
 import { cn } from '../lib/utils';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './ui/empty';
@@ -596,7 +597,7 @@ function EmptyState({
 
 function ResyncAllButton({ mailboxes }: { mailboxes: Mailbox[] }) {
   const [resyncing, setResyncing] = useState(false);
-  const [results, setResults] = useState<{ email: string; ok: boolean; error?: string }[] | null>(null);
+  const [results, setResults] = useState<{ email: string; ok: boolean; data?: ResyncResult; error?: string }[] | null>(null);
 
   const handleResyncAll = async () => {
     setResyncing(true);
@@ -604,8 +605,8 @@ function ResyncAllButton({ mailboxes }: { mailboxes: Mailbox[] }) {
     const outcomes = await Promise.all(
       mailboxes.map(async (mb) => {
         try {
-          await resyncMailbox(mb.id);
-          return { email: mb.emailAddress, ok: true };
+          const res = await resyncMailbox(mb.id);
+          return { email: mb.emailAddress, ok: true, data: res.data };
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
           return { email: mb.emailAddress, ok: false, error: msg };
@@ -639,7 +640,10 @@ function ResyncAllButton({ mailboxes }: { mailboxes: Mailbox[] }) {
         <div className="flex flex-col gap-0.5 text-right">
           {results.map((r) => (
             <p key={r.email} className={`text-[11px] ${r.ok ? 'text-emerald-600' : 'text-rose-600'}`}>
-              {r.email.split('@')[0]}: {r.ok ? '✓ synced' : `✗ ${r.error ?? 'failed'}`}
+              {r.email.split('@')[0]}:{' '}
+              {r.ok
+                ? `✓ ${r.data?.messagesStored ?? 0} stored / ${r.data?.messagesSeen ?? 0} seen`
+                : `✗ ${r.error ?? 'failed'}`}
             </p>
           ))}
         </div>
