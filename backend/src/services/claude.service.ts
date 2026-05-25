@@ -453,7 +453,7 @@ export async function generateHandoffDraftReply(
         content: `You are ghostwriting a recruiting reply as ${firstName} (${caller.email}).
 
 The candidate replied to an outreach email. Your job is to write a SHORT, warm reply that:
-1. Briefly acknowledges or addresses anything specific the candidate said (a question about the role, a request for the JD, a proposed time, etc.)
+1. Briefly acknowledges or addresses anything specific the candidate said (a question about the role, a request for the JD, etc.) — but SKIP any mention of specific times or availability the candidate proposed, because ${firstName} does not know ${thread.ccName}'s calendar
 2. Loops in ${thread.ccName} using EXACTLY the phrasing provided below — do not paraphrase or change the meaning
 3. Does NOT over-explain or add filler — keep it to 2-3 sentences max
 
@@ -472,7 +472,7 @@ Respond with a JSON object in this exact format:
 
 Requirements:
 - Open with "Hi ${candidateFirst},"
-- Address any specific question/request from the candidate in one sentence if present; otherwise skip straight to the loop-in
+- Address any specific question/request from the candidate in one sentence if present; do NOT reference or confirm any specific times/dates the candidate mentioned; otherwise skip straight to the loop-in
 - Use this loop-in line (keep the wording close to this): "${loopInExample}"
 - Close with "Best," on its own line${thread.signatureHtml ? ' — the signature will be appended automatically, do not write a name after Best,' : `\n- Sign off as ${firstName}`}
 - Plain text and HTML must match in content`,
