@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../db/client';
 import { createError } from '../middleware/error';
 import { createDraft, sendDraft as gmailSendDraft, fetchExamplesForMailbox, buildHandoffDraftContent, fetchMailboxSignature, htmlSignatureToPlainText } from '../services/gmail.service';
-import { classifyReply, generateDraftReply } from '../services/claude.service';
+import { classifyReply, generateDraftReply, generateHandoffDraftReply } from '../services/claude.service';
 import { config } from '../config';
 import { logEvent } from '../services/monitoring.service';
 import { serializeEmailMessages } from '../lib/emailMessageSerializer';
@@ -396,15 +396,32 @@ async function regenerateDraftById(id: string): Promise<RegenerateOk | Regenerat
   let replyBodyHtml: string | undefined;
 
   if (isHandoffInbox && classificationResult.classification === 'INTERESTED') {
-    // Non-Sofia + INTERESTED → always use the fixed handoff template
     const signatureHtml = await fetchMailboxSignature(mailbox.id);
-    const content = buildHandoffDraftContent(
-      candidate.name,
-      mailbox.displayName,
-      mailbox.emailAddress,
-      thread.subject,
-      signatureHtml
-    );
+    const ccDisplayName = await prisma.mailbox
+      .findUnique({ where: { emailAddress: config.draftCcEmail.toLowerCase() }, select: { displayName: true } })
+      .then((mb) => mb?.displayName ?? 'Sofia');
+    let content: { subject: string; bodyText: string; bodyHtml: string };
+    try {
+      const draftReply = await generateHandoffDraftReply(
+        {
+          subject: thread.subject,
+          messages: allMessagesAsc,
+          candidateName: candidate.name,
+          classification: classificationResult.classification,
+          signatureHtml,
+          ccName: ccDisplayName,
+          ccEmail: config.draftCcEmail.toLowerCase(),
+        },
+        { email: mailbox.emailAddress, displayName: mailbox.displayName }
+      );
+      if (signatureHtml) {
+        draftReply.bodyText = `${draftReply.bodyText}\n${htmlSignatureToPlainText(signatureHtml)}`;
+        draftReply.bodyHtml = `${draftReply.bodyHtml ?? ''}${signatureHtml}`;
+      }
+      content = draftReply;
+    } catch {
+      content = buildHandoffDraftContent(candidate.name, mailbox.displayName, mailbox.emailAddress, thread.subject, signatureHtml);
+    }
     replySubject = content.subject;
     replyBodyText = content.bodyText;
     replyBodyHtml = content.bodyHtml;
