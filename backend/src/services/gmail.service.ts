@@ -2,7 +2,7 @@ import { google } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 import { config } from '../config';
 import { prisma } from '../db/client';
-import { classifyReply, generateDraftReply, type ExampleReply } from './claude.service';
+import { classifyReply, generateDraftReply, generateHandoffDraftReply, type ExampleReply } from './claude.service';
 import { logEvent } from './monitoring.service';
 import { decrypt, encrypt } from '../lib/crypto';
 import type { Mailbox, EmailThread } from '@prisma/client';
@@ -643,22 +643,55 @@ async function classifyAndDraft(opts: {
   const ccEmail = config.draftCcEmail.toLowerCase();
   const isHandoffInbox = mailbox.emailAddress.toLowerCase() !== ccEmail;
 
-  // 6. For non-Sofia inboxes, use the fixed handoff template — no Claude needed.
-  //    Sofia is CC'd on every sent draft via the createDraft helper.
+  // 6. For non-Sofia inboxes, use Claude to generate a tailored handoff reply
+  //    that addresses anything specific the candidate said, then loops in Sofia.
   if (isHandoffInbox) {
     const signatureHtml = await fetchMailboxSignature(mailbox.id);
-    const content = buildHandoffDraftContent(
-      candidate.name,
-      mailbox.displayName,
-      mailbox.emailAddress,
-      thread.subject,
-      signatureHtml
-    );
     const inReplyToMessageId = parsed.headers.messageId || null;
     const existingRefs = parsed.headers.references ?? '';
     const referencesHeader = existingRefs
       ? `${existingRefs} ${inReplyToMessageId ?? ''}`.trim()
       : inReplyToMessageId;
+
+    // Derive the CC person's display name from the draftCcEmail address.
+    const ccDisplayName = await prisma.mailbox
+      .findUnique({ where: { emailAddress: ccEmail }, select: { displayName: true } })
+      .then((mb) => mb?.displayName ?? 'Sofia');
+
+    let content: { subject: string; bodyText: string; bodyHtml: string };
+    try {
+      const draftReply = await generateHandoffDraftReply(
+        {
+          subject: thread.subject,
+          messages: allMessages.map((m) => ({
+            fromAddress: m.fromAddress,
+            fromName: m.fromName,
+            bodyText: m.bodyText,
+            receivedAt: m.receivedAt,
+          })),
+          candidateName: candidate.name,
+          classification,
+          signatureHtml,
+          ccName: ccDisplayName,
+          ccEmail,
+        },
+        { email: mailbox.emailAddress, displayName: mailbox.displayName }
+      );
+      if (signatureHtml) {
+        draftReply.bodyText = `${draftReply.bodyText}\n${htmlSignatureToPlainText(signatureHtml)}`;
+        draftReply.bodyHtml = `${draftReply.bodyHtml ?? ''}${signatureHtml}`;
+      }
+      content = draftReply;
+    } catch {
+      // Fall back to static template if Claude fails
+      content = buildHandoffDraftContent(
+        candidate.name,
+        mailbox.displayName,
+        mailbox.emailAddress,
+        thread.subject,
+        signatureHtml
+      );
+    }
 
     await prisma.emailDraft.create({
       data: {
@@ -676,7 +709,7 @@ async function classifyAndDraft(opts: {
 
     await logEvent(
       'DRAFT_CREATED',
-      { mailboxId: mailbox.id, candidateId: candidate.id, threadId: thread.id, messageType, confidence, via: 'handoff_template' },
+      { mailboxId: mailbox.id, candidateId: candidate.id, threadId: thread.id, messageType, confidence, via: 'handoff_claude' },
       'INFO'
     );
     return;

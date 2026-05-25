@@ -400,6 +400,69 @@ ${emailBody}`,
   return coerceClassificationResult(parsed);
 }
 
+export async function generateHandoffDraftReply(
+  thread: ThreadContext & { ccName: string; ccEmail: string },
+  caller: DraftCaller
+): Promise<DraftReplyResult> {
+  const messagesContext = thread.messages
+    .map((m) => {
+      const name = m.fromName ?? m.fromAddress;
+      const date = m.receivedAt.toISOString();
+      return `From: ${name} (${m.fromAddress}) at ${date}\n${m.bodyText ?? '(no text body)'}`;
+    })
+    .join('\n\n---\n\n');
+
+  const firstName = deriveFirstName(caller);
+  const candidateFirst = thread.candidateName.split(/\s+/)[0] ?? thread.candidateName;
+
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 1024,
+    system: CACHED_SYSTEM,
+    messages: [
+      {
+        role: 'user',
+        content: `You are ghostwriting a recruiting reply as ${firstName} (${caller.email}).
+
+The candidate replied to an outreach email. Your job is to write a SHORT, warm reply that:
+1. Briefly acknowledges or addresses anything specific the candidate said (a question about the role, a request for the JD, a proposed time, etc.)
+2. Mentions you're looping in ${thread.ccName} (${thread.ccEmail}) from the recruiting team to take it from here
+3. Does NOT over-explain or add filler — keep it to 2-3 sentences max
+
+Candidate name: ${thread.candidateName}
+Thread subject: ${thread.subject}
+
+Full conversation:
+${messagesContext}
+
+Respond with a JSON object in this exact format:
+{
+  "subject": "<reply subject, prefixed Re: if replying>",
+  "bodyText": "<plain text body>",
+  "bodyHtml": "<HTML body using simple inline styles>"
+}
+
+Requirements:
+- Open with "Hi ${candidateFirst},"
+- Address any specific question/request from the candidate in one sentence if present; otherwise skip straight to the loop-in
+- Loop-in line example: "I'm looping in ${thread.ccName} here — she'll send over [what they asked for /] more details and get something on the calendar."
+- Close with "Best," on its own line${thread.signatureHtml ? ' — the signature will be appended automatically, do not write a name after Best,' : `\n- Sign off as ${firstName}`}
+- Plain text and HTML must match in content`,
+      },
+    ],
+  });
+
+  const textContent = response.content.find((b) => b.type === 'text');
+  if (!textContent || textContent.type !== 'text') {
+    throw new Error('No text response from Claude');
+  }
+
+  const jsonMatch = textContent.text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error('No JSON found in response');
+  const parsed = JSON.parse(jsonMatch[0]) as DraftReplyResult;
+  return parsed;
+}
+
 export async function generateDraftReply(
   thread: ThreadContext,
   caller: DraftCaller

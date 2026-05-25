@@ -8,7 +8,7 @@ import {
   fetchMailboxSignature,
   htmlSignatureToPlainText,
 } from '../services/gmail.service';
-import { classifyReply, generateDraftReply } from '../services/claude.service';
+import { classifyReply, generateDraftReply, generateHandoffDraftReply } from '../services/claude.service';
 import { config } from '../config';
 import { logEvent } from '../services/monitoring.service';
 import { z } from 'zod';
@@ -188,13 +188,36 @@ router.post(
       const signatureHtml = await fetchMailboxSignature(mailbox.id);
 
       if (isHandoffInbox) {
-        const content = buildHandoffDraftContent(
-          candidate.name,
-          mailbox.displayName,
-          mailbox.emailAddress,
-          thread.subject,
-          signatureHtml
-        );
+        const ccDisplayName = await prisma.mailbox
+          .findUnique({ where: { emailAddress: config.draftCcEmail.toLowerCase() }, select: { displayName: true } })
+          .then((mb) => mb?.displayName ?? 'Sofia');
+        let content: { subject: string; bodyText: string; bodyHtml: string };
+        try {
+          const draftReply = await generateHandoffDraftReply(
+            {
+              subject: thread.subject,
+              messages: thread.messages.map((m) => ({
+                fromAddress: m.fromAddress,
+                fromName: m.fromName,
+                bodyText: m.bodyText,
+                receivedAt: m.receivedAt,
+              })),
+              candidateName: candidate.name,
+              classification,
+              signatureHtml,
+              ccName: ccDisplayName,
+              ccEmail: config.draftCcEmail.toLowerCase(),
+            },
+            { email: mailbox.emailAddress, displayName: mailbox.displayName }
+          );
+          if (signatureHtml) {
+            draftReply.bodyText = `${draftReply.bodyText}\n${htmlSignatureToPlainText(signatureHtml)}`;
+            draftReply.bodyHtml = `${draftReply.bodyHtml ?? ''}${signatureHtml}`;
+          }
+          content = draftReply;
+        } catch {
+          content = buildHandoffDraftContent(candidate.name, mailbox.displayName, mailbox.emailAddress, thread.subject, signatureHtml);
+        }
         subject = content.subject;
         bodyText = content.bodyText;
         bodyHtml = content.bodyHtml;
