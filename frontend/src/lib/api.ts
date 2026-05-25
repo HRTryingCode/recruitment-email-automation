@@ -260,6 +260,7 @@ export async function fetchMessages(
 // Drafts
 export async function fetchDrafts(filters?: {
   status?: string;
+  mailboxId?: string;
   page?: number;
   limit?: number;
 }): Promise<PaginatedResponse<EmailDraft>> {

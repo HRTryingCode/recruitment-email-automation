@@ -30,8 +30,10 @@ const paginationSchema = z.object({
 });
 
 const DRAFT_STATUSES = ['PENDING', 'APPROVED', 'SENT', 'DISCARDED'] as const;
+const cuidPattern = /^[a-z0-9]{20,30}$/;
 const draftListFilterSchema = z.object({
   status: z.enum(DRAFT_STATUSES).optional(),
+  mailboxId: z.string().regex(cuidPattern, 'mailboxId must be a cuid').optional(),
 });
 
 const draftWithThreadInclude = {
@@ -128,11 +130,12 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const filterParsed = draftListFilterSchema.safeParse({
       status: qs(req.query.status),
+      mailboxId: qs(req.query.mailboxId),
     });
     if (!filterParsed.success) {
       return next(createError(filterParsed.error.errors[0]?.message ?? 'Invalid filter', 400));
     }
-    const { status } = filterParsed.data;
+    const { status, mailboxId } = filterParsed.data;
     const paged = paginationSchema.safeParse({
       page: qs(req.query.page),
       limit: qs(req.query.limit),
@@ -145,6 +148,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 
     const where: Prisma.EmailDraftWhereInput = {};
     if (status) where.status = status;
+    if (mailboxId) where.thread = { ...(where.thread as object), mailboxId };
 
     // By default, hide drafts for candidates who have already been replied to
     // (either via the app or directly from Gmail/Superhuman). Only show them
@@ -152,6 +156,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const includeReplied = qs(req.query.includeReplied) === 'true';
     if (!includeReplied) {
       where.thread = {
+        ...(where.thread as object),
         candidate: { repliedAt: null },
       };
     }

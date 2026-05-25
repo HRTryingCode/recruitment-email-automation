@@ -808,8 +808,8 @@ export default function Dashboard({
   });
 
   const { data: draftsData, isLoading: loadingDrafts } = useQuery({
-    queryKey: ['drafts'],
-    queryFn: () => fetchDrafts({ limit: 500 }),
+    queryKey: ['drafts', { mailboxId }],
+    queryFn: () => fetchDrafts({ limit: 500, mailboxId }),
     staleTime: 30_000,
   });
 
