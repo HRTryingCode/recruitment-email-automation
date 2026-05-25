@@ -190,7 +190,7 @@ router.post(
       if (isHandoffInbox) {
         const ccDisplayName = await prisma.mailbox
           .findUnique({ where: { emailAddress: config.draftCcEmail.toLowerCase() }, select: { displayName: true } })
-          .then((mb) => mb?.displayName ?? 'Sofia');
+          .then((mb) => (mb?.displayName ?? 'Sofia').split(/\s+/)[0]);
         let content: { subject: string; bodyText: string; bodyHtml: string };
         try {
           const draftReply = await generateHandoffDraftReply(

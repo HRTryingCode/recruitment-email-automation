@@ -653,10 +653,10 @@ async function classifyAndDraft(opts: {
       ? `${existingRefs} ${inReplyToMessageId ?? ''}`.trim()
       : inReplyToMessageId;
 
-    // Derive the CC person's display name from the draftCcEmail address.
+    // Use first name only for the CC person so drafts say "Sofia" not "Sofia Delgado".
     const ccDisplayName = await prisma.mailbox
       .findUnique({ where: { emailAddress: ccEmail }, select: { displayName: true } })
-      .then((mb) => mb?.displayName ?? 'Sofia');
+      .then((mb) => (mb?.displayName ?? 'Sofia').split(/\s+/)[0]);
 
     let content: { subject: string; bodyText: string; bodyHtml: string };
     try {
