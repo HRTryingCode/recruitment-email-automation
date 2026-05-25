@@ -69,12 +69,18 @@ app.use(
 // Strict CORS: reject any Origin not in ALLOWED_ORIGINS. Requests without an
 // Origin header (same-origin browser fetches, curl, server-to-server) bypass
 // the check — CORS only protects cross-origin browser flows.
+//
+// Disallowed origins get `callback(null, false)` so the cors middleware
+// returns a clean response with no `Access-Control-Allow-Origin` header
+// (browsers still reject) instead of throwing — throwing bubbles to
+// errorHandler and produces a 500, which pollutes error logs and gives
+// scanners a free log-flooding surface.
 app.use(
   cors({
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);
       if (config.allowedOrigins.includes(origin)) return callback(null, true);
-      return callback(new Error(`CORS: origin ${origin} not allowed`));
+      return callback(null, false);
     },
     credentials: true,
   })
