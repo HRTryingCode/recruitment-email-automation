@@ -2,7 +2,7 @@ import { google } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 import { config } from '../config';
 import { prisma } from '../db/client';
-import { classifyReply, generateDraftReply, generateHandoffDraftReply, type ExampleReply } from './claude.service';
+import { classifyReply, generateDraftReply, generateHandoffDraftReply, getHandoffType, type ExampleReply } from './claude.service';
 import { logEvent } from './monitoring.service';
 import { decrypt, encrypt } from '../lib/crypto';
 import type { Mailbox, EmailThread } from '@prisma/client';
@@ -674,6 +674,7 @@ async function classifyAndDraft(opts: {
           signatureHtml,
           ccName: ccDisplayName,
           ccEmail,
+          handoffType: getHandoffType(mailbox.emailAddress, candidate.role ?? null),
         },
         { email: mailbox.emailAddress, displayName: mailbox.displayName }
       );

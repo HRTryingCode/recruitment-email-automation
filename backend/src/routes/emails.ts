@@ -8,7 +8,7 @@ import {
   fetchMailboxSignature,
   htmlSignatureToPlainText,
 } from '../services/gmail.service';
-import { classifyReply, generateDraftReply, generateHandoffDraftReply } from '../services/claude.service';
+import { classifyReply, generateDraftReply, generateHandoffDraftReply, getHandoffType } from '../services/claude.service';
 import { config } from '../config';
 import { logEvent } from '../services/monitoring.service';
 import { z } from 'zod';
@@ -207,6 +207,7 @@ router.post(
               signatureHtml,
               ccName: ccDisplayName,
               ccEmail: config.draftCcEmail.toLowerCase(),
+              handoffType: getHandoffType(mailbox.emailAddress, candidate.role ?? null),
             },
             { email: mailbox.emailAddress, displayName: mailbox.displayName }
           );

@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../db/client';
 import { createError } from '../middleware/error';
 import { createDraft, sendDraft as gmailSendDraft, fetchExamplesForMailbox, buildHandoffDraftContent, fetchMailboxSignature, htmlSignatureToPlainText } from '../services/gmail.service';
-import { classifyReply, generateDraftReply, generateHandoffDraftReply } from '../services/claude.service';
+import { classifyReply, generateDraftReply, generateHandoffDraftReply, getHandoffType } from '../services/claude.service';
 import { config } from '../config';
 import { logEvent } from '../services/monitoring.service';
 import { serializeEmailMessages } from '../lib/emailMessageSerializer';
@@ -411,6 +411,7 @@ async function regenerateDraftById(id: string): Promise<RegenerateOk | Regenerat
           signatureHtml,
           ccName: ccDisplayName,
           ccEmail: config.draftCcEmail.toLowerCase(),
+          handoffType: getHandoffType(mailbox.emailAddress, candidate.role ?? null),
         },
         { email: mailbox.emailAddress, displayName: mailbox.displayName }
       );
