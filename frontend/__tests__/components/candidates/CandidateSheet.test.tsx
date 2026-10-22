@@ -124,7 +124,8 @@ describe('<CandidateSheet /> (side panel)', () => {
     const sheet = await screen.findByRole('dialog');
     await within(sheet).findByText('Conversations (2)');
     expect(within(sheet).getByTestId('reply-label')).toHaveTextContent('Interested');
-    expect(within(sheet).getAllByText('Founding Engineer').length).toBeGreaterThan(0);
+    // The shared Inbox RoleChip (H7).
+    expect(within(sheet).getByTestId('role-chip')).toHaveAttribute('aria-label', 'Role: Founding Engineer');
     expect(within(sheet).getByText('rae@archive.com')).toBeInTheDocument();
   });
 
