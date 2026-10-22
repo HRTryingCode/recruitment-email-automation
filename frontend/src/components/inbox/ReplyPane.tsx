@@ -21,7 +21,7 @@ import {
 import { messagePlainText, sendLine } from '@/lib/inbox';
 import { formatTimeAgo } from '@/lib/utils';
 import type { DraftEditorState } from '@/hooks/useDraftEditor';
-import { LabelChip, PresenceChip, firstName } from './chips';
+import { LabelChip, PresenceChip, RoleChip, firstName } from './chips';
 import DraftEditor from './DraftEditor';
 import EvidenceMessage from './EvidenceMessage';
 import LeverSection, { type LeverFields } from './LeverSection';
@@ -226,11 +226,12 @@ export default function ReplyPane(props: Props) {
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="truncate font-heading text-base font-semibold text-foreground">{name}</h2>
+            <RoleChip role={role} />
             <LabelChip classification={draft.classification} confidenceLabel={draft.confidenceLabel} />
             <PresenceChip presence={presence} />
           </div>
           <p className="truncate text-sm text-muted-foreground">
-            {[candidate?.email ?? item?.candidate?.email, role].filter(Boolean).join(' · ')}
+            {candidate?.email ?? item?.candidate?.email}
           </p>
           {candidateId && <LeverSection candidateId={candidateId} lever={lever} draftId={draft.id} />}
           {draft.classificationReason && (

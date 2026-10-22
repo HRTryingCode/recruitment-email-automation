@@ -8,7 +8,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/
 import { Skeleton } from '@/components/ui/skeleton';
 import type { InboxItem, InboxView } from '@/lib/api';
 import { VIEWS, formatAge } from '@/lib/inbox';
-import { LabelChip, MailboxChip, PresenceChip } from './chips';
+import { LabelChip, MailboxChip, PresenceChip, RoleChip } from './chips';
 
 /** URL key of an item: the draft id, or `candidate:<id>` for draftless rows. */
 export function itemKey(item: InboxItem): string {
@@ -80,6 +80,7 @@ function Row({
             <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{formatAge(item.ageMs)}</span>
           </span>
           <span className="flex flex-wrap items-center gap-1">
+            <RoleChip role={item.candidate?.role} />
             {item.mailbox && <MailboxChip email={item.mailbox.emailAddress} />}
             {item.draft ? (
               <LabelChip classification={item.draft.classification} confidenceLabel={item.draft.confidenceLabel} />
