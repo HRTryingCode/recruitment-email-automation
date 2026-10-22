@@ -18,16 +18,19 @@ const SRC = path.join(root, 'src');
 /** Which refactor batch owns each file (paths relative to src/). */
 export const AREAS = {
   R1: 'Shell — App, main, pages (Login, NotFound, route pages, settings), components/shell + settings, ThemeToggle, MailboxFilter, ProtectedRoute, lib, hooks',
-  R2: 'Dashboard — Dashboard, UnmonitoredSenders',
+  R2: 'Inbox — InboxPage, components/inbox/*, inbox hooks, DraftCcSelect, lib/inbox',
   R3: 'Candidates — CandidateTable, LookupBar, LookupIntegrations, LeverBadge, AddToLever*, JobCombobox, Gem*',
-  R4: 'Drafts — EmailDrafts, DraftReviewPane, DraftCcSelect, useDraftKeyboardShortcuts',
+  R4: 'Today — Dashboard, UnmonitoredSenders',
 };
 
 const AREA_BY_FILE = [
-  [/^components\/(Dashboard|UnmonitoredSenders)\.tsx$/, 'R2'],
+  [/^pages\/InboxPage\.tsx$/, 'R2'],
+  [/^components\/inbox\//, 'R2'],
+  [/^hooks\/(useInbox\w*|useDraftEditor|useDraftPresence)\.ts$/, 'R2'],
+  [/^components\/DraftCcSelect\.tsx$/, 'R2'],
+  [/^lib\/inbox\.ts$/, 'R2'],
+  [/^components\/(Dashboard|UnmonitoredSenders)\.tsx$/, 'R4'],
   [/^components\/(CandidateTable|LookupBar|LookupIntegrations|LeverBadge|AddToLeverButton|AddToLeverDialog|GemConnect|GemReturnToast|JobCombobox)\.tsx$/, 'R3'],
-  [/^components\/(EmailDrafts|DraftReviewPane|DraftCcSelect)\.tsx$/, 'R4'],
-  [/^hooks\/useDraftKeyboardShortcuts\.ts$/, 'R4'],
   // Everything else (pages, App, main, shell components, lib, other hooks,
   // and any new file nobody claimed yet) belongs to the shell batch.
   [/./, 'R1'],

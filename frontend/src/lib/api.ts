@@ -19,7 +19,7 @@ api.interceptors.request.use((config) => {
 // On 401, clear auth state and bounce to /login — but skip /auth/* routes
 // because login/signup pages display their own error messages. The current
 // page rides along as ?next= so the recruiter lands back where they were;
-// unsaved draft edits survive in sessionStorage (DraftReviewPane).
+// unsaved draft edits survive in sessionStorage (useDraftEditor).
 export function handleAuthError(error: unknown): Promise<never> {
   const err = error as { response?: { status?: number }; config?: { url?: string } } | null;
   const status = err?.response?.status;
@@ -374,7 +374,7 @@ export interface CcChange {
 
 export async function updateDraft(
   id: string,
-  data: { bodyText?: string; bodyHtml?: string | null; subject?: string; ccEmail?: string | null }
+  data: { bodyText?: string; bodyHtml?: string | null; subject?: string; ccEmail?: string | null; override?: boolean }
 ): Promise<SingleResponse<EmailDraft> & { ccChange?: CcChange }> {
   const res = await api.patch(`/drafts/${id}`, data);
   return res.data as SingleResponse<EmailDraft> & { ccChange?: CcChange };
@@ -602,8 +602,13 @@ export async function deleteSavedView(id: string): Promise<{ success: boolean }>
   return res.data as { success: boolean };
 }
 
-export async function dictateDraft(id: string, notes: string): Promise<SingleResponse<EmailDraft>> {
-  const res = await api.post(`/drafts/${id}/dictate`, { notes });
+/** Rewrite the current body following `notes` (also the inbox's "Regenerate with instruction"). */
+export async function dictateDraft(
+  id: string,
+  notes: string,
+  opts: { override?: boolean } = {}
+): Promise<SingleResponse<EmailDraft>> {
+  const res = await api.post(`/drafts/${id}/dictate`, { notes, ...opts });
   return res.data as SingleResponse<EmailDraft>;
 }
 

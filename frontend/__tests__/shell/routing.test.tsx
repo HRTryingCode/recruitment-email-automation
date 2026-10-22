@@ -24,9 +24,15 @@ vi.mock('../../src/lib/toast', async (orig) => ({
 }));
 
 // The screens themselves are R2–R4's; stub them so this tests the shell.
-vi.mock('../../src/components/EmailDrafts', () => ({
-  default: ({ mailboxId }: { mailboxId?: string }) => <div data-testid="screen">inbox:{mailboxId ?? 'all'}</div>,
-}));
+vi.mock('../../src/pages/InboxPage', async () => {
+  const { useMailboxFilter } = await import('../../src/lib/urlState');
+  return {
+    default: () => {
+      const [mailboxId] = useMailboxFilter();
+      return <div data-testid="screen">inbox:{mailboxId ?? 'all'}</div>;
+    },
+  };
+});
 vi.mock('../../src/components/CandidateTable', () => ({
   default: ({ mailboxId }: { mailboxId?: string }) => <div data-testid="screen">candidates:{mailboxId ?? 'all'}</div>,
 }));
