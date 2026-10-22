@@ -40,12 +40,6 @@ const SKIP_EVENTS: Record<string, SkipReason> = {
  */
 export type LookupIntegrations = Record<string, never>;
 
-function candidateField<T>(c: Record<string, unknown>, key: string): T | null {
-  // lastInboundAt / lastOutboundAt / firstMailboxId arrive with B7 (#68);
-  // read them defensively so this route works before and after that schema.
-  return (c[key] as T | undefined) ?? null;
-}
-
 // GET /api/lookup?email=<email>
 // "Do we know this person?" — Candidate row, message/draft metadata, recent
 // skip reasons and a verdict. Metadata only: no message or draft bodies.
@@ -89,11 +83,10 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     ]);
 
     const messages = summarizeMessages(rows as LookupMessageRow[], email);
-    const cand = candidate as (typeof candidate & Record<string, unknown>) | null;
-    const firstMailboxId = cand ? candidateField<string>(cand, 'firstMailboxId') : null;
+    const firstMailboxId = candidate?.firstMailboxId ?? null;
 
     const threadIds = [
-      ...new Set([...(cand?.threads.map((t) => t.id) ?? []), ...messages.threadIds]),
+      ...new Set([...(candidate?.threads.map((t) => t.id) ?? []), ...messages.threadIds]),
     ].slice(0, MAX_THREADS);
     const mailboxIds = [...new Set([...messages.mailboxIds, ...(firstMailboxId ? [firstMailboxId] : [])])];
     const skipIds = messages.inboundExternalIds.slice(0, MAX_SKIP_IDS);
@@ -148,12 +141,12 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     for (const d of drafts) byStatus[d.status] = (byStatus[d.status] ?? 0) + 1;
 
     const { verdict, summary } = computeVerdict({
-      candidate: cand
+      candidate: candidate
         ? {
-            name: cand.name,
-            status: cand.status,
-            role: cand.role,
-            mailboxEmail: cand.mailbox?.emailAddress ?? null,
+            name: candidate.name,
+            status: candidate.status,
+            role: candidate.role,
+            mailboxEmail: candidate.mailbox?.emailAddress ?? null,
           }
         : null,
       messages,
@@ -169,21 +162,21 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
         email,
         verdict,
         summary,
-        candidate: cand
+        candidate: candidate
           ? {
-              id: cand.id,
-              name: cand.name,
-              email: cand.email,
-              status: cand.status,
-              role: cand.role,
-              company: cand.company,
-              title: cand.title,
-              mailbox: cand.mailbox ?? null,
+              id: candidate.id,
+              name: candidate.name,
+              email: candidate.email,
+              status: candidate.status,
+              role: candidate.role,
+              company: candidate.company,
+              title: candidate.title,
+              mailbox: candidate.mailbox ?? null,
               firstMailbox: firstMailboxId ? (mailboxById.get(firstMailboxId) ?? null) : null,
-              repliedAt: cand.repliedAt,
-              lastInboundAt: candidateField<Date>(cand, 'lastInboundAt'),
-              lastOutboundAt: candidateField<Date>(cand, 'lastOutboundAt'),
-              createdAt: cand.createdAt,
+              repliedAt: candidate.repliedAt,
+              lastInboundAt: candidate.lastInboundAt,
+              lastOutboundAt: candidate.lastOutboundAt,
+              createdAt: candidate.createdAt,
             }
           : null,
         messages: {
