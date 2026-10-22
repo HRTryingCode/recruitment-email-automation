@@ -12,11 +12,10 @@ import { focusEditor } from '@/components/inbox/DraftEditor';
 import InboxList, { itemKey } from '@/components/inbox/InboxList';
 import InboxListControls from '@/components/inbox/InboxListControls';
 import InboxRail from '@/components/inbox/InboxRail';
-import ReplyPane, { isSendable } from '@/components/inbox/ReplyPane';
+import OpenReply from '@/components/inbox/OpenReply';
+import { isSendable } from '@/components/inbox/ReplyPane';
 import ShortcutHelpDialog from '@/components/inbox/ShortcutHelpDialog';
 import SnoozeMenu from '@/components/inbox/SnoozeMenu';
-import { useDraftEditor } from '@/hooks/useDraftEditor';
-import { useDraftPresence } from '@/hooks/useDraftPresence';
 import { useInboxActions } from '@/hooks/useInboxActions';
 import { useInboxList } from '@/hooks/useInboxList';
 import { useLiveAnnouncer } from '@/hooks/useLiveAnnouncer';
@@ -117,8 +116,8 @@ export default function InboxPage() {
     enabled: !!draftId,
   });
   const draft = draftQ.data?.data;
-  const editor = useDraftEditor(draft);
-  const presence = useDraftPresence(draftId, editor.focused || editor.dirty ? 'editing' : 'viewing');
+  // Editor state lives in OpenReply; the page only needs "has unsaved edits" for ⌘Z.
+  const editorDirty = useRef(false);
   const alerts = useNewReplyAlerts(counts, `${mailboxId ?? ''}|${roles.join('\n')}`);
   // A send that fails lands in Needs review; Open goes straight there.
   const openFailed = useCallback((id: string) => setPlace('needs_review', id), [setPlace]);
@@ -218,15 +217,6 @@ export default function InboxPage() {
   const name = draft?.thread?.candidate?.name ?? current?.candidate?.name ?? 'candidate';
   const sendable = isSendable(draft) && draft?.id === draftId;
 
-  const doSend = () => {
-    if (!draft || !sendable || actions.sending) return;
-    actions.send(draft, editor.body, name, () => {
-      editor.reset(editor.body);
-      // Leave the editor so ⌘Z (undo send) and the list keys work right away.
-      if (isTyping(document.activeElement)) document.activeElement.blur();
-    });
-  };
-
   const go = (key: string) => (itemId ? openItem(key) : setCursor(key));
   const move = (delta: number) => {
     if (keys.length === 0) return;
@@ -263,10 +253,6 @@ export default function InboxPage() {
     open: () => {
       if (!itemId && cursor) openItem(cursor);
     },
-    edit: () => {
-      if (sendable && draft) focusEditor(draft.id);
-    },
-    send: doSend,
     undo: actions.undoLast,
     dismiss: () => {
       if (sendable) setDismissOpen(true);
@@ -276,7 +262,7 @@ export default function InboxPage() {
     },
     close,
     help: () => setHelpOpen(true),
-  }, true, (id) => id === 'undo' && actions.canUndoLast() && !editor.dirty);
+  }, true, (id) => id === 'undo' && actions.canUndoLast() && !editorDirty.current);
 
   const menus =
     draft && itemId ? (
@@ -396,34 +382,22 @@ export default function InboxPage() {
               </div>
             )}
             <div className="min-h-0 flex-1">
-              <ReplyPane
+              <OpenReply
+                draftId={draftId!}
                 item={current}
                 draft={draft?.id === draftId ? draft : undefined}
                 loading={draftQ.isLoading}
                 error={draftQ.isError}
                 onRetry={() => void draftQ.refetch()}
-                editor={editor}
-                presence={presence}
-                lock={actions.lock}
-                onCancelLock={actions.clearLock}
+                actions={actions}
+                name={name}
+                sendable={sendable}
+                menus={menus}
                 onClose={() => {
                   setCursor(itemId);
                   openItem(undefined);
                 }}
-                onSend={doSend}
-                sending={actions.sending}
-                onUndo={() => draft && void actions.undo(draft.id)}
-                onUnsnooze={() => draft && void actions.unsnooze(draft.id)}
-                onRewrite={(instruction) => draft && actions.rewrite(draft, editor.body, editor.dirty, instruction, editor.reset)}
-                onRegenerate={() => draft && actions.regenerate(draft, editor.body, editor.dirty, editor.reset)}
-                rewriting={actions.rewriting}
-                onUndoRewrite={
-                  draft && actions.rewriteUndo?.draftId === draft.id && editor.body === actions.rewriteUndo.rewritten
-                    ? () => actions.undoRewrite(draft, actions.rewriteUndo!, editor.reset)
-                    : undefined
-                }
-                onChangeCc={(cc) => draft && actions.changeCc(draft, cc)}
-                menus={menus}
+                dirtyRef={editorDirty}
               />
             </div>
           </div>
