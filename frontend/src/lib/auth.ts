@@ -3,6 +3,8 @@ export interface User {
   email: string;
   name?: string;
   avatarUrl?: string | null;
+  /** 'admin' | 'recruiter' (from /api/auth). */
+  role?: string;
 }
 
 const TOKEN_KEY = 'auth_token';

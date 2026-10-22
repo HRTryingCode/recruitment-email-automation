@@ -20,6 +20,8 @@ export const VIEW_PARAMS = [
   'view',
   'draftId',
   'candidateId',
+  'reply',
+  'candidate',
 ] as const;
 
 /** Href for another view: global params carried over, view params dropped. */
