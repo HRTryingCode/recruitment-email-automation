@@ -54,6 +54,8 @@ const NULLABLE_SORT_COLUMNS = new Set<string>(['company', 'role', 'lastInboundAt
 const candidateListFilterSchema = z.object({
   status: z.enum(CANDIDATE_STATUSES).optional(),
   replyStatus: z.enum(REPLY_STATUSES).optional(),
+  // F2: IN = any Lever opportunity (active, archived or hired); NOT_IN = checked, none found.
+  lever: z.enum(['IN', 'NOT_IN']).optional(),
   sort: z.enum(SORT_COLUMNS).optional(),
   dir: z.enum(['asc', 'desc']).optional(),
   // Cuid shape — 20–30 lowercase alphanumerics. Prisma's default id() uses
@@ -184,6 +186,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const filterParsed = candidateListFilterSchema.safeParse({
       status: qs(req.query.status),
       replyStatus: qs(req.query.replyStatus),
+      lever: qs(req.query.lever),
       sort: qs(req.query.sort),
       dir: qs(req.query.dir),
       mailboxId: qs(req.query.mailboxId),
@@ -191,7 +194,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     if (!filterParsed.success) {
       return next(createError(filterParsed.error.errors[0]?.message ?? 'Invalid filter', 400));
     }
-    const { status, replyStatus, sort, dir, mailboxId } = filterParsed.data;
+    const { status, replyStatus, lever, sort, dir, mailboxId } = filterParsed.data;
     const paged = paginationSchema.safeParse({
       page: qs(req.query.page),
       limit: qs(req.query.limit),
@@ -222,6 +225,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       where.status = { not: 'IGNORED' };
     }
     if (mailboxId) where.mailboxId = mailboxId;
+    if (lever) where.leverState = lever === 'IN' ? { in: ['ACTIVE', 'ARCHIVED', 'HIRED'] } : 'NOT_FOUND';
     if (replyStatus && !search) {
       where.AND = [replyStatusWhere(replyStatus)];
       // Matches the dashboard's "awaiting reply" pill: active, role detected.

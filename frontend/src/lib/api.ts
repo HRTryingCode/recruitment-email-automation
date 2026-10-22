@@ -191,6 +191,7 @@ export type CandidateSortColumn =
 export async function fetchCandidates(filters?: {
   status?: string;
   replyStatus?: ReplyStatus;
+  lever?: 'IN' | 'NOT_IN';
   mailboxId?: string;
   page?: number;
   limit?: number;

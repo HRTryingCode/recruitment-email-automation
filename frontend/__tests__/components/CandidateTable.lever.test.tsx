@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import CandidateTable from '../../src/components/CandidateTable';
@@ -35,7 +36,38 @@ const CANDIDATES: Candidate[] = [
   { ...base, id: 'c3', name: 'Never Checked', email: 'q@example.com', status: 'NEUTRAL' },
 ];
 
+function renderTable() {
+  return render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <MemoryRouter>
+        <TooltipProvider>
+          <CandidateTable />
+        </TooltipProvider>
+      </MemoryRouter>
+    </QueryClientProvider>
+  );
+}
+
 describe('<CandidateTable /> Lever badge (F2)', () => {
+  it('the Lever filter refetches with lever=IN / NOT_IN', async () => {
+    vi.mocked(api.fetchCandidates).mockResolvedValue({
+      success: true,
+      data: CANDIDATES,
+      meta: { total: CANDIDATES.length, page: 1, limit: 100 },
+    });
+    renderTable();
+    await screen.findByText('Arron Gould');
+    expect(vi.mocked(api.fetchCandidates).mock.calls[0]![0]).toMatchObject({ lever: undefined });
+    await userEvent.selectOptions(screen.getByLabelText('Lever filter'), 'IN');
+    await waitFor(() =>
+      expect(vi.mocked(api.fetchCandidates)).toHaveBeenLastCalledWith(expect.objectContaining({ lever: 'IN' }))
+    );
+    await userEvent.selectOptions(screen.getByLabelText('Lever filter'), 'NOT_IN');
+    await waitFor(() =>
+      expect(vi.mocked(api.fetchCandidates)).toHaveBeenLastCalledWith(expect.objectContaining({ lever: 'NOT_IN' }))
+    );
+  });
+
   it('shows the cached Lever status in each row', async () => {
     vi.mocked(api.fetchCandidates).mockResolvedValue({
       success: true,
