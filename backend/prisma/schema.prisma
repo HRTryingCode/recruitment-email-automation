@@ -22,6 +22,7 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   ownedCandidates Candidate[]
+  gemConnection   GemConnection?
 }
 
 /// The only currently-supported `provider` value is `"GMAIL"`. Outlook/IMAP
@@ -109,6 +110,9 @@ model Candidate {
   leverCheckedAt      DateTime?
   /// Short reason code when leverState is ERROR (never a raw response).
   leverError          String?
+  /// LinkedIn profile URL, from Gem or typed in the Add to Lever dialog (F3).
+  /// The only Gem-sourced field we keep; résumés are streamed to Lever.
+  linkedinUrl         String?
 
   @@index([mailboxId])
   @@index([status])
@@ -262,4 +266,26 @@ model ExpectedSender {
   isActive         Boolean  @default(true)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+}
+
+/// Per-user Gem MCP OAuth grant (F3). Tokens live encrypted (lib/crypto) in
+/// `tokens` as JSON {access_token, refresh_token, ...}; never logged.
+/// `status`: "PENDING" (authorize started, no tokens yet) | "OK" |
+/// "NEEDS_REAUTH" (refresh failed; the user must reconnect).
+model GemConnection {
+  id                 String    @id @default(cuid())
+  userId             String    @unique
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Encrypted JSON of the OAuth tokens; null while PENDING.
+  tokens             String?
+  /// Dynamic client registration result (client_id etc.). Public client, no secret.
+  clientRegistration Json?
+  /// Encrypted PKCE verifier for an in-flight authorize; cleared on callback.
+  pendingVerifier    String?
+  expiresAt          DateTime?
+  status             String    @default("PENDING")
+  /// Sanitized error from the last failed refresh/exchange (no tokens).
+  lastError          String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 }

@@ -71,7 +71,7 @@ export class TokenBucket {
 }
 
 // Module-wide so concurrent lookups in one function instance share the budget.
-const sharedBucket = new TokenBucket(8, 8);
+export const sharedBucket = new TokenBucket(8, 8);
 
 class LeverError extends Error {
   constructor(readonly reason: string) {
