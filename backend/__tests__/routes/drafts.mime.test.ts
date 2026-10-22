@@ -86,9 +86,17 @@ function installDraftStore(initial: Record<string, unknown>) {
     row = { ...row, ...data, updatedAt: new Date() };
     return { ...row };
   });
+  // Minimal where-matcher: equality, `{ in: [...] }` and null — enough for the
+  // conditional (compare-and-set) transitions the routes use.
+  const matches = (where: Record<string, unknown>) =>
+    Object.entries(where).every(([k, v]) => {
+      if (k === 'id') return v === row.id;
+      if (v && typeof v === 'object' && 'in' in (v as object)) return (v as { in: unknown[] }).in.includes(row[k]);
+      return (row[k] ?? null) === v;
+    });
   mockPrisma.emailDraft.updateMany.mockImplementation(
     async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
-      if (where.status && where.status !== row.status) return { count: 0 };
+      if (!matches(where)) return { count: 0 };
       row = { ...row, ...data, updatedAt: new Date() };
       return { count: 1 };
     }
@@ -291,5 +299,105 @@ describe('createDraft MIME headers (M10 / M13)', () => {
     expect(rfcMime).toMatch(/^In-Reply-To: <CAB123@mail\.gmail\.com>\r$/m);
     expect(rfcMime).toMatch(/^References: <root@mail\.gmail\.com> <CAB123@mail\.gmail\.com>\r$/m);
     expect(rfcMime).not.toMatch(/^Bcc:/m);
+  });
+});
+
+describe('draft state machine (M13)', () => {
+  let app: Awaited<ReturnType<typeof loadApp>>;
+
+  beforeEach(async () => {
+    resetPrismaMock(mockPrisma);
+    draftsCreate.mockReset().mockResolvedValue({ data: { id: 'gmail-draft-1' } });
+    draftsSend.mockReset().mockResolvedValue({ data: {} });
+    draftsDelete.mockReset().mockResolvedValue({ data: {} });
+    sendAsList.mockReset().mockResolvedValue({ data: { sendAs: [] } });
+    mockPrisma.mailbox.findUnique.mockResolvedValue(mailbox);
+    mockPrisma.candidate.update.mockResolvedValue({});
+    app = await loadApp();
+  });
+
+  const base = {
+    id: 'draft-1',
+    subject: 'Re: opportunity',
+    bodyText: 'Hi',
+    bodyHtml: null,
+    inReplyToMessageId: null,
+    referencesHeader: null,
+    createdAt: new Date(),
+  };
+
+  it('discard deletes the Gmail draft of an approved draft', async () => {
+    const store = installDraftStore({ ...base, status: 'APPROVED', externalDraftId: 'gmail-draft-9' });
+    await request(app).post('/api/drafts/draft-1/discard').set('Authorization', AUTH).expect(200);
+    expect(store.get().status).toBe('DISCARDED');
+    expect(draftsDelete).toHaveBeenCalledWith({ userId: 'me', id: 'gmail-draft-9' });
+  });
+
+  it('discard still succeeds when the Gmail draft is already gone', async () => {
+    const store = installDraftStore({ ...base, status: 'APPROVED', externalDraftId: 'gmail-draft-9' });
+    draftsDelete.mockRejectedValueOnce(Object.assign(new Error('Not Found'), { code: 404 }));
+    await request(app).post('/api/drafts/draft-1/discard').set('Authorization', AUTH).expect(200);
+    expect(store.get().status).toBe('DISCARDED');
+  });
+
+  it('discard of a SENT draft returns 409', async () => {
+    installDraftStore({ ...base, status: 'SENT', externalDraftId: 'gmail-draft-9' });
+    await request(app).post('/api/drafts/draft-1/discard').set('Authorization', AUTH).expect(409);
+    expect(draftsDelete).not.toHaveBeenCalled();
+  });
+
+  it('concurrent double-approve creates one Gmail draft and returns 409 to the loser', async () => {
+    installDraftStore({ ...base, status: 'PENDING', externalDraftId: null });
+    const [a, b] = await Promise.all([
+      request(app).post('/api/drafts/draft-1/approve').set('Authorization', AUTH),
+      request(app).post('/api/drafts/draft-1/approve').set('Authorization', AUTH),
+    ]);
+    expect([a.status, b.status].sort()).toEqual([200, 409]);
+    expect(draftsCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('approve rolls back to PENDING when Gmail draft creation fails', async () => {
+    const store = installDraftStore({ ...base, status: 'PENDING', externalDraftId: null });
+    draftsCreate.mockRejectedValueOnce(new Error('quota'));
+    await request(app).post('/api/drafts/draft-1/approve').set('Authorization', AUTH).expect(502);
+    expect(store.get().status).toBe('PENDING');
+  });
+
+  it('concurrent double-send sends once and returns 409 to the loser', async () => {
+    installDraftStore({ ...base, status: 'APPROVED', externalDraftId: 'gmail-draft-1' });
+    let sent = 0;
+    draftsSend.mockImplementation(async () => {
+      sent += 1;
+      if (sent > 1) throw Object.assign(new Error('Requested entity was not found.'), { code: 404 });
+      return { data: {} };
+    });
+    const [a, b] = await Promise.all([
+      request(app).post('/api/drafts/draft-1/send').set('Authorization', AUTH),
+      request(app).post('/api/drafts/draft-1/send').set('Authorization', AUTH),
+    ]);
+    expect([a.status, b.status].sort()).toEqual([200, 409]);
+  });
+
+  it('concurrent sends of an approved draft without a Gmail draft create and send only one', async () => {
+    installDraftStore({ ...base, status: 'APPROVED', externalDraftId: null });
+    // Hold both Gmail creates until both requests are in flight, so they race
+    // on persisting externalDraftId rather than one finishing first.
+    let release!: () => void;
+    const bothCalled = new Promise<void>((r) => (release = r));
+    let n = 0;
+    draftsCreate.mockImplementation(async () => {
+      const mine = ++n;
+      if (mine === 2) release();
+      await bothCalled;
+      return { data: { id: `gmail-${mine}` } };
+    });
+    const [a, b] = await Promise.all([
+      request(app).post('/api/drafts/draft-1/send').set('Authorization', AUTH),
+      request(app).post('/api/drafts/draft-1/send').set('Authorization', AUTH),
+    ]);
+    expect([a.status, b.status].sort()).toEqual([200, 409]);
+    expect(draftsSend).toHaveBeenCalledTimes(1);
+    // The loser's duplicate Gmail draft is cleaned up.
+    expect(draftsDelete).toHaveBeenCalledTimes(1);
   });
 });

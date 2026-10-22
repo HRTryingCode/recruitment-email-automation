@@ -108,3 +108,24 @@ export function fenceUntrusted(text: string, tag = 'untrusted_email'): string {
   const defanged = text.replace(new RegExp(`<\\s*/?\\s*${tag}\\s*>`, 'gi'), '[removed tag]');
   return `<${tag}>\n${defanged}\n</${tag}>`;
 }
+
+/**
+ * In-Reply-To / References for a reply to a stored EmailMessage, from its
+ * persisted headers JSON ({ messageId, references }). Returns nulls when the
+ * message has no RFC Message-ID — never the Gmail API id (M13).
+ */
+export function threadingHeadersFor(headersJson: string | null | undefined): {
+  inReplyToMessageId: string | null;
+  referencesHeader: string | null;
+} {
+  let parsed: { messageId?: unknown; references?: unknown } = {};
+  try {
+    parsed = JSON.parse(headersJson || '{}') as typeof parsed;
+  } catch {
+    parsed = {};
+  }
+  const messageId = typeof parsed.messageId === 'string' ? parsed.messageId.trim() : '';
+  if (!isRfcMessageId(messageId)) return { inReplyToMessageId: null, referencesHeader: null };
+  const prior = sanitizeReferences(typeof parsed.references === 'string' ? parsed.references : '');
+  return { inReplyToMessageId: messageId, referencesHeader: prior ? `${prior} ${messageId}` : messageId };
+}

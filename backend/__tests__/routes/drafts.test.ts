@@ -164,11 +164,7 @@ describe('/api/drafts', () => {
     it('creates a Gmail draft and marks the row APPROVED for a PENDING Gmail draft', async () => {
       mockPrisma.emailDraft.findUnique.mockResolvedValueOnce(pendingDraft());
       createDraft.mockResolvedValueOnce('ext-draft-1');
-      mockPrisma.emailDraft.update.mockResolvedValueOnce({
-        id: 'draft-1',
-        status: 'APPROVED',
-        externalDraftId: 'ext-draft-1',
-      });
+      mockPrisma.emailDraft.updateMany.mockResolvedValue({ count: 1 });
 
       const res = await request(app)
         .post('/api/drafts/draft-1/approve')
@@ -185,9 +181,14 @@ describe('/api/drafts', () => {
           toAddress: 'a@example.com',
         })
       );
-      expect(mockPrisma.emailDraft.update).toHaveBeenCalledWith({
-        where: { id: 'draft-1' },
-        data: { status: 'APPROVED', externalDraftId: 'ext-draft-1' },
+      // Claim first (compare-and-set), then attach the Gmail draft id.
+      expect(mockPrisma.emailDraft.updateMany).toHaveBeenNthCalledWith(1, {
+        where: { id: 'draft-1', status: 'PENDING' },
+        data: { status: 'APPROVED' },
+      });
+      expect(mockPrisma.emailDraft.updateMany).toHaveBeenNthCalledWith(2, {
+        where: { id: 'draft-1', externalDraftId: null },
+        data: { externalDraftId: 'ext-draft-1' },
       });
       expect(loggedDetails('DRAFT_APPROVED')).toMatchObject({
         draftId: 'draft-1',
@@ -195,7 +196,7 @@ describe('/api/drafts', () => {
       });
     });
 
-    it('returns 400 when the draft is not PENDING', async () => {
+    it('returns 409 when the draft is not PENDING', async () => {
       mockPrisma.emailDraft.findUnique.mockResolvedValueOnce(
         pendingDraft({ status: 'SENT' })
       );
@@ -204,9 +205,9 @@ describe('/api/drafts', () => {
         .post('/api/drafts/draft-1/approve')
         .set('Authorization', AUTH);
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(409);
       expect(createDraft).not.toHaveBeenCalled();
-      expect(mockPrisma.emailDraft.update).not.toHaveBeenCalled();
+      expect(mockPrisma.emailDraft.updateMany).not.toHaveBeenCalled();
     });
   });
 
@@ -216,18 +217,15 @@ describe('/api/drafts', () => {
         id: 'draft-1',
         status: 'PENDING',
       });
-      mockPrisma.emailDraft.update.mockResolvedValueOnce({
-        id: 'draft-1',
-        status: 'DISCARDED',
-      });
+      mockPrisma.emailDraft.updateMany.mockResolvedValueOnce({ count: 1 });
 
       const res = await request(app)
         .post('/api/drafts/draft-1/discard')
         .set('Authorization', AUTH);
 
       expect(res.status).toBe(200);
-      expect(mockPrisma.emailDraft.update).toHaveBeenCalledWith({
-        where: { id: 'draft-1' },
+      expect(mockPrisma.emailDraft.updateMany).toHaveBeenCalledWith({
+        where: { id: 'draft-1', status: { in: ['PENDING', 'APPROVED'] } },
         data: { status: 'DISCARDED' },
       });
       expect(loggedDetails('DRAFT_DISCARDED')).toMatchObject({
@@ -236,17 +234,18 @@ describe('/api/drafts', () => {
       });
     });
 
-    it('refuses to discard a SENT draft (400)', async () => {
+    it('refuses to discard a SENT draft (409)', async () => {
       mockPrisma.emailDraft.findUnique.mockResolvedValueOnce({
         id: 'draft-1',
         status: 'SENT',
       });
+      mockPrisma.emailDraft.updateMany.mockResolvedValueOnce({ count: 0 });
 
       const res = await request(app)
         .post('/api/drafts/draft-1/discard')
         .set('Authorization', AUTH);
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(409);
       expect(mockPrisma.emailDraft.update).not.toHaveBeenCalled();
     });
   });
@@ -257,11 +256,7 @@ describe('/api/drafts', () => {
         pendingDraft({ status: 'APPROVED', externalDraftId: 'ext-draft-1' })
       );
       sendDraft.mockResolvedValueOnce(undefined);
-      mockPrisma.emailDraft.update.mockResolvedValueOnce({
-        id: 'draft-1',
-        status: 'SENT',
-        sentAt: new Date('2026-05-01T00:00:00Z'),
-      });
+      mockPrisma.emailDraft.updateMany.mockResolvedValueOnce({ count: 1 });
       mockPrisma.candidate.update.mockResolvedValueOnce({
         id: 'cand-1',
         status: 'REPLIED',
@@ -275,11 +270,11 @@ describe('/api/drafts', () => {
       expect(res.body.success).toBe(true);
       // Ordering matters: Gmail send must succeed before DB transitions to SENT.
       const sendCallOrder = sendDraft.mock.invocationCallOrder[0]!;
-      const dbUpdateCallOrder = mockPrisma.emailDraft.update.mock.invocationCallOrder[0]!;
+      const dbUpdateCallOrder = mockPrisma.emailDraft.updateMany.mock.invocationCallOrder[0]!;
       expect(sendCallOrder).toBeLessThan(dbUpdateCallOrder);
       expect(sendDraft).toHaveBeenCalledWith('mb-1', 'ext-draft-1');
-      expect(mockPrisma.emailDraft.update).toHaveBeenCalledWith({
-        where: { id: 'draft-1' },
+      expect(mockPrisma.emailDraft.updateMany).toHaveBeenCalledWith({
+        where: { id: 'draft-1', status: 'APPROVED' },
         data: { status: 'SENT', sentAt: expect.any(Date) },
       });
       // Candidate transitions to REPLIED after a successful send.
@@ -307,11 +302,11 @@ describe('/api/drafts', () => {
       expect(sendDraft).toHaveBeenCalledTimes(1);
       // The row must NOT have been transitioned to SENT — Phase T's fix
       // ensures the DB stays in its pre-send status when the API call fails.
-      expect(mockPrisma.emailDraft.update).not.toHaveBeenCalled();
+      expect(mockPrisma.emailDraft.updateMany).not.toHaveBeenCalled();
       expect(mockPrisma.candidate.update).not.toHaveBeenCalled();
     });
 
-    it('rejects sending a non-APPROVED draft with 400', async () => {
+    it('rejects sending a non-APPROVED draft with 409', async () => {
       mockPrisma.emailDraft.findUnique.mockResolvedValueOnce(
         pendingDraft({ status: 'PENDING' })
       );
@@ -320,7 +315,7 @@ describe('/api/drafts', () => {
         .post('/api/drafts/draft-1/send')
         .set('Authorization', AUTH);
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(409);
       expect(sendDraft).not.toHaveBeenCalled();
       expect(mockPrisma.emailDraft.update).not.toHaveBeenCalled();
     });

@@ -5,11 +5,12 @@ import { isAdminUser } from '../middleware/requireAdmin';
 import { serializeEmailMessages } from '../lib/emailMessageSerializer';
 import {
   fetchExamplesForMailbox,
-  buildHandoffDraftContent,
+  composeHandoffDraftContent,
   fetchMailboxSignature,
   htmlSignatureToPlainText,
 } from '../services/gmail.service';
-import { classifyReply, generateDraftReply, generateHandoffDraftReply, getHandoffType } from '../services/claude.service';
+import { classifyReply, generateDraftReply } from '../services/claude.service';
+import { composeDraftHtml, threadingHeadersFor } from '../lib/draftBody';
 import { config } from '../config';
 import { logEvent } from '../services/monitoring.service';
 import { z } from 'zod';
@@ -173,14 +174,9 @@ router.post(
       const lastInbound = inboundMessages[inboundMessages.length - 1];
       if (!lastInbound) return next(createError('No inbound message found in thread', 400));
 
-      const inReplyToMessageId = lastInbound.externalMessageId || null;
-      const refsHeader = inReplyToMessageId ?? '';
-
-      let subject: string;
-      let bodyText: string;
-      let bodyHtml: string | undefined;
-      let classification: 'INTERESTED' | 'NOT_INTERESTED' | 'NEUTRAL' = 'INTERESTED';
-      let confidence = 0.8;
+      // Thread on the inbound's RFC Message-ID (not the Gmail API id) so
+      // Superhuman/Outlook/Apple Mail thread the reply correctly (M13).
+      const { inReplyToMessageId, referencesHeader: refsHeader } = threadingHeadersFor(lastInbound.headers);
 
       // Re-classify the latest inbound message so we draft appropriately.
       const classificationResult = await classifyReply(
@@ -188,64 +184,49 @@ router.post(
         candidate.name,
         { subject: thread.subject, previousMessages: thread.messages.slice(0, -1).map((m) => ({ fromAddress: m.fromAddress, bodyText: m.bodyText, receivedAt: m.receivedAt })) }
       );
-      if (classificationResult.classification === 'NOT_INTERESTED' || classificationResult.classification === 'NEUTRAL') {
-        classification = classificationResult.classification;
-        confidence = classificationResult.confidence;
-      } else {
-        classification = 'INTERESTED';
-        confidence = classificationResult.confidence;
+      // Never draft on the classifier's safe fallback: it means Claude was
+      // unreachable or returned garbage, so NEUTRAL/0 says nothing about the
+      // candidate (M5).
+      if (classificationResult.isFallback) {
+        await logEvent('DRAFT_GENERATE_CLASSIFIER_UNAVAILABLE', { threadId, via: 'manual_generate' }, 'WARN');
+        return next(createError('The classifier is unavailable right now; no draft was created. Please retry.', 502));
       }
+      const { classification, confidence } = classificationResult;
 
       const signatureHtml = await fetchMailboxSignature(mailbox.id);
+      const messages = thread.messages.map((m) => ({
+        fromAddress: m.fromAddress,
+        fromName: m.fromName,
+        bodyText: m.bodyText,
+        receivedAt: m.receivedAt,
+      }));
 
-      if (isHandoffInbox) {
-        const ccDisplayName = await prisma.mailbox
-          .findUnique({ where: { emailAddress: config.draftCcEmail.toLowerCase() }, select: { displayName: true } })
-          .then((mb) => (mb?.displayName ?? 'Sofia').split(/\s+/)[0]);
-        let content: { subject: string; bodyText: string; bodyHtml: string };
-        try {
-          const draftReply = await generateHandoffDraftReply(
-            {
-              subject: thread.subject,
-              messages: thread.messages.map((m) => ({
-                fromAddress: m.fromAddress,
-                fromName: m.fromName,
-                bodyText: m.bodyText,
-                receivedAt: m.receivedAt,
-              })),
-              candidateName: candidate.name,
-              classification,
-              signatureHtml,
-              ccName: ccDisplayName,
-              ccEmail: config.draftCcEmail.toLowerCase(),
-              handoffType: getHandoffType(mailbox.emailAddress, candidate.role ?? null),
-            },
-            { email: mailbox.emailAddress, displayName: mailbox.displayName }
-          );
-          if (signatureHtml) {
-            draftReply.bodyText = `${draftReply.bodyText}\n${htmlSignatureToPlainText(signatureHtml)}`;
-            draftReply.bodyHtml = `${draftReply.bodyHtml ?? ''}${signatureHtml}`;
-          }
-          content = draftReply;
-        } catch {
-          content = buildHandoffDraftContent(candidate.name, mailbox.displayName, mailbox.emailAddress, thread.subject, signatureHtml);
-        }
-        subject = content.subject;
-        bodyText = content.bodyText;
-        bodyHtml = content.bodyHtml;
+      let subject: string;
+      let bodyText: string;
+      let bodyHtml: string;
+      let template: string;
+
+      // Hand-off ("looping in <CC>") only makes sense for an interested
+      // candidate; anything else gets a normal reply for its classification.
+      if (isHandoffInbox && classification === 'INTERESTED') {
+        const content = await composeHandoffDraftContent({
+          mailbox,
+          candidateName: candidate.name,
+          candidateRole: candidate.role ?? null,
+          threadId,
+          threadSubject: thread.subject,
+          messages,
+          classification,
+          signatureHtml,
+          via: 'manual_generate',
+        });
+        ({ subject, bodyText, bodyHtml, template } = content);
       } else {
-        const [examples] = await Promise.all([
-          fetchExamplesForMailbox(mailbox.id, mailbox.emailAddress, classification),
-        ]);
+        const examples = await fetchExamplesForMailbox(mailbox.id, mailbox.emailAddress, classification);
         const draftReply = await generateDraftReply(
           {
             subject: thread.subject,
-            messages: thread.messages.map((m) => ({
-              fromAddress: m.fromAddress,
-              fromName: m.fromName,
-              bodyText: m.bodyText,
-              receivedAt: m.receivedAt,
-            })),
+            messages,
             candidateName: candidate.name,
             classification,
             examples,
@@ -253,13 +234,11 @@ router.post(
           },
           { email: mailbox.emailAddress, displayName: mailbox.displayName }
         );
-        if (signatureHtml) {
-          draftReply.bodyText = `${draftReply.bodyText}\n${htmlSignatureToPlainText(signatureHtml)}`;
-          draftReply.bodyHtml = `${draftReply.bodyHtml ?? ''}${signatureHtml}`;
-        }
+        const sigPlain = signatureHtml ? htmlSignatureToPlainText(signatureHtml) : null;
         subject = draftReply.subject;
-        bodyText = draftReply.bodyText;
-        bodyHtml = draftReply.bodyHtml;
+        bodyText = sigPlain ? `${draftReply.bodyText}\n${sigPlain}` : draftReply.bodyText;
+        bodyHtml = composeDraftHtml(bodyText, signatureHtml, sigPlain);
+        template = 'claude';
       }
 
       const draft = await prisma.emailDraft.create({
@@ -283,6 +262,7 @@ router.post(
           candidateId: candidate.id,
           threadId,
           via: 'manual_generate',
+          template,
           classification,
           confidence,
         },

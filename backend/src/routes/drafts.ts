@@ -2,8 +2,8 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db/client';
 import { createError } from '../middleware/error';
-import { createDraft, sendDraft as gmailSendDraft, fetchExamplesForMailbox, buildHandoffDraftContent, fetchMailboxSignature, htmlSignatureToPlainText } from '../services/gmail.service';
-import { classifyReply, generateDraftReply, generateHandoffDraftReply, getHandoffType, rewriteDraftWithNotes } from '../services/claude.service';
+import { createDraft, sendDraft as gmailSendDraft, deleteDraft as gmailDeleteDraft, fetchExamplesForMailbox, composeHandoffDraftContent, fetchMailboxSignature, htmlSignatureToPlainText } from '../services/gmail.service';
+import { classifyReply, generateDraftReply, rewriteDraftWithNotes } from '../services/claude.service';
 import { config } from '../config';
 import { logEvent } from '../services/monitoring.service';
 import { serializeEmailMessages } from '../lib/emailMessageSerializer';
@@ -34,6 +34,29 @@ async function loadSignature(mailboxId: string): Promise<{ html: string | null; 
     return html ? { html, plain: htmlSignatureToPlainText(html) } : { html: null, plain: null };
   } catch {
     return { html: null, plain: null };
+  }
+}
+
+function isGmailNotFound(err: unknown): boolean {
+  const e = err as { code?: unknown; status?: unknown; response?: { status?: unknown } } | null;
+  return e?.code === 404 || e?.status === 404 || e?.response?.status === 404;
+}
+
+/**
+ * Best-effort removal of a Gmail draft we created. A draft that's already
+ * gone (sent or deleted by hand in Gmail) is fine; anything else is logged
+ * but never blocks the DB transition the caller already made.
+ */
+async function deleteGmailDraftQuietly(draftId: string, mailboxId: string, externalDraftId: string): Promise<void> {
+  try {
+    await gmailDeleteDraft(mailboxId, externalDraftId);
+  } catch (err) {
+    if (isGmailNotFound(err)) return;
+    await logEvent(
+      'DRAFT_GMAIL_DELETE_FAILED',
+      { draftId, error: err instanceof Error ? err.message : String(err) },
+      'WARN'
+    );
   }
 }
 
@@ -408,6 +431,12 @@ async function regenerateDraftById(
     originalMessage.fromName ?? candidate.name,
     { subject: thread.subject, previousMessages }
   );
+  // Keep the existing draft rather than overwrite it with a reply written
+  // against the classifier's NEUTRAL/0 safe fallback (M5).
+  if (classificationResult.isFallback) {
+    await logEvent('DRAFT_GENERATE_CLASSIFIER_UNAVAILABLE', { draftId: id, via: 'regenerate' }, 'WARN');
+    return { ok: false, status: 502, message: 'The classifier is unavailable right now; the draft was not changed. Please retry.' };
+  }
 
   const allMessagesAsc = recentMessages
     .slice()
@@ -424,41 +453,21 @@ async function regenerateDraftById(
 
   let replySubject: string;
   let replyBodyText: string;
-  let replyBodyHtml: string | undefined;
+  let replyBodyHtml: string;
 
   if (isHandoffInbox && classificationResult.classification === 'INTERESTED') {
     const signatureHtml = await fetchMailboxSignature(mailbox.id);
-    // Awaited form (not `.then(...)`) so this code path doesn't crash when
-    // findUnique is mocked/returns undefined — a real possibility when the
-    // CC mailbox isn't yet provisioned in the DB.
-    const ccMailbox = await prisma.mailbox.findUnique({
-      where: { emailAddress: config.draftCcEmail.toLowerCase() },
-      select: { displayName: true },
+    const content = await composeHandoffDraftContent({
+      mailbox,
+      candidateName: candidate.name,
+      candidateRole: candidate.role ?? null,
+      threadId: thread.id,
+      threadSubject: thread.subject,
+      messages: allMessagesAsc,
+      classification: classificationResult.classification,
+      signatureHtml,
+      via: 'regenerate',
     });
-    const ccDisplayName = (ccMailbox?.displayName ?? 'Sofia').split(/\s+/)[0];
-    let content: { subject: string; bodyText: string; bodyHtml: string };
-    try {
-      const draftReply = await generateHandoffDraftReply(
-        {
-          subject: thread.subject,
-          messages: allMessagesAsc,
-          candidateName: candidate.name,
-          classification: classificationResult.classification,
-          signatureHtml,
-          ccName: ccDisplayName,
-          ccEmail: config.draftCcEmail.toLowerCase(),
-          handoffType: getHandoffType(mailbox.emailAddress, candidate.role ?? null),
-        },
-        { email: mailbox.emailAddress, displayName: mailbox.displayName }
-      );
-      if (signatureHtml) {
-        draftReply.bodyText = `${draftReply.bodyText}\n${htmlSignatureToPlainText(signatureHtml)}`;
-        draftReply.bodyHtml = `${draftReply.bodyHtml ?? ''}${signatureHtml}`;
-      }
-      content = draftReply;
-    } catch {
-      content = buildHandoffDraftContent(candidate.name, mailbox.displayName, mailbox.emailAddress, thread.subject, signatureHtml);
-    }
     replySubject = content.subject;
     replyBodyText = content.bodyText;
     replyBodyHtml = content.bodyHtml;
@@ -486,13 +495,10 @@ async function regenerateDraftById(
       }
     );
     // Append the real Gmail signature if we fetched one successfully.
-    if (signatureHtml) {
-      draftReply.bodyText = `${draftReply.bodyText}\n${htmlSignatureToPlainText(signatureHtml)}`;
-      draftReply.bodyHtml = `${draftReply.bodyHtml ?? ''}${signatureHtml}`;
-    }
+    const sigPlain = signatureHtml ? htmlSignatureToPlainText(signatureHtml) : null;
     replySubject = draftReply.subject;
-    replyBodyText = draftReply.bodyText;
-    replyBodyHtml = draftReply.bodyHtml;
+    replyBodyText = sigPlain ? `${draftReply.bodyText}\n${sigPlain}` : draftReply.bodyText;
+    replyBodyHtml = composeDraftHtml(replyBodyText, signatureHtml, sigPlain);
   }
 
   const updated = await prisma.emailDraft.update({
@@ -678,7 +684,17 @@ router.post('/:id/approve', async (req: Request, res: Response, next: NextFuncti
 
     if (!draftWithThread) return next(createError('Draft not found', 404));
     if (draftWithThread.status !== 'PENDING') {
-      return next(createError('Draft is not in PENDING status', 400));
+      return next(createError('Draft is not in PENDING status', 409));
+    }
+
+    // Claim PENDING → APPROVED atomically before touching Gmail, so a double
+    // click or a second tab can't create two Gmail drafts (M13).
+    const claimed = await prisma.emailDraft.updateMany({
+      where: { id, status: 'PENDING' },
+      data: { status: 'APPROVED' },
+    });
+    if (claimed.count === 0) {
+      return next(createError('Draft is no longer pending', 409));
     }
 
     const thread = draftWithThread.thread;
@@ -686,8 +702,9 @@ router.post('/:id/approve', async (req: Request, res: Response, next: NextFuncti
     const candidate = thread.candidate;
 
     if (mailbox.provider === 'GMAIL' && candidate) {
+      let externalDraftId: string;
       try {
-        const externalDraftId = await createDraft(mailbox.id, {
+        externalDraftId = await createDraft(mailbox.id, {
           threadId: thread.id,
           externalThreadId: thread.externalThreadId,
           subject: draftWithThread.subject,
@@ -697,17 +714,14 @@ router.post('/:id/approve', async (req: Request, res: Response, next: NextFuncti
           referencesHeader: draftWithThread.referencesHeader ?? undefined,
           toAddress: candidate.email,
         });
-
-        await prisma.emailDraft.update({
-          where: { id },
-          data: { status: 'APPROVED', externalDraftId },
-        });
       } catch (gmailErr) {
-        // Fail loudly. Previous behavior was to flip the row to APPROVED
-        // anyway, but then /send would have no externalDraftId and would
-        // either re-create the draft (wasteful) or 500. Surfacing the
-        // error to the caller lets them retry while the row stays
-        // PENDING and stays in the review queue.
+        // Fail loudly and hand the draft back to the review queue so the
+        // recruiter can retry; /send without an externalDraftId would
+        // otherwise have to re-create it.
+        await prisma.emailDraft.updateMany({
+          where: { id, status: 'APPROVED', externalDraftId: null },
+          data: { status: 'PENDING' },
+        });
         const message =
           gmailErr instanceof Error ? gmailErr.message : String(gmailErr);
         await logEvent(
@@ -722,11 +736,15 @@ router.post('/:id/approve', async (req: Request, res: Response, next: NextFuncti
           )
         );
       }
-    } else {
-      await prisma.emailDraft.update({
-        where: { id },
-        data: { status: 'APPROVED' },
+
+      const stored = await prisma.emailDraft.updateMany({
+        where: { id, externalDraftId: null },
+        data: { externalDraftId },
       });
+      if (stored.count === 0) {
+        // A concurrent /send already attached its own Gmail draft.
+        await deleteGmailDraftQuietly(id, mailbox.id, externalDraftId);
+      }
     }
 
     await logEvent('DRAFT_APPROVED', { draftId: id, actorUserId: req.userId }, 'INFO');
@@ -740,16 +758,26 @@ router.post('/:id/approve', async (req: Request, res: Response, next: NextFuncti
 router.post('/:id/discard', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = String(req.params.id);
-    const draft = await prisma.emailDraft.findUnique({ where: { id } });
-    if (!draft) return next(createError('Draft not found', 404));
-    if (draft.status === 'SENT') {
-      return next(createError('Cannot discard a sent draft', 400));
-    }
-
-    await prisma.emailDraft.update({
+    const draft = await prisma.emailDraft.findUnique({
       where: { id },
+      include: { thread: { select: { mailboxId: true } } },
+    });
+    if (!draft) return next(createError('Draft not found', 404));
+
+    const discarded = await prisma.emailDraft.updateMany({
+      where: { id, status: { in: ['PENDING', 'APPROVED'] } },
       data: { status: 'DISCARDED' },
     });
+    if (discarded.count === 0) {
+      return next(createError(`Cannot discard a ${String(draft.status).toLowerCase()} draft`, 409));
+    }
+
+    // Approved drafts already exist in the recruiter's Gmail Drafts folder;
+    // remove it so a discarded reply can't be sent from Gmail by mistake (M13).
+    const mailboxId = draft.thread?.mailboxId;
+    if (draft.externalDraftId && mailboxId) {
+      await deleteGmailDraftQuietly(id, mailboxId, draft.externalDraftId);
+    }
 
     await logEvent('DRAFT_DISCARDED', { draftId: id, actorUserId: req.userId }, 'INFO');
     res.json({ success: true, message: 'Draft discarded' });
@@ -783,7 +811,7 @@ router.post('/:id/send', async (req: Request, res: Response, next: NextFunction)
 
     if (!draftWithThread) return next(createError('Draft not found', 404));
     if (draftWithThread.status !== 'APPROVED') {
-      return next(createError('Draft must be approved before sending', 400));
+      return next(createError('Draft must be approved before sending', 409));
     }
 
     const thread = draftWithThread.thread;
@@ -799,7 +827,7 @@ router.post('/:id/send', async (req: Request, res: Response, next: NextFunction)
             createError('Cannot send: thread has no candidate to address', 400)
           );
         }
-        externalDraftId = await createDraft(mailbox.id, {
+        const createdId = await createDraft(mailbox.id, {
           threadId: thread.id,
           externalThreadId: thread.externalThreadId,
           subject: draftWithThread.subject,
@@ -809,23 +837,40 @@ router.post('/:id/send', async (req: Request, res: Response, next: NextFunction)
           referencesHeader: draftWithThread.referencesHeader ?? undefined,
           toAddress: candidate.email,
         });
-        // Persist the externalDraftId immediately so a subsequent send-retry
-        // doesn't create a duplicate Gmail draft.
-        await prisma.emailDraft.update({
-          where: { id },
-          data: { externalDraftId },
+        // Persist the externalDraftId immediately (compare-and-set) so a
+        // concurrent or retried send can't create and send a second copy.
+        const stored = await prisma.emailDraft.updateMany({
+          where: { id, status: 'APPROVED', externalDraftId: null },
+          data: { externalDraftId: createdId },
         });
+        if (stored.count === 0) {
+          await deleteGmailDraftQuietly(id, mailbox.id, createdId);
+          return next(createError('Draft is already being sent', 409));
+        }
+        externalDraftId = createdId;
       }
 
-      await gmailSendDraft(mailbox.id, externalDraftId);
+      try {
+        await gmailSendDraft(mailbox.id, externalDraftId);
+      } catch (sendErr) {
+        // Gmail 404s a draft id that no longer exists — i.e. it was already
+        // sent (by a concurrent request or from Gmail) or deleted there.
+        if (isGmailNotFound(sendErr)) {
+          return next(createError('This draft was already sent or deleted in Gmail', 409));
+        }
+        throw sendErr;
+      }
     }
 
     // Gmail send succeeded (or this is a non-Gmail mailbox) — safe to mark
     // SENT and downstream candidate state.
-    await prisma.emailDraft.update({
-      where: { id },
+    const marked = await prisma.emailDraft.updateMany({
+      where: { id, status: 'APPROVED' },
       data: { status: 'SENT', sentAt: new Date() },
     });
+    if (marked.count === 0) {
+      return next(createError('Draft was already sent', 409));
+    }
 
     if (candidate) {
       await prisma.candidate.update({
