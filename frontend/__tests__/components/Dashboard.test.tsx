@@ -18,6 +18,8 @@ vi.mock('../../src/lib/api', () => ({
   fetchDrafts: vi.fn(),
   fetchMailboxes: vi.fn(),
   fetchSyncHealth: vi.fn(),
+  // Sender-coverage panel (B3); resolves undefined → panel stays hidden.
+  fetchSenderCoverage: vi.fn(),
   approveDraft: vi.fn(),
   addGmailMailbox: vi.fn(),
 }));

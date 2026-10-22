@@ -1,6 +1,12 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../db/client';
-import { reconcileMailbox, renewGmailWatches, sweepStuckMessages } from '../services/gmail.service';
+import {
+  reconcileMailbox,
+  renewGmailWatches,
+  sweepStuckMessages,
+  refreshSendAsAddresses,
+} from '../services/gmail.service';
+import { sendWeeklyCoverageSummary } from '../services/coverage.service';
 import { pruneSystemLog } from '../services/systemLogRetention.service';
 import { logEvent, runWatchdog } from '../services/monitoring.service';
 import { markMailboxNeedsReauth, AUTH_STATUS_NEEDS_REAUTH } from '../services/mailboxAuth.service';
@@ -307,6 +313,44 @@ router.get(
       const result = await pruneSystemLog({ enabled, deadline: Date.now() + 200_000 });
       await logEvent('SYSTEMLOG_RETENTION_RUN', result, 'INFO');
       res.status(200).json({ success: true, data: result });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// GET /api/internal/cron/coverage-summary
+// NOTE: Vercel cron jobs invoke via GET — must not be POST.
+// Weekly (audit H2): refresh each healthy mailbox's Gmail sendAs aliases,
+// then diff expected senders against monitored addresses and post the
+// summary to Slack via alert.service. See services/coverage.service.ts.
+router.get(
+  '/coverage-summary',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!isAuthorized(req)) {
+        res.status(401).json({ success: false, error: 'Unauthorized' });
+        return;
+      }
+      const mailboxes = await prisma.mailbox.findMany({
+        where: { isActive: true, authStatus: { not: AUTH_STATUS_NEEDS_REAUTH } },
+        select: { id: true },
+      });
+      // Bounded so a slow Gmail API can't eat the summary's time budget.
+      const deadline = Date.now() + 30_000;
+      let sendAsRefreshed = 0;
+      let sendAsFailed = 0;
+      for (const m of mailboxes) {
+        if (Date.now() > deadline) {
+          sendAsFailed += 1;
+          continue;
+        }
+        const aliases = await refreshSendAsAddresses(m.id);
+        if (aliases) sendAsRefreshed += 1;
+        else sendAsFailed += 1;
+      }
+      const summary = await sendWeeklyCoverageSummary();
+      res.status(200).json({ success: true, data: { sendAsRefreshed, sendAsFailed, ...summary } });
     } catch (err) {
       next(err);
     }

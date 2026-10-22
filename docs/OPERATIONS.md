@@ -97,6 +97,16 @@ external uptime monitor (Better Stack, UptimeRobot, …) at it so you still get
 paged if Vercel cron or Slack itself is broken. Cached 60s per instance.
 `GET /api/health` remains the cheap liveness probe (DB + Claude key shape only).
 
+## Sender coverage
+
+Gem sequences are often sent from executive send-aliases (e.g. `ethan@`, `p.benigeri@`). If no connected mailbox receives replies to an alias, those replies never reach the app. `services/coverage.service.ts` diffs the **expected senders** against what is monitored (every active `Mailbox.emailAddress` plus its stored Gmail `sendAsAddresses`).
+
+- **Expected senders** are an admin-maintained list (`ExpectedSender` table). Manage it in Dashboard → Sender coverage (expand) or `GET/POST/PATCH/DELETE /api/coverage/expected-senders` (admin). There is no Gem API credential on the server yet; the `ExpectedSenderSource` interface in `coverage.service.ts` is the seam for a future Gem sync.
+- **Report**: `GET /api/coverage` (any signed-in user) returns `unmonitored` senders and `quietMailboxes` (connected, 0 outbound in 30 days while sends are expected; an explicit `expectedSends30d = 0` suppresses it).
+- **sendAs aliases** are refreshed whenever a signature is fetched and by the weekly cron. Messages from an alias count as outbound; senders on `INTERNAL_DOMAINS` (default `archive.com`) are never classified or turned into Candidates.
+- **Weekly Slack summary**: `GET /api/internal/cron/coverage-summary` (Mondays 14:00 UTC) refreshes sendAs for healthy mailboxes, then posts via `alert.service` (no-op without `SLACK_ALERT_WEBHOOK_URL`) and logs `SENDER_COVERAGE_SUMMARY` (counts only).
+- **Fixing a gap**: connect the mailbox, add the alias as a Gmail send-as on a connected mailbox (it is picked up on the next refresh), or route replies to a connected mailbox. Then remove or deactivate the entry if it should no longer be expected.
+
 ## Common incidents
 
 ### Mailbox needs reconnect (`NEEDS_REAUTH` / `invalid_grant`)
@@ -274,6 +284,8 @@ generally safe.
 | `crons` | `0 */6 * * *` → `/api/internal/cron/renew-watches`; `0 * * * *` → `/api/internal/cron/reconcile`; `*/15 * * * *` → `/api/internal/cron/watchdog`. All are **GET**. Vercel sends `Authorization: Bearer <CRON_SECRET>`; our handler also accepts `x-vercel-cron-signature` equal to the secret. |
 
 ## Required Vercel env vars
+
+- `INTERNAL_DOMAINS` (optional, comma-separated, default `archive.com`): senders on these domains are colleagues and never become candidates.
 
 Set under **Project Settings → Environment Variables** (Production scope).
 
