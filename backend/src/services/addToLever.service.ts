@@ -23,7 +23,8 @@ import {
   type LeverStage,
   type LeverResumeFile,
 } from './leverWrite.service';
-import { appBaseUrl, lookupGemPerson, safeLinkedinUrl, type GemLookup, type GemLookupStatus } from './gem.service';
+import { appBaseUrl, lookupGemPerson, type GemLookup, type GemLookupStatus } from './gem.service';
+import { normalizeLinkedinUrl } from '../lib/linkedin';
 import { refreshCandidateLever } from './leverSync.service';
 import { logEvent } from './monitoring.service';
 import { safeError } from '../lib/safeError';
@@ -351,7 +352,7 @@ export async function buildPrefill(args: {
     headline: buildHeadline(person?.title ?? c?.title, person?.company ?? c?.company),
     location: person?.location ?? null,
     phone: person?.phone ?? null,
-    linkedinUrl: c?.linkedinUrl ?? person?.linkedinUrl ?? null,
+    linkedinUrl: normalizeLinkedinUrl(c?.linkedinUrl) ?? person?.linkedinUrl ?? null,
     resume: {
       available: !!person?.resume,
       source: person?.resume?.source ?? null,
@@ -387,8 +388,8 @@ export const createRequestSchema = z.object({
   headline: optionalText(300),
   location: optionalText(200),
   phone: optionalText(50),
-  linkedinUrl: optionalText(500).refine((v) => !v || safeLinkedinUrl(v) !== null, {
-    message: 'linkedinUrl must be an https linkedin.com URL',
+  linkedinUrl: optionalText(500).refine((v) => !v || normalizeLinkedinUrl(v) !== null, {
+    message: 'linkedinUrl must be a linkedin.com URL',
   }),
   postingId: z.string().trim().min(1, 'postingId is required').max(100),
   stageId: z.string().trim().min(1).max(100).nullish(),
@@ -525,7 +526,7 @@ async function doCreate(args: {
     }
   }
 
-  const linkedinUrl = req.linkedinUrl ? safeLinkedinUrl(req.linkedinUrl) : null;
+  const linkedinUrl = req.linkedinUrl ? normalizeLinkedinUrl(req.linkedinUrl) : null;
   const { id: opportunityId } = await writer.createOpportunity(
     {
       name: req.name,

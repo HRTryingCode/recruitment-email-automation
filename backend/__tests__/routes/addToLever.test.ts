@@ -219,10 +219,10 @@ describe('Add to Lever routes', () => {
 
     it('Gem down → degrades with the manual-LinkedIn message; stored linkedinUrl wins', async () => {
       gemLookup.mockResolvedValueOnce({ status: 'UNAVAILABLE', message: 'Gem unavailable — paste LinkedIn manually' });
-      mockPrisma.candidate.findUnique.mockResolvedValueOnce({ ...candidateRow, linkedinUrl: 'https://linkedin.com/in/stored' });
+      mockPrisma.candidate.findUnique.mockResolvedValueOnce({ ...candidateRow, linkedinUrl: 'linkedin.com/in/stored' });
       const res = await request(app).get(`/api/candidates/${CAND}/lever/prefill`).set(auth);
       expect(res.body.data.gem).toEqual({ status: 'UNAVAILABLE', message: 'Gem unavailable — paste LinkedIn manually' });
-      expect(res.body.data.linkedinUrl).toBe('https://linkedin.com/in/stored');
+      expect(res.body.data.linkedinUrl).toBe('https://www.linkedin.com/in/stored');
       expect(res.body.data.resume.available).toBe(false);
     });
 
@@ -375,6 +375,15 @@ describe('Add to Lever routes', () => {
       expect(Object.keys(details).sort()).toEqual(['actorUserId', 'candidateId', 'idempotencyKey', 'opportunityId', 'postingId']);
       expect(details).toMatchObject({ actorUserId: USER, candidateId: CAND, opportunityId: 'opp-new', postingId: 'post-fe' });
       expect(log[0].data.details).not.toMatch(/jane|Jane|Berlin|linkedin/);
+    });
+
+    it('a typed scheme-less LinkedIn URL is accepted and sent to Lever canonicalized', async () => {
+      const res = await request(app)
+        .post(`/api/candidates/${CAND}/lever`)
+        .set(auth)
+        .send(validBody({ linkedinUrl: 'uk.linkedin.com/in/jane?trk=x' }));
+      expect(res.status).toBe(201);
+      expect(writer.createOpportunity.mock.calls[0]![0]).toMatchObject({ links: ['https://www.linkedin.com/in/jane'] });
     });
 
     it('a failed note is reported, not fatal', async () => {

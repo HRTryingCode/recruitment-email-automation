@@ -346,6 +346,12 @@ describe('parseGemPerson (defensive)', () => {
     expect(p).toMatchObject({ name: 'A B', phone: '123', resume: null, linkedinUrl: null });
   });
 
+  it('accepts Gem\'s scheme-less linkedin_url (prod shape) and canonicalizes it', () => {
+    expect(
+      parseGemPerson({ display_name: 'A', linkedin_url: 'www.linkedin.com/in/alexander-betit-0ab8302a' })?.linkedinUrl
+    ).toBe('https://www.linkedin.com/in/alexander-betit-0ab8302a');
+  });
+
   it('rejects a non-LinkedIn linkedin_url', () => {
     expect(parseGemPerson({ display_name: 'A', linkedin_url: 'javascript:alert(1)' })?.linkedinUrl).toBeNull();
   });
