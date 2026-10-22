@@ -34,8 +34,8 @@ export default function MailboxesSettings() {
             Mailbox health
             {!isLoading && !isError && <Badge variant={summary.tone}>{summary.label}</Badge>}
           </CardTitle>
-          <CardDescription>Whether each connected Gmail account is still signed in and syncing new replies.</CardDescription>
-          <CardAction className="flex flex-wrap items-start justify-end gap-2">
+          <CardDescription className="col-start-1">Whether each connected Gmail account is still signed in and syncing new replies.</CardDescription>
+          <CardAction className="flex flex-wrap items-start justify-end gap-2 max-sm:col-start-1 max-sm:row-span-1 max-sm:row-start-3 max-sm:justify-self-start">
             <ResyncAllButton mailboxes={mailboxes} />
             <Button size="sm" onClick={() => void startGmailReconnect()}>
               <Plus data-icon="inline-start" />

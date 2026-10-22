@@ -211,7 +211,8 @@ export default function MailboxHealthTable({ data }: { data: MailboxSyncHealth[]
   return (
     <>
       <Table>
-        <TableHeader>
+        {/* Phones: each mailbox stacks (address, status, actions) instead of scrolling sideways. */}
+        <TableHeader className="max-md:sr-only">
           <TableRow>
             <TableHead>Mailbox</TableHead>
             <TableHead>Status</TableHead>
@@ -229,14 +230,16 @@ export default function MailboxHealthTable({ data }: { data: MailboxSyncHealth[]
             // One <tbody> per mailbox so its Details row opens right under it.
             <Collapsible key={row.mailboxId} asChild open={expanded} onOpenChange={(on) => setRowOpen(row.mailboxId, on)}>
               <TableBody>
-                <TableRow className={cn(expanded && 'border-b-0')}>
-                  <TableCell className="max-w-56 truncate font-mono text-sm">{row.emailAddress}</TableCell>
-                  <TableCell className="whitespace-normal">
+                <TableRow className={cn('max-md:flex max-md:flex-col', expanded && 'border-b-0')}>
+                  <TableCell className="whitespace-normal break-all font-mono text-sm md:max-w-56 md:truncate md:break-normal max-md:pb-0">
+                    {row.emailAddress}
+                  </TableCell>
+                  <TableCell className="whitespace-normal max-md:py-1">
                     <StatusCell row={row} />
                   </TableCell>
                   <TableCell>
-                    <div className="flex flex-col items-end gap-1">
-                      <div className="flex flex-wrap justify-end gap-1">
+                    <div className="flex flex-col items-start gap-1 md:items-end">
+                      <div className="flex flex-wrap gap-1 md:justify-end">
                         {state === 'reconnect' && (
                           <Button size="xs" onClick={() => void startGmailReconnect()} aria-label={`Reconnect ${row.emailAddress}`}>
                             Reconnect
