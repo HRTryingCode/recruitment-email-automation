@@ -18,7 +18,8 @@
     { "path": "/api/internal/cron/reconcile", "schedule": "0 * * * *" },
     { "path": "/api/internal/cron/watchdog", "schedule": "*/15 * * * *" },
     { "path": "/api/internal/cron/sweep-stuck-messages", "schedule": "5-59/10 * * * *" },
-    { "path": "/api/internal/cron/systemlog-retention", "schedule": "30 3 * * *" }
+    { "path": "/api/internal/cron/systemlog-retention", "schedule": "30 3 * * *" },
+    { "path": "/api/internal/cron/coverage-summary", "schedule": "0 14 * * 1" }
   ],
   "git": {
     "deploymentEnabled": {
