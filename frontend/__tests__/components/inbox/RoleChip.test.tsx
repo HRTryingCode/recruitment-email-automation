@@ -87,7 +87,7 @@ describe('InboxList role chip', () => {
     const row = screen.getByRole('listitem');
     const meta = within(row).getByTestId('role-chip').parentElement!;
     const chips = Array.from(meta.children).map((el) => el.textContent);
-    expect(chips.slice(0, 3)).toEqual(['Founding Engineer', 'paul.benigeri', 'Unsure']);
+    expect(chips.slice(0, 3)).toEqual(['Founding Engineer', 'paul.benigeri', 'Needs review']);
   });
 
   it('shows "Role unknown" on rows whose candidate has no role', () => {

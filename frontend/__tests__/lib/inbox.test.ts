@@ -5,7 +5,6 @@ import {
   formatEt,
   diffWords,
   draftedLine,
-  formatAge,
   highlightSegments,
   labelFor,
   nextItemId,
@@ -63,15 +62,6 @@ describe('formatEt', () => {
   it('formats an instant in ET and says so, whatever the browser zone', () => {
     expect(formatEt(new Date('2026-10-23T13:00:00Z'))).toBe('Fri, Oct 23, 9:00 AM ET');
     expect(formatEt(new Date('2026-11-10T14:00:00Z'))).toBe('Tue, Nov 10, 9:00 AM ET');
-  });
-});
-
-describe('formatAge', () => {
-  it('formats compact ages', () => {
-    expect(formatAge(20_000)).toBe('now');
-    expect(formatAge(5 * 60_000)).toBe('5m');
-    expect(formatAge(3 * 3600_000)).toBe('3h');
-    expect(formatAge(50 * 3600_000)).toBe('2d');
   });
 });
 

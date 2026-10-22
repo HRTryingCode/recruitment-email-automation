@@ -10,6 +10,7 @@ import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
 import DraftCcSelect from '@/components/DraftCcSelect';
+import QueryError from '@/components/shell/QueryError';
 import {
   fetchDraftCcOptions,
   type Candidate,
@@ -199,15 +200,7 @@ export default function ReplyPane(props: Props) {
   if (error || !draft) {
     return (
       <div className="p-6">
-        <Alert variant="destructive">
-          <AlertCircle />
-          <AlertTitle>Couldn't load this reply</AlertTitle>
-          <AlertDescription>
-            <Button size="sm" variant="outline" onClick={onRetry}>
-              Retry
-            </Button>
-          </AlertDescription>
-        </Alert>
+        <QueryError thing="this reply" onRetry={onRetry} />
       </div>
     );
   }

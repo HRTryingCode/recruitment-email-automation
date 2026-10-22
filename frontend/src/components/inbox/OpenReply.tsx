@@ -3,13 +3,10 @@ import { useDraftEditor } from '@/hooks/useDraftEditor';
 import { useDraftPresence } from '@/hooks/useDraftPresence';
 import type { useInboxActions } from '@/hooks/useInboxActions';
 import { useInboxShortcuts } from '@/hooks/useInboxShortcuts';
+import { isTypingTarget } from '@/lib/shortcuts';
 import type { EmailDraft, InboxItem } from '@/lib/api';
 import { focusEditor } from './DraftEditor';
 import ReplyPane from './ReplyPane';
-
-function isTyping(el: Element | null): el is HTMLElement {
-  return el instanceof HTMLElement && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
-}
 
 interface Props {
   /** The open draft's id (from the URL), so presence starts before it loads. */
@@ -50,7 +47,8 @@ export default function OpenReply({ draftId, item, draft, loading, error, onRetr
     actions.send(draft, editor.body, name, () => {
       editor.reset(editor.body);
       // Leave the editor so ⌘Z (undo send) and the list keys work right away.
-      if (isTyping(document.activeElement)) document.activeElement.blur();
+      const el = document.activeElement;
+      if (el instanceof HTMLElement && isTypingTarget(el)) el.blur();
     });
   };
 

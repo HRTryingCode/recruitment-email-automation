@@ -3,6 +3,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import type { ConfidenceLabel, DraftPresenceEntry } from '@/lib/api';
+import { replyLabel } from '@/lib/candidates';
 import { labelFor } from '@/lib/inbox';
 
 /** Interested / Unsure / Not interested — words only, semantic colour. */
@@ -14,6 +15,19 @@ export function LabelChip({
   confidenceLabel?: ConfidenceLabel | null;
 }) {
   const label = labelFor(classification, confidenceLabel);
+  return (
+    <Badge variant={label.tone} data-tone={label.tone}>
+      {label.text}
+    </Badge>
+  );
+}
+
+/**
+ * A Needs-review candidate with no draft yet: the shared status word
+ * ("Needs review", lib/candidates replyLabel), as on Candidates.
+ */
+export function NeedsReviewChip() {
+  const label = replyLabel({ status: 'NEEDS_REVIEW', lastInboundAt: null, repliedAt: null });
   return (
     <Badge variant={label.tone} data-tone={label.tone}>
       {label.text}

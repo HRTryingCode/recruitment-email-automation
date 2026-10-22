@@ -165,3 +165,16 @@ describe('one shortcuts dialog', () => {
     expect(within(help).getByText('Select / deselect')).toBeInTheDocument();
   });
 });
+
+describe('status vocabulary (U2a)', () => {
+  it('a draftless candidate reads "Needs review" in the row and the pane, never "Unsure"', async () => {
+    installTriage();
+    renderInbox('/inbox?view=needs_review&item=candidate:c5');
+    const pane = await screen.findByRole('region', { name: 'Reply to Eli Mock' });
+    expect(within(pane).getByText('Needs review')).toHaveAttribute('data-tone', 'warning');
+    expect(within(pane).queryByText('Unsure')).not.toBeInTheDocument();
+    const row = within(screen.getByRole('list', { name: 'Needs review replies' })).getByRole('button', { name: /Fay Stub/ });
+    expect(within(row).getByText('Needs review')).toBeInTheDocument();
+    expect(within(row).queryByText('Unsure')).not.toBeInTheDocument();
+  });
+});

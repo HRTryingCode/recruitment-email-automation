@@ -163,15 +163,6 @@ export function customSnooze(dateYmd: string): Date {
   return etWallTime(y, m, d, 9);
 }
 
-export function formatAge(ms: number): string {
-  const min = Math.floor(ms / 60_000);
-  if (min < 1) return 'now';
-  if (min < 60) return `${min}m`;
-  const h = Math.floor(min / 60);
-  if (h < 24) return `${h}h`;
-  return `${Math.floor(h / 24)}d`;
-}
-
 export function highlightSegments(text: string, quote: string | null | undefined): Array<{ text: string; mark: boolean }> {
   const at = quote ? text.indexOf(quote) : -1;
   if (!quote || at < 0) return [{ text, mark: false }];

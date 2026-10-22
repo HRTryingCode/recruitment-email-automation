@@ -4,6 +4,7 @@ import { MousePointerClick } from 'lucide-react';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
 import { Kbd } from '@/components/ui/kbd';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import PageHeader from '@/components/shell/PageHeader';
 import BatchSendDialog from '@/components/inbox/BatchSendDialog';
 import CandidatePane from '@/components/inbox/CandidatePane';
 import DismissMenu from '@/components/inbox/DismissMenu';
@@ -30,6 +31,7 @@ import { prefetchAddToLever } from '@/lib/leverQueries';
 import { toastWarning } from '@/lib/toast';
 import { LIVE_DRAFT_STATUSES } from '@/lib/candidates';
 import { usePublishPaletteCandidate } from '@/lib/paletteContext';
+import { isTypingTarget } from '@/lib/shortcuts';
 import { VIEWS, groupByRole, isInboxView, mergePages, nextItemId } from '@/lib/inbox';
 import { cn } from '@/lib/utils';
 
@@ -51,10 +53,6 @@ interface TriageState {
   banner: boolean;
   /** The draft has been open at least once; leaving it ends the flow. */
   seen: boolean;
-}
-
-function isTyping(el: Element | null): el is HTMLElement {
-  return el instanceof HTMLElement && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
 }
 
 /**
@@ -263,8 +261,9 @@ export default function InboxPage() {
   };
 
   const close = () => {
-    if (isTyping(document.activeElement)) {
-      document.activeElement.blur();
+    const el = document.activeElement;
+    if (el instanceof HTMLElement && isTypingTarget(el)) {
+      el.blur();
       return;
     }
     if (itemId) {
@@ -345,7 +344,7 @@ export default function InboxPage() {
 
   return (
     <div className="flex min-h-0 w-full flex-1 bg-background text-foreground">
-      <h1 className="sr-only">Inbox</h1>
+      <PageHeader heading="Inbox" srOnly />
       <aside aria-label="Inbox" className="w-52 shrink-0 overflow-y-auto border-r border-border max-xl:hidden 2xl:w-56">
         <InboxRail view={listView} counts={counts} />
       </aside>
