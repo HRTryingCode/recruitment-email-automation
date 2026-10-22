@@ -63,6 +63,8 @@ const MANIFEST: Record<string, Guard> = {
   'POST /api/candidates/:id/lever/refresh': 'auth',
   // F3 Add to Lever: create is also gated by LEVER_CREATE_ENABLED in-handler.
   'GET /api/candidates/:id/lever/prefill': 'auth',
+  // H5: Gem half of the Add to Lever prefill (cached on the candidate).
+  'GET /api/candidates/:id/lever/prefill/gem': 'auth',
   'POST /api/candidates/:id/lever': 'auth',
 
   'GET /api/emails/threads': 'auth',
@@ -100,6 +102,7 @@ const MANIFEST: Record<string, Guard> = {
   // F1 global lookup: "do we know this email?" — metadata only.
   'GET /api/lookup/': 'auth',
   'GET /api/lookup/lever-prefill': 'auth',
+  'GET /api/lookup/lever-prefill/gem': 'auth',
   'POST /api/lookup/lever': 'auth',
 
   // F3: Lever reference data + the caller's own Gem connection.

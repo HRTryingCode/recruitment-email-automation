@@ -21,7 +21,7 @@ import { vi, type Mock } from 'vitest';
 type MockedMethods<T extends string> = Record<T, Mock>;
 
 export interface MockPrisma {
-  user: MockedMethods<'findUnique' | 'findMany' | 'create' | 'update'>;
+  user: MockedMethods<'findUnique' | 'findFirst' | 'findMany' | 'create' | 'update'>;
   mailbox: MockedMethods<'findUnique' | 'findMany' | 'update' | 'updateMany' | 'upsert'>;
   candidate: MockedMethods<
     'findUnique' | 'findFirst' | 'findMany' | 'count' | 'create' | 'update' | 'updateMany' | 'upsert'
@@ -52,7 +52,7 @@ function methods<T extends string>(...names: T[]): MockedMethods<T> {
 
 export function buildPrismaMock(): MockPrisma {
   const mock: MockPrisma = {
-    user: methods('findUnique', 'findMany', 'create', 'update'),
+    user: methods('findUnique', 'findFirst', 'findMany', 'create', 'update'),
     mailbox: methods('findUnique', 'findMany', 'update', 'updateMany', 'upsert'),
     candidate: methods(
       'findUnique',

@@ -6,11 +6,13 @@ import { z } from 'zod';
 import { createError } from '../middleware/error';
 import { refreshCandidateLever } from '../services/leverSync.service';
 import {
+  buildGemPrefill,
   buildPrefill,
   createInLever,
   createRequestSchema,
   findCandidateForPrefill,
   isLeverCreateEnabled,
+  prefillServerTiming,
   toHttpError,
 } from '../services/addToLever.service';
 
@@ -31,14 +33,37 @@ router.post('/:id/lever/refresh', async (req: Request, res: Response, next: Next
   }
 });
 
-// GET /api/candidates/:id/lever/prefill — proposed Add to Lever payload.
+// GET /api/candidates/:id/lever/prefill — proposed Add to Lever payload,
+// app data only (H5: the dialog opens on this; Gem arrives separately).
 router.get('/:id/lever/prefill', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const t0 = Date.now();
+    const id = cuidSchema.safeParse(req.params.id);
+    if (!id.success) return next(createError('Invalid candidate id', 400));
+    const candidate = await findCandidateForPrefill({ id: id.data });
+    if (!candidate) return next(createError('Candidate not found', 404));
+    const lookupMs = Date.now() - t0;
+    const { prefill, timings } = await buildPrefill({ actorUserId: req.userId!, email: candidate.email, candidate });
+    const t = { ...timings, dbMs: timings.dbMs + lookupMs, totalMs: Date.now() - t0 };
+    console.info('[AddToLever] prefill timings', t);
+    res.setHeader('Server-Timing', prefillServerTiming(t));
+    res.json({ success: true, data: prefill });
+  } catch (err) {
+    const mapped = toHttpError(err);
+    if (mapped) return res.status(mapped.status).json(mapped.body);
+    next(err);
+  }
+});
+
+// GET /api/candidates/:id/lever/prefill/gem — Gem enrichment for the dialog
+// (cached on the candidate; live on a miss).
+router.get('/:id/lever/prefill/gem', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = cuidSchema.safeParse(req.params.id);
     if (!id.success) return next(createError('Invalid candidate id', 400));
     const candidate = await findCandidateForPrefill({ id: id.data });
     if (!candidate) return next(createError('Candidate not found', 404));
-    const data = await buildPrefill({ actorUserId: req.userId!, email: candidate.email, candidate });
+    const data = await buildGemPrefill({ actorUserId: req.userId!, email: candidate.email, candidate });
     res.json({ success: true, data });
   } catch (err) {
     const mapped = toHttpError(err);
@@ -61,6 +86,7 @@ router.post('/:id/lever', async (req: Request, res: Response, next: NextFunction
       actorUserId: req.userId!,
       email: candidate.email,
       candidateId: candidate.id,
+      gemPersonId: candidate.gemPersonId ?? null,
       req: body.data,
     });
     res.status(data.duplicateRequest ? 200 : 201).json({ success: true, data });

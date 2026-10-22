@@ -5,6 +5,7 @@ import { prisma } from '../db/client';
 import { classifyReply, generateDraftReply, generateHandoffDraftReply, getHandoffType, type ExampleReply, type Classification, type HandoffType, type DraftGenerationMeta } from './claude.service';
 import { logEvent } from './monitoring.service';
 import { scheduleLeverRefresh } from './leverRealtime.service';
+import { scheduleGemEnrichment } from './gemEnrichment.service';
 import { decrypt, encrypt } from '../lib/crypto';
 import { safeError, isAuthRevokedError, MailboxNeedsReauthError } from '../lib/safeError';
 import { markMailboxNeedsReauth, AUTH_STATUS_NEEDS_REAUTH, AUTH_STATUS_OK } from './mailboxAuth.service';
@@ -709,6 +710,9 @@ export async function classifyAndDraft(opts: {
   // New candidate: check Lever now (background) instead of waiting for the
   // lever-sync crons, so the badge is right within seconds (H2).
   if (!existingCandidate) scheduleLeverRefresh(candidate.id, 'created');
+  // ...and look them up in Gem, so Add to Lever opens with LinkedIn, title
+  // and location already cached (H5). Skipped when nobody has Gem connected.
+  if (!existingCandidate) scheduleGemEnrichment(candidate.id, 'created', { mailboxEmail: mailbox.emailAddress });
 
   if (role && (!existingCandidate || !existingCandidate.role)) {
     await logEvent(

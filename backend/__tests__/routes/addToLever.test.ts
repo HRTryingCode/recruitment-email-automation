@@ -11,6 +11,14 @@ vi.mock('../../src/services/leverSync.service', async () => {
   return { ...actual, refreshCandidateLever };
 });
 
+const { scheduleGemEnrichment } = vi.hoisted(() => ({ scheduleGemEnrichment: vi.fn() }));
+vi.mock('../../src/services/gemEnrichment.service', async () => {
+  const actual = await vi.importActual<typeof import('../../src/services/gemEnrichment.service')>(
+    '../../src/services/gemEnrichment.service'
+  );
+  return { ...actual, scheduleGemEnrichment };
+});
+
 vi.mock('../../src/db/client', () => {
   const prisma = buildPrismaMock();
   return { prisma, default: prisma };
@@ -45,7 +53,7 @@ const writer = {
   addNote: vi.fn(),
 };
 const reader = { configured: true, findByEmail: vi.fn() };
-const gemLookup = vi.fn<(userId: string, email: string) => Promise<GemLookup>>();
+const gemLookup = vi.fn<(userId: string, email: string, opts?: { extId?: string | null }) => Promise<GemLookup>>();
 const fetchFn = vi.fn();
 
 function status(state: LeverStatus['state'], opportunities: LeverStatus['opportunities'] = []): LeverStatus {
@@ -86,6 +94,7 @@ const GEM_FOUND: GemLookup = {
     location: 'Berlin',
     phone: '+49 30 1234',
     linkedinUrl: 'https://www.linkedin.com/in/jane',
+    id: 'g-1',
     resume: { url: 'https://s3.gem.test/r.pdf?sig=1', filename: 'Jane_LinkedIn.pdf', source: 'LinkedIn PDF' },
   },
 };
@@ -112,7 +121,7 @@ describe('Add to Lever routes', () => {
   beforeEach(async () => {
     resetPrismaMock(mockPrisma);
     __resetAddToLeverState();
-    for (const f of [...Object.values(writer), reader.findByEmail, gemLookup, fetchFn, refreshCandidateLever]) {
+    for (const f of [...Object.values(writer), reader.findByEmail, gemLookup, fetchFn, refreshCandidateLever, scheduleGemEnrichment]) {
       if (typeof f === 'function') (f as ReturnType<typeof vi.fn>).mockReset();
     }
     addToLeverDeps.writer = () => writer as never;
@@ -182,10 +191,10 @@ describe('Add to Lever routes', () => {
     });
   });
 
-  describe('GET /api/candidates/:id/lever/prefill', () => {
-    it('maps candidate + Gem + Lever into the proposed payload', async () => {
-      gemLookup.mockResolvedValueOnce(GEM_FOUND);
+  describe('GET /api/candidates/:id/lever/prefill (app data only)', () => {
+    it('maps candidate + cached Lever state into the proposed payload without calling Gem', async () => {
       reader.findByEmail.mockResolvedValueOnce(status('ACTIVE', [existingOpp('post-des')]));
+      mockPrisma.candidate.findUnique.mockResolvedValueOnce({ ...candidateRow, title: 'Staff Engineer', company: 'Acme' });
       const res = await request(app).get(`/api/candidates/${CAND}/lever/prefill`).set(auth);
       expect(res.status).toBe(200);
       const d = res.body.data;
@@ -193,64 +202,73 @@ describe('Add to Lever routes', () => {
         name: 'Jane Doe',
         email: 'jane@example.com',
         headline: 'Staff Engineer at Acme',
-        location: 'Berlin',
-        phone: '+49 30 1234',
-        linkedinUrl: 'https://www.linkedin.com/in/jane',
-        resume: { available: true, source: 'LinkedIn PDF', filename: 'Jane_LinkedIn.pdf' },
+        linkedinUrl: null,
         suggestedPostingId: 'post-fe',
         stageId: 'stage-ic',
         stageName: 'Interest Call',
         origin: 'sourced',
         sources: ['Gem outreach'],
         tags: ['paul.b'],
-        gem: { status: 'FOUND' },
         createEnabled: true,
         candidateId: CAND,
       });
+      expect(d).not.toHaveProperty('gem');
+      expect(d).not.toHaveProperty('resume');
       expect(d.existing).toHaveLength(1);
       expect(d.existing[0]).toMatchObject({ postingId: 'post-des', postingTitle: 'Product Designer' });
       expect(d.note).toContain('Sounds great!');
       expect(d.note).not.toContain('> hi');
       expect(d.note).toContain('https://app.test/?tab=candidates&q=jane%40example.com');
-      // The presigned résumé URL stays server-side.
-      expect(JSON.stringify(d)).not.toContain('s3.gem.test');
-      expect(gemLookup).toHaveBeenCalledWith(USER, 'jane@example.com');
+      expect(gemLookup).not.toHaveBeenCalled();
+      expect(res.headers['server-timing']).toMatch(/db;dur=\d+.*lever;dur=\d+.*postings;dur=\d+.*total;dur=\d+/);
     });
 
-    it('Gem down → degrades with the manual-LinkedIn message; stored linkedinUrl wins', async () => {
-      gemLookup.mockResolvedValueOnce({ status: 'UNAVAILABLE', message: 'Gem unavailable — paste LinkedIn manually' });
+    it('uses the cached lever* columns when checked < 1h ago (no live Lever call)', async () => {
+      mockPrisma.candidate.findUnique.mockResolvedValueOnce({
+        ...candidateRow,
+        leverState: 'ACTIVE',
+        leverOpportunityId: 'opp-old',
+        leverPostingTitle: 'Product Designer',
+        leverStage: 'Interest Call',
+        leverArchivedReason: null,
+        leverCheckedAt: new Date(Date.now() - 10 * 60 * 1000),
+      });
+      const res = await request(app).get(`/api/candidates/${CAND}/lever/prefill`).set(auth);
+      expect(reader.findByEmail).not.toHaveBeenCalled();
+      expect(res.body.data.existingState).toBe('ACTIVE');
+      expect(res.body.data.existing).toEqual([
+        expect.objectContaining({
+          id: 'opp-old',
+          postingId: 'post-des', // matched to the open posting by title
+          postingTitle: 'Product Designer',
+          stage: 'Interest Call',
+          archived: false,
+          leverUrl: 'https://hire.lever.co/candidates/opp-old',
+        }),
+      ]);
+    });
+
+    it('cached NOT_FOUND < 1h → no opportunities, no live call; stale or ERROR → live call', async () => {
+      mockPrisma.candidate.findUnique.mockResolvedValueOnce({ ...candidateRow, leverState: 'NOT_FOUND', leverCheckedAt: new Date() });
+      const fresh = await request(app).get(`/api/candidates/${CAND}/lever/prefill`).set(auth);
+      expect(fresh.body.data.existing).toEqual([]);
+      expect(reader.findByEmail).not.toHaveBeenCalled();
+
+      mockPrisma.candidate.findUnique.mockResolvedValueOnce({
+        ...candidateRow,
+        leverState: 'NOT_FOUND',
+        leverCheckedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+      });
+      await request(app).get(`/api/candidates/${CAND}/lever/prefill`).set(auth);
+      mockPrisma.candidate.findUnique.mockResolvedValueOnce({ ...candidateRow, leverState: 'ERROR', leverCheckedAt: new Date() });
+      await request(app).get(`/api/candidates/${CAND}/lever/prefill`).set(auth);
+      expect(reader.findByEmail).toHaveBeenCalledTimes(2);
+    });
+
+    it('stored linkedinUrl is returned canonicalized', async () => {
       mockPrisma.candidate.findUnique.mockResolvedValueOnce({ ...candidateRow, linkedinUrl: 'linkedin.com/in/stored' });
       const res = await request(app).get(`/api/candidates/${CAND}/lever/prefill`).set(auth);
-      expect(res.body.data.gem).toEqual({ status: 'UNAVAILABLE', message: 'Gem unavailable — paste LinkedIn manually' });
       expect(res.body.data.linkedinUrl).toBe('https://www.linkedin.com/in/stored');
-      expect(res.body.data.resume.available).toBe(false);
-    });
-
-    it('logs one GEM_PREFILL row per attempt with the outcome and counts only (no PII)', async () => {
-      const cases: Array<[GemLookup, string]> = [
-        [GEM_FOUND, 'found'],
-        [{ status: 'NOT_FOUND' }, 'not_found'],
-        [{ status: 'NOT_CONNECTED' }, 'not_connected'],
-        [{ status: 'NEEDS_REAUTH' }, 'needs_reauth'],
-        [{ status: 'UNAVAILABLE', message: 'Gem unavailable — paste LinkedIn manually' }, 'error'],
-      ];
-      for (const [lookup, outcome] of cases) {
-        mockPrisma.systemLog.create.mockClear();
-        gemLookup.mockResolvedValueOnce(lookup);
-        expect((await request(app).get(`/api/candidates/${CAND}/lever/prefill`).set(auth)).status).toBe(200);
-        const rows = mockPrisma.systemLog.create.mock.calls.filter((c) => c[0].data.event === 'GEM_PREFILL');
-        expect(rows).toHaveLength(1);
-        const details = JSON.parse(rows[0]![0].data.details);
-        expect(details).toMatchObject({ outcome, userId: USER });
-        expect(typeof details.durationMs).toBe('number');
-        expect(rows[0]![0].data.details).not.toMatch(/jane|linkedin\.com|Berlin|1234|s3\.gem|Acme|Staff Engineer/i);
-      }
-      const found = { linkedin: true, title: true, location: true, resume: true };
-      gemLookup.mockResolvedValueOnce(GEM_FOUND);
-      mockPrisma.systemLog.create.mockClear();
-      await request(app).get(`/api/candidates/${CAND}/lever/prefill`).set(auth);
-      const row = mockPrisma.systemLog.create.mock.calls.find((c) => c[0].data.event === 'GEM_PREFILL')!;
-      expect(JSON.parse(row[0].data.details).fields).toEqual(found);
     });
 
     it('no matching posting → suggestedPostingId null', async () => {
@@ -266,18 +284,153 @@ describe('Add to Lever routes', () => {
     });
   });
 
-  describe('GET /api/lookup/lever-prefill', () => {
-    it('works for an email the app has never seen (name from Gem)', async () => {
+  describe('GET /api/candidates/:id/lever/prefill/gem', () => {
+    const gemRow = (extra: Record<string, unknown> = {}) => ({
+      ...candidateRow,
+      gemPersonId: 'g-1',
+      gemTitle: 'Staff Engineer',
+      gemCompany: 'Acme',
+      gemLocation: 'Berlin',
+      gemResumeAvailable: true,
+      gemFetchedAt: new Date(Date.now() - 60 * 60 * 1000),
+      ...extra,
+    });
+
+    it('cache miss → live Gem lookup, mapped and persisted (no résumé URL in the response)', async () => {
+      gemLookup.mockResolvedValueOnce(GEM_FOUND);
+      const res = await request(app).get(`/api/candidates/${CAND}/lever/prefill/gem`).set(auth);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({
+        status: 'FOUND',
+        source: 'live',
+        fetchedAt: expect.any(String),
+        name: 'Jane Q. Doe',
+        headline: 'Staff Engineer at Acme',
+        location: 'Berlin',
+        phone: '+49 30 1234',
+        linkedinUrl: 'https://www.linkedin.com/in/jane',
+        resume: { available: true, source: 'LinkedIn PDF', filename: 'Jane_LinkedIn.pdf' },
+      });
+      expect(JSON.stringify(res.body)).not.toContain('s3.gem.test');
+      expect(gemLookup).toHaveBeenCalledWith(USER, 'jane@example.com', { extId: null });
+      expect(mockPrisma.candidate.update).toHaveBeenCalledWith({
+        where: { id: CAND },
+        data: expect.objectContaining({ gemPersonId: 'g-1', gemResumeAvailable: true }),
+      });
+      expect(scheduleGemEnrichment).not.toHaveBeenCalled();
+    });
+
+    it('fresh cache (< 7 days) → served from the Candidate row, no Gem call', async () => {
+      mockPrisma.candidate.findUnique.mockResolvedValueOnce(gemRow({ linkedinUrl: 'https://www.linkedin.com/in/jane' }));
+      mockPrisma.gemConnection.findUnique.mockResolvedValueOnce({ status: 'OK', tokens: 'enc' });
+      const res = await request(app).get(`/api/candidates/${CAND}/lever/prefill/gem`).set(auth);
+      expect(gemLookup).not.toHaveBeenCalled();
+      expect(scheduleGemEnrichment).not.toHaveBeenCalled();
+      expect(res.body.data).toMatchObject({
+        status: 'FOUND',
+        source: 'cache',
+        headline: 'Staff Engineer at Acme',
+        location: 'Berlin',
+        linkedinUrl: 'https://www.linkedin.com/in/jane',
+        resume: { available: true },
+      });
+    });
+
+    it('stale cache (> 7 days) → cached data now, refreshed in the background as this user', async () => {
+      mockPrisma.candidate.findUnique.mockResolvedValueOnce(gemRow({ gemFetchedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000) }));
+      mockPrisma.gemConnection.findUnique.mockResolvedValueOnce({ status: 'OK', tokens: 'enc' });
+      const res = await request(app).get(`/api/candidates/${CAND}/lever/prefill/gem`).set(auth);
+      expect(res.body.data).toMatchObject({ status: 'FOUND', source: 'cache_stale', location: 'Berlin' });
+      expect(gemLookup).not.toHaveBeenCalled();
+      expect(scheduleGemEnrichment).toHaveBeenCalledWith(CAND, 'stale', { userId: USER });
+    });
+
+    it('cache hit for a user without Gem connected → cached fields, Connect status, no résumé', async () => {
+      mockPrisma.candidate.findUnique.mockResolvedValueOnce(gemRow());
+      mockPrisma.gemConnection.findUnique.mockResolvedValueOnce(null);
+      const res = await request(app).get(`/api/candidates/${CAND}/lever/prefill/gem`).set(auth);
+      expect(res.body.data).toMatchObject({ status: 'NOT_CONNECTED', source: 'cache', location: 'Berlin', resume: { available: false } });
+    });
+
+    it('cached NOT_FOUND (< 24h) is served without a Gem call', async () => {
+      mockPrisma.candidate.findUnique.mockResolvedValueOnce(
+        gemRow({ gemPersonId: null, gemTitle: null, gemCompany: null, gemLocation: null, gemResumeAvailable: null })
+      );
+      mockPrisma.gemConnection.findUnique.mockResolvedValueOnce({ status: 'OK', tokens: 'enc' });
+      const res = await request(app).get(`/api/candidates/${CAND}/lever/prefill/gem`).set(auth);
+      expect(res.body.data).toMatchObject({ status: 'NOT_FOUND', source: 'cache', location: null });
+      expect(gemLookup).not.toHaveBeenCalled();
+    });
+
+    it('Gem down → degrades with the manual-LinkedIn message and caches nothing', async () => {
+      gemLookup.mockResolvedValueOnce({ status: 'UNAVAILABLE', message: 'Gem unavailable — paste LinkedIn manually' });
+      const res = await request(app).get(`/api/candidates/${CAND}/lever/prefill/gem`).set(auth);
+      expect(res.body.data).toMatchObject({
+        status: 'UNAVAILABLE',
+        message: 'Gem unavailable — paste LinkedIn manually',
+        resume: { available: false },
+      });
+      expect(mockPrisma.candidate.update).not.toHaveBeenCalled();
+    });
+
+    it('logs one GEM_PREFILL row per attempt with outcome, source and step timings (no PII)', async () => {
+      const cases: Array<[GemLookup, string]> = [
+        [GEM_FOUND, 'found'],
+        [{ status: 'NOT_FOUND' }, 'not_found'],
+        [{ status: 'NOT_CONNECTED' }, 'not_connected'],
+        [{ status: 'NEEDS_REAUTH' }, 'needs_reauth'],
+        [{ status: 'UNAVAILABLE', message: 'Gem unavailable — paste LinkedIn manually' }, 'error'],
+      ];
+      const timings = { authMs: 5, authRefreshMs: 0, mcpConnectMs: 300, searchMs: 400, getPersonMs: 500, totalMs: 1205, cold: true, clientReused: false };
+      for (const [lookup, outcome] of cases) {
+        mockPrisma.systemLog.create.mockClear();
+        gemLookup.mockResolvedValueOnce({ ...lookup, timings });
+        expect((await request(app).get(`/api/candidates/${CAND}/lever/prefill/gem`).set(auth)).status).toBe(200);
+        const rows = mockPrisma.systemLog.create.mock.calls.filter((c) => c[0].data.event === 'GEM_PREFILL');
+        expect(rows).toHaveLength(1);
+        const details = JSON.parse(rows[0]![0].data.details);
+        expect(details).toMatchObject({ outcome, userId: USER, source: 'live', ...timings });
+        expect(typeof details.durationMs).toBe('number');
+        expect(rows[0]![0].data.details).not.toMatch(/jane|linkedin\.com|Berlin|1234|s3\.gem|Acme|Staff Engineer/i);
+      }
+      const found = { linkedin: true, title: true, location: true, resume: true };
+      gemLookup.mockResolvedValueOnce(GEM_FOUND);
+      mockPrisma.systemLog.create.mockClear();
+      await request(app).get(`/api/candidates/${CAND}/lever/prefill/gem`).set(auth);
+      const row = mockPrisma.systemLog.create.mock.calls.find((c) => c[0].data.event === 'GEM_PREFILL')!;
+      expect(JSON.parse(row[0].data.details).fields).toEqual(found);
+    });
+
+    it('404 for an unknown candidate, 400 for a bad id', async () => {
+      mockPrisma.candidate.findUnique.mockResolvedValueOnce(null);
+      expect((await request(app).get(`/api/candidates/${CAND}/lever/prefill/gem`).set(auth)).status).toBe(404);
+      expect((await request(app).get('/api/candidates/BAD/lever/prefill/gem').set(auth)).status).toBe(400);
+    });
+  });
+
+  describe('GET /api/lookup/lever-prefill (+ /gem)', () => {
+    it('works for an email the app has never seen (app data only)', async () => {
       mockPrisma.candidate.findFirst.mockResolvedValueOnce(null);
       mockPrisma.emailMessage.findFirst.mockResolvedValueOnce(null);
-      gemLookup.mockResolvedValueOnce(GEM_FOUND);
       const res = await request(app).get('/api/lookup/lever-prefill').query({ email: 'New@Example.com' }).set(auth);
       expect(res.status).toBe(200);
-      expect(res.body.data).toMatchObject({ name: 'Jane Q. Doe', email: 'new@example.com', candidateId: null, tags: [] });
+      expect(res.body.data).toMatchObject({ name: null, email: 'new@example.com', candidateId: null, tags: [] });
+      expect(gemLookup).not.toHaveBeenCalled();
+    });
+
+    it('/gem looks an unknown email up live (name from Gem) and persists nothing', async () => {
+      mockPrisma.candidate.findFirst.mockResolvedValueOnce(null);
+      gemLookup.mockResolvedValueOnce(GEM_FOUND);
+      const res = await request(app).get('/api/lookup/lever-prefill/gem').query({ email: 'New@Example.com' }).set(auth);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({ status: 'FOUND', source: 'live', name: 'Jane Q. Doe' });
+      expect(gemLookup).toHaveBeenCalledWith(USER, 'new@example.com', { extId: null });
+      expect(mockPrisma.candidate.update).not.toHaveBeenCalled();
     });
 
     it('400 on a bad email', async () => {
       expect((await request(app).get('/api/lookup/lever-prefill').query({ email: 'nope' }).set(auth)).status).toBe(400);
+      expect((await request(app).get('/api/lookup/lever-prefill/gem').query({ email: 'nope' }).set(auth)).status).toBe(400);
     });
   });
 
@@ -451,6 +604,15 @@ describe('Add to Lever routes', () => {
         const [input] = writer.createOpportunity.mock.calls[0]!;
         expect(input.resume).toMatchObject({ filename: 'Jane_LinkedIn.pdf', contentType: 'application/pdf' });
         expect(Array.from(input.resume.data)).toEqual(Array.from(pdf));
+      });
+
+      it('reuses the cached Gem person id for the résumé lookup (skips Gem search)', async () => {
+        mockPrisma.candidate.findUnique.mockResolvedValueOnce({ ...candidateRow, gemPersonId: 'g-1' });
+        gemLookup.mockResolvedValueOnce(GEM_FOUND);
+        fetchFn.mockResolvedValueOnce(new Response(pdf, { status: 200, headers: { 'content-type': 'application/pdf' } }));
+        const res = await request(app).post(`/api/candidates/${CAND}/lever`).set(auth).send(validBody({ includeResume: true }));
+        expect(res.status).toBe(201);
+        expect(gemLookup).toHaveBeenCalledWith(USER, 'jane@example.com', { extId: 'g-1' });
       });
 
       it('a résumé download failure falls back to JSON without it', async () => {

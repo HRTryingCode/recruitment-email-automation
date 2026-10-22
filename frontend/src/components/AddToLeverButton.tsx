@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { fetchLeverMe, type CreateLeverResult, type LeverTarget } from '@/lib/leverApi';
+import { prefetchAddToLever } from '@/lib/leverQueries';
 import AddToLeverDialog from './AddToLeverDialog';
 
 interface Props {
@@ -16,10 +17,12 @@ interface Props {
 /**
  * F3 entry point next to a Lever badge. Hidden when Lever isn't configured;
  * shown but inert (with the reason as its tooltip) when the feature flag is
- * off or the recruiter has no Lever user.
+ * off or the recruiter has no Lever user. Hover/focus prefetches the
+ * dialog's data (H5) so it usually opens fully filled.
  */
 export default function AddToLeverButton({ target, inLever, onCreated, className }: Props) {
   const [open, setOpen] = useState(false);
+  const queryClient = useQueryClient();
   const { data: me, isError } = useQuery({
     queryKey: ['lever-me'],
     queryFn: fetchLeverMe,
@@ -34,6 +37,9 @@ export default function AddToLeverButton({ target, inLever, onCreated, className
       ? `Your Lever account wasn't found for ${me.appEmail ?? 'your email'}`
       : null;
   const label = inLever ? 'Add to another job' : 'Add to Lever';
+  const prefetch = () => {
+    if (!reason) prefetchAddToLever(queryClient, target);
+  };
 
   return (
     // Row clicks expand CandidateTable rows; nothing in here should.
@@ -42,6 +48,8 @@ export default function AddToLeverButton({ target, inLever, onCreated, className
         type="button"
         aria-disabled={reason ? 'true' : undefined}
         title={reason ?? undefined}
+        onMouseEnter={prefetch}
+        onFocus={prefetch}
         onClick={() => {
           if (!reason) setOpen(true);
         }}
