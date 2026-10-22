@@ -4,9 +4,12 @@ import type { InboxView } from '../lib/api';
 import { isInboxView } from '../lib/inbox';
 
 /**
- * Inbox place in the URL — /inbox?view=…&mailbox=…&item=<draftId> — so a
- * refresh or a shared link reopens the same reply. Legacy ?draftId= links
- * (old Drafts tab, Slack alerts) are rewritten to ?item=.
+ * Inbox place in the URL — /inbox?view=…&mailboxId=…&item=<draftId> — so a
+ * refresh or a shared link reopens the same reply. `mailboxId` is the
+ * shell-wide filter (R1); `mailbox` is reserved for the Gmail OAuth
+ * callback. Legacy links: ?draftId= is rewritten to ?item=; ?candidateId=
+ * is exposed for the page to resolve (it needs the list); ?status=SENT
+ * (old Drafts tab) opens Sent today.
  */
 export function useInboxUrlState() {
   const [params, setParams] = useSearchParams();
@@ -26,8 +29,9 @@ export function useInboxUrlState() {
   }, [legacyDraftId, setParams]);
 
   const rawView = params.get('view');
-  const view: InboxView = isInboxView(rawView) ? rawView : 'needs_review';
-  const mailboxId = params.get('mailbox') ?? undefined;
+  const view: InboxView = isInboxView(rawView) ? rawView : params.get('status') === 'SENT' ? 'sent_today' : 'needs_review';
+  const mailboxId = params.get('mailboxId') ?? undefined;
+  const legacyCandidateId = params.get('candidateId') ?? undefined;
   const itemId = params.get('item') ?? legacyDraftId ?? undefined;
 
   const update = useCallback(
@@ -47,9 +51,11 @@ export function useInboxUrlState() {
     [setParams]
   );
 
-  const setView = useCallback((v: InboxView) => update({ view: v, item: undefined }), [update]);
-  const setMailbox = useCallback((id?: string) => update({ mailbox: id, item: undefined }), [update]);
+  const setView = useCallback((v: InboxView) => update({ view: v, item: undefined, status: undefined }), [update]);
+  const setMailbox = useCallback((id?: string) => update({ mailboxId: id, item: undefined }), [update]);
   const setItem = useCallback((id?: string) => update({ item: id }, true), [update]);
+  /** Replace a legacy ?candidateId= with the item it resolved to (or nothing). */
+  const resolveCandidate = useCallback((key?: string) => update({ candidateId: undefined, item: key }, true), [update]);
 
-  return { view, mailboxId, itemId, setView, setMailbox, setItem };
+  return { view, mailboxId, itemId, legacyCandidateId, setView, setMailbox, setItem, resolveCandidate };
 }

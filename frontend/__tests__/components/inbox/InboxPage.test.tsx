@@ -43,7 +43,7 @@ describe('InboxPage', () => {
     renderInbox();
     await user.click(await screen.findByRole('link', { name: 'Rae — interested' }));
     expect(search().get('view')).toBe('interested');
-    expect(search().get('mailbox')).toBe('mb1');
+    expect(search().get('mailboxId')).toBe('mb1');
   });
 
   it('shows the inbox-zero empty state for an empty view', async () => {
@@ -85,7 +85,7 @@ describe('InboxPage', () => {
     await user.click(await screen.findByRole('button', { name: /Ada Example/ }));
     const pane = await screen.findByRole('region', { name: 'Reply to Ada Example' });
     expect(search().get('item')).toBe('d1');
-    expect(within(pane).getByText('ada@example.org')).toBeInTheDocument();
+    expect(within(pane).getByText('ada@example.org · Senior Engineer')).toBeInTheDocument();
     expect(within(pane).getByText('Interested')).toBeInTheDocument();
     expect(within(pane).getByText('Asks for a call next week')).toBeInTheDocument();
     expect(within(pane).getByText('love to chat').tagName).toBe('MARK');
@@ -115,6 +115,93 @@ describe('InboxPage', () => {
     expect(await screen.findByRole('region', { name: 'Reply to Ben Sample' })).toBeInTheDocument();
     expect(search().get('item')).toBe('d2');
     expect(search().get('draftId')).toBeNull();
+  });
+
+  it('legacy ?candidateId= opens that candidate\'s reply when it is in the view', async () => {
+    installInbox(ITEMS);
+    renderInbox('/inbox?view=interested&candidateId=c2');
+    expect(await screen.findByRole('region', { name: 'Reply to Ben Sample' })).toBeInTheDocument();
+    expect(search().get('item')).toBe('d2');
+    expect(search().get('candidateId')).toBeNull();
+  });
+
+  it('legacy ?candidateId= falls back to the candidate\'s newest live draft', async () => {
+    installInbox(ITEMS);
+    server.use(
+      http.get('*/api/candidates/c9', () =>
+        HttpResponse.json({
+          success: true,
+          data: {
+            id: 'c9',
+            name: 'Zed Snoozer',
+            threads: [
+              {
+                id: 't9',
+                drafts: [
+                  { id: 'old', status: 'SENT', createdAt: '2026-10-01T00:00:00Z' },
+                  { id: 'd9', status: 'PENDING', createdAt: '2026-10-20T00:00:00Z' },
+                ],
+              },
+            ],
+          },
+        })
+      ),
+      http.get('*/api/drafts/d9', async () => {
+        const { draftFor } = await import('./fixtures');
+        return HttpResponse.json({ success: true, data: draftFor(item('d9', 'snoozed')) });
+      })
+    );
+    renderInbox('/inbox?view=interested&candidateId=c9');
+    expect(await screen.findByRole('region', { name: 'Reply to Zed Snoozer' })).toBeInTheDocument();
+    expect(search().get('item')).toBe('d9');
+  });
+
+  it('shows the Lever section and one label chip in the reply header', async () => {
+    installInbox(ITEMS, {
+      d1: {
+        thread: {
+          ...(await import('./fixtures')).draftFor(item('d1', 'interested')).thread!,
+          candidate: {
+            id: 'c1', name: 'Ada Example', email: 'ada@example.org', status: 'NEUTRAL', role: 'Senior Engineer',
+            leverState: 'ACTIVE', leverOpportunityId: 'opp1', leverPostingTitle: 'Senior Engineer', leverStage: 'Phone Screen',
+            leverCheckedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+          } as never,
+        },
+      },
+    });
+    renderInbox('/inbox?view=interested&item=d1');
+    const pane = await screen.findByRole('region', { name: 'Reply to Ada Example' });
+    const header = within(pane).getByRole('banner');
+    const lever = within(header).getByRole('group', { name: 'Lever' });
+    expect(within(lever).getByText('In Lever')).toBeInTheDocument();
+    expect(within(lever).getByText('Senior Engineer · Phone Screen')).toBeInTheDocument();
+    expect(within(lever).getByText('Checked 10m ago')).toBeInTheDocument();
+    expect(within(lever).getByRole('link', { name: /Open in Lever/ })).toHaveAttribute('href', 'https://hire.lever.co/candidates/opp1');
+    expect(within(header).getByText('ada@example.org · Senior Engineer')).toBeInTheDocument();
+    // One label chip in words — no candidate-status badge ("Neutral"), no %.
+    expect(within(header).getByText('Interested')).toBeInTheDocument();
+    expect(within(header).queryByText(/neutral/i)).not.toBeInTheDocument();
+    expect(header.textContent).not.toMatch(/\d%/);
+  });
+
+  it('prefetches the Add to Lever dialog data when an item is selected', async () => {
+    installInbox(ITEMS);
+    const hits: string[] = [];
+    server.use(
+      http.get('*/api/lever/me', () =>
+        HttpResponse.json({ success: true, data: { configured: true, createEnabled: true, leverUser: { id: 'lu1', name: 'Rae' }, appEmail: 'rae@archive.com' } })
+      ),
+      http.get('*/api/candidates/:id/lever/prefill', ({ params }) => {
+        hits.push(`prefill:${String(params.id)}`);
+        return HttpResponse.json({ success: true, data: {} });
+      }),
+      http.get('*/api/candidates/:id/lever/prefill/gem', () => HttpResponse.json({ success: true, data: { status: 'NOT_CONNECTED' } })),
+      http.get('*/api/lever/postings', () => HttpResponse.json({ success: true, data: [] }))
+    );
+    const user = userEvent.setup();
+    renderInbox('/inbox?view=interested');
+    await user.click(await screen.findByRole('button', { name: /Ben Sample/ }));
+    await waitFor(() => expect(hits).toContain('prefill:c2'));
   });
 
   it('Show changes diffs the AI draft against the edited body and Revert restores it', async () => {

@@ -2,7 +2,7 @@ import { fireEvent, render } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useInboxShortcuts, SHORTCUTS, type InboxShortcut } from '../../src/hooks/useInboxShortcuts';
 
-const ids: InboxShortcut[] = ['prev', 'next', 'open', 'edit', 'send', 'undo', 'dismiss', 'snooze', 'close', 'palette', 'help'];
+const ids: InboxShortcut[] = ['prev', 'next', 'open', 'edit', 'send', 'undo', 'dismiss', 'snooze', 'close', 'help'];
 let handlers: Record<InboxShortcut, ReturnType<typeof vi.fn>>;
 
 function Harness({ enabled = true }: { enabled?: boolean }) {
@@ -39,7 +39,6 @@ describe('useInboxShortcuts', () => {
     ['Enter', { metaKey: true }, 'send'],
     ['Enter', { ctrlKey: true }, 'send'],
     ['z', { metaKey: true }, 'undo'],
-    ['k', { metaKey: true }, 'palette'],
   ] as const)('%s %o → %s', (key, mods, id) => {
     setup();
     fireEvent.keyDown(document.body, { key, ...mods });
@@ -75,6 +74,22 @@ describe('useInboxShortcuts', () => {
     setup();
     for (const key of ['a', 'x', 'r']) fireEvent.keyDown(document.body, { key });
     for (const id of ids) expect(handlers[id]).not.toHaveBeenCalled();
+  });
+
+  it('leaves ⌘K to the shell palette', () => {
+    setup();
+    const e = new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true, cancelable: true });
+    document.body.dispatchEvent(e);
+    expect(e.defaultPrevented).toBe(false);
+  });
+
+  it('yields the key after g to the shell (g s = Settings, not Snooze)', () => {
+    setup();
+    fireEvent.keyDown(document.body, { key: 'g' });
+    fireEvent.keyDown(document.body, { key: 's' });
+    expect(handlers.snooze).not.toHaveBeenCalled();
+    fireEvent.keyDown(document.body, { key: 's' });
+    expect(handlers.snooze).toHaveBeenCalledTimes(1);
   });
 
   it('documents every shortcut for the help dialog', () => {

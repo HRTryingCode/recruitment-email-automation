@@ -284,71 +284,59 @@ regenerated it.
 | Batch | Scope | Findings |
 |---|---|---:|
 | R1 | Shell — App, main, pages (Login, NotFound, route pages, settings), components/shell + settings, ThemeToggle, MailboxFilter, ProtectedRoute, lib, hooks | 0 |
-| R2 | Dashboard — Dashboard, UnmonitoredSenders | 180 |
-| R3 | Candidates — CandidateTable, LookupBar, LookupIntegrations, LeverBadge, AddToLever*, JobCombobox, Gem* | 278 |
-| R4 | Drafts — EmailDrafts, DraftReviewPane, DraftCcSelect, useDraftKeyboardShortcuts | 302 |
-| **Total** | | **760** |
+| R2 | Inbox — InboxPage, components/inbox/*, inbox hooks, DraftCcSelect, lib/inbox | 0 |
+| R3 | Candidates — CandidateTable, LookupBar, LookupIntegrations, LeverBadge, AddToLever*, JobCombobox, Gem* | 282 |
+| R4 | Today — Dashboard, UnmonitoredSenders | 129 |
+| **Total** | | **411** |
 
 ### R1 — Shell (0)
 
 _none_
 
-### R2 — Dashboard (180)
+### R2 — Inbox (0)
 
-`legacy-token` 76 · `palette-colour` 49 · `arbitrary-value` 23 · `ad-hoc-radius` 19 · `raw-button` 6 · `native-tooltip` 5 · `ad-hoc-shadow` 1 · `decorative-effect` 1
+_none_
 
-**`src/components/Dashboard.tsx`** (180)
+### R3 — Candidates (282)
 
-| Rule | Lines | Examples |
-|---|---|---|
-| `raw-button` (6) | 85, 184, 193, 209, 261, 559 | `<button` |
-| `decorative-effect` (1) | 162 | `bg-gradient-to-br` |
-| `native-tooltip` (5) | 212, 555, 578, 603, 615 | ` title={`` ` title="` |
-| `palette-colour` (49) | 70, 71, 75, 76, 80, 81, 162, 188, 213, 254, 263, 281, 282, 283 | `hover:border-amber-400/50` `group-hover:text-amber-700` `dark:group-hover:text-amber-200` `hover:border-emerald-400/50` |
-| `legacy-token` (76) | 69, 74, 79, 80, 81, 89, 115, 117, 119, 159, 162, 167, 171, 178, 196, 237, 239, 243, 246, 249, 253, 284, 331, 335, 363, 368, 371, 374, 501, 504, 554, 561, 569, 582, 602, 607, 619 | `hover:border-accent-400/50` `group-hover:text-accent-500` `dark:group-hover:text-accent-200` `bg-accent-500/12` |
-| `ad-hoc-shadow` (1) | 89 | `hover:shadow-card-hover` |
-| `ad-hoc-radius` (19) | 89, 95, 162, 171, 188, 196, 213, 239, 263, 297, 325, 335, 363, 569, 571, 582, 607, 609, 619 | `rounded-2xl` `rounded-xl` `rounded-full` `rounded-md` |
-| `arbitrary-value` (23) | 99, 108, 115, 117, 162, 167, 171, 178, 188, 213, 243, 246, 263, 297, 331, 335, 371, 374, 501, 504, 561 | `h-[18px]` `w-[18px]` `text-[34px]` `text-[13px]` |
-
-### R3 — Candidates (278)
-
-`legacy-token` 120 · `arbitrary-value` 45 · `palette-colour` 35 · `ad-hoc-radius` 24 · `raw-table` 19 · `raw-button` 13 · `input-adornment` 5 · `custom-spinner` 3 · `raw-select` 3 · `native-tooltip` 3 · `ad-hoc-shadow` 2 · `css-colour-fn` 2 · `custom-skeleton` 1 · `raw-input` 1 · `custom-combobox` 1 · `custom-disclosure` 1
+`legacy-token` 120 · `arbitrary-value` 45 · `palette-colour` 35 · `ad-hoc-radius` 24 · `raw-table` 19 · `raw-button` 13 · `custom-spinner` 5 · `input-adornment` 5 · `custom-skeleton` 3 · `raw-select` 3 · `native-tooltip` 3 · `ad-hoc-shadow` 2 · `css-colour-fn` 2 · `raw-input` 1 · `custom-combobox` 1 · `custom-disclosure` 1
 
 **`src/components/AddToLeverButton.tsx`** (7)
 
 | Rule | Lines | Examples |
 |---|---|---|
-| `raw-button` (1) | 41 | `<button` |
-| `legacy-token` (4) | 49 | `text-accent-700` `ring-accent-500/20` `hover:bg-accent-500/10` `dark:text-accent-300` |
-| `ad-hoc-radius` (1) | 49 | `rounded-md` |
-| `arbitrary-value` (1) | 49 | `text-[11.5px]` |
+| `raw-button` (1) | 47 | `<button` |
+| `legacy-token` (4) | 57 | `text-accent-700` `ring-accent-500/20` `hover:bg-accent-500/10` `dark:text-accent-300` |
+| `ad-hoc-radius` (1) | 57 | `rounded-md` |
+| `arbitrary-value` (1) | 57 | `text-[11.5px]` |
 
-**`src/components/AddToLeverDialog.tsx`** (11)
+**`src/components/AddToLeverDialog.tsx`** (15)
 
 | Rule | Lines | Examples |
 |---|---|---|
-| `custom-spinner` (3) | 103, 258, 380 | `animate-spin` |
-| `palette-colour` (4) | 229 | `bg-amber-500/10` `text-amber-800` `ring-amber-500/20` `dark:text-amber-200` |
-| `ad-hoc-radius` (2) | 229, 365 | `rounded-lg` `rounded-2xl` |
-| `arbitrary-value` (2) | 77, 229 | `max-h-[90vh]` `text-[12.5px]` |
+| `custom-spinner` (5) | 69, 117, 284, 375, 415 | `animate-spin` |
+| `custom-skeleton` (2) | 68, 374 | `animate-pulse` |
+| `palette-colour` (4) | 255 | `bg-amber-500/10` `text-amber-800` `ring-amber-500/20` `dark:text-amber-200` |
+| `ad-hoc-radius` (2) | 255, 394 | `rounded-lg` `rounded-2xl` |
+| `arbitrary-value` (2) | 90, 255 | `max-h-[90vh]` `text-[12.5px]` |
 
 **`src/components/CandidateTable.tsx`** (217)
 
 | Rule | Lines | Examples |
 |---|---|---|
-| `raw-button` (10) | 167, 237, 497, 658, 666, 778, 825, 835, 852, 895 | `<button` |
-| `raw-input` (1) | 489 | `<input` |
-| `raw-select` (3) | 454, 474, 805 | `<select` |
-| `raw-table` (19) | 231, 517, 518, 519, 530, 541, 546, 549, 551, 708, 712, 753, 759, 769, 772, 791, 798, 868, 869 | `<th` `<table` `<thead` `<tr` |
-| `input-adornment` (5) | 471, 485, 488, 502, 821 | `pointer-events-none absolute` `absolute right-2.5 top-1/2 -translate-y-1/2` |
-| `custom-skeleton` (1) | 172 | `animate-pulse` |
-| `native-tooltip` (3) | 736, 830, 855 | ` title="` |
-| `css-colour-fn` (2) | 800 | `rgb(` |
-| `palette-colour` (21) | 70, 72, 117, 175, 424, 780, 831, 898 | `bg-emerald-500/10` `text-emerald-700` `ring-emerald-500/20` `dark:text-emerald-300` |
-| `legacy-token` (96) | 73, 143, 148, 151, 154, 158, 170, 242, 423, 442, 445, 458, 471, 479, 485, 488, 494, 502, 508, 515, 519, 530, 541, 546, 599, 602, 605, 652, 662, 670, 709, 715, 717, 720, 727, 735, 754, 755, 761, 762, 766, 780, 792, 800, 810, 821, 839, 857, 871, 898 | `bg-fg-strong/[0.04]` `text-fg-muted` `ring-fg-strong/[0.06]` `text-fg-subtle` |
-| `ad-hoc-shadow` (2) | 541, 800 | `shadow-[-1px_0_0_rgb(var(--fg-strong)/0.06)]` |
-| `ad-hoc-radius` (18) | 110, 148, 170, 423, 458, 479, 494, 513, 515, 662, 670, 727, 735, 810, 831, 839, 857, 898 | `rounded-lg` `rounded-xl` `rounded` `rounded-md` |
-| `arbitrary-value` (36) | 85, 117, 143, 151, 154, 158, 170, 175, 241, 442, 445, 458, 479, 487, 494, 508, 530, 541, 602, 605, 652, 662, 670, 720, 727, 735, 754, 761, 766, 792, 810, 831, 839 | `text-[11px]` `text-[13px]` `text-[12.5px]` `text-[12px]` |
+| `raw-button` (10) | 168, 238, 498, 662, 670, 782, 829, 839, 856, 899 | `<button` |
+| `raw-input` (1) | 490 | `<input` |
+| `raw-select` (3) | 455, 475, 809 | `<select` |
+| `raw-table` (19) | 232, 518, 519, 520, 531, 542, 547, 550, 552, 712, 716, 757, 763, 773, 776, 795, 802, 872, 873 | `<th` `<table` `<thead` `<tr` |
+| `input-adornment` (5) | 472, 486, 489, 503, 825 | `pointer-events-none absolute` `absolute right-2.5 top-1/2 -translate-y-1/2` |
+| `custom-skeleton` (1) | 173 | `animate-pulse` |
+| `native-tooltip` (3) | 740, 834, 859 | ` title="` |
+| `css-colour-fn` (2) | 804 | `rgb(` |
+| `palette-colour` (21) | 71, 73, 118, 176, 425, 784, 835, 902 | `bg-emerald-500/10` `text-emerald-700` `ring-emerald-500/20` `dark:text-emerald-300` |
+| `legacy-token` (96) | 74, 144, 149, 152, 155, 159, 171, 243, 424, 443, 446, 459, 472, 480, 486, 489, 495, 503, 509, 516, 520, 531, 542, 547, 603, 606, 609, 656, 666, 674, 713, 719, 721, 724, 731, 739, 758, 759, 765, 766, 770, 784, 796, 804, 814, 825, 843, 861, 875, 902 | `bg-fg-strong/[0.04]` `text-fg-muted` `ring-fg-strong/[0.06]` `text-fg-subtle` |
+| `ad-hoc-shadow` (2) | 542, 804 | `shadow-[-1px_0_0_rgb(var(--fg-strong)/0.06)]` |
+| `ad-hoc-radius` (18) | 111, 149, 171, 424, 459, 480, 495, 514, 516, 666, 674, 731, 739, 814, 835, 843, 861, 902 | `rounded-lg` `rounded-xl` `rounded` `rounded-md` |
+| `arbitrary-value` (36) | 86, 118, 144, 152, 155, 159, 171, 176, 242, 443, 446, 459, 480, 488, 495, 509, 531, 542, 606, 609, 656, 666, 674, 724, 731, 739, 758, 765, 770, 796, 814, 835, 843 | `text-[11px]` `text-[13px]` `text-[12.5px]` `text-[12px]` |
 
 **`src/components/GemConnect.tsx`** (12)
 
@@ -386,61 +374,21 @@ _none_
 | `legacy-token` (1) | 28 | `text-fg-muted` |
 | `arbitrary-value` (1) | 24 | `text-[13px]` |
 
-### R4 — Drafts (302)
+### R4 — Today (129)
 
-`legacy-token` 138 · `arbitrary-value` 47 · `palette-colour` 37 · `ad-hoc-radius` 31 · `raw-button` 13 · `decorative-effect` 6 · `custom-spinner` 5 · `ad-hoc-shadow` 4 · `custom-combobox` 4 · `ad-hoc-z-index` 3 · `raw-dialog` 2 · `legacy-css-class` 2 · `raw-textarea` 2 · `hex-colour` 2 · `raw-kbd` 2 · `custom-overlay` 1 · `inline-style` 1 · `native-tooltip` 1 · `custom-skeleton` 1
+`legacy-token` 52 · `palette-colour` 42 · `arbitrary-value` 16 · `ad-hoc-radius` 12 · `raw-button` 3 · `native-tooltip` 3 · `ad-hoc-shadow` 1
 
-**`src/components/DraftCcSelect.tsx`** (12)
-
-| Rule | Lines | Examples |
-|---|---|---|
-| `palette-colour` (2) | 75 | `text-amber-700` `dark:text-amber-300` |
-| `legacy-token` (5) | 45, 58, 67 | `text-fg-subtle` `border-line` `bg-surface-base/60` `text-fg-default` |
-| `ad-hoc-radius` (1) | 58 | `rounded-md` |
-| `arbitrary-value` (4) | 45, 58, 67, 75 | `text-[11px]` `text-[12px]` `text-[11.5px]` |
-
-**`src/components/DraftReviewPane.tsx`** (180)
+**`src/components/Dashboard.tsx`** (129)
 
 | Rule | Lines | Examples |
 |---|---|---|
-| `raw-button` (10) | 171, 416, 462, 583, 624, 652, 665, 681, 698, 711 | `<button` |
-| `raw-textarea` (2) | 495, 558 | `<textarea` |
-| `decorative-effect` (2) | 401, 410 | `backdrop-blur-sm` `backdrop-blur-xl` |
-| `raw-dialog` (1) | 406 | `role="dialog"` |
-| `custom-overlay` (1) | 401 | `fixed inset-0` |
-| `custom-spinner` (5) | 579, 633, 659, 688, 724 | `animate-spin` |
-| `custom-skeleton` (1) | 568 | `animate-pulse` |
-| `native-tooltip` (1) | 535 | ` title="` |
-| `hex-colour` (2) | 525 | `#1a1a1a` `#0066cc` |
-| `palette-colour` (28) | 174, 401, 505, 548, 568, 576, 589, 629, 656, 668 | `bg-rose-500/10` `text-rose-700` `ring-rose-500/20` `hover:bg-rose-500/15` |
-| `legacy-token` (77) | 123, 124, 125, 131, 132, 135, 136, 141, 142, 146, 148, 152, 410, 413, 419, 436, 441, 444, 451, 458, 465, 485, 486, 498, 505, 522, 539, 540, 553, 554, 562, 567, 576, 590, 618, 656, 685, 702, 719, 720 | `border-line` `bg-surface-base/40` `border-line-soft` `bg-fg-strong/[0.015]` |
-| `legacy-css-class` (2) | 475, 476 | `className="h-24 skeleton` `className="h-40 skeleton` |
-| `ad-hoc-shadow` (1) | 410 | `shadow-2xl` |
-| `ad-hoc-radius` (20) | 123, 174, 419, 451, 465, 475, 476, 498, 522, 539, 553, 562, 568, 587, 629, 656, 668, 685, 702, 717 | `rounded-xl` `rounded-lg` `rounded-md` `rounded-full` |
-| `ad-hoc-z-index` (2) | 401, 410 | `z-40` `z-50` |
-| `arbitrary-value` (24) | 125, 129, 148, 152, 174, 410, 436, 441, 444, 451, 458, 485, 498, 540, 548, 554, 562, 567, 629, 656, 668 | `text-[10px]` `tracking-[0.14em]` `text-[11.5px]` `text-[13px]` |
-| `inline-style` (1) | 528 | `style={{` |
-
-**`src/components/EmailDrafts.tsx`** (105)
-
-| Rule | Lines | Examples |
-|---|---|---|
-| `raw-button` (3) | 98, 720, 832 | `<button` |
-| `raw-kbd` (2) | 254, 708 | `<kbd` |
-| `decorative-effect` (4) | 116, 118, 120, 835 | `bg-gradient-to-br` `backdrop-blur` |
-| `palette-colour` (7) | 114, 116, 118, 685 | `text-white` `from-emerald-500/80` `to-emerald-700/80` `from-rose-500/80` |
-| `legacy-token` (56) | 106, 108, 109, 114, 120, 130, 135, 143, 150, 153, 158, 195, 197, 200, 203, 247, 252, 254, 684, 703, 706, 708, 718, 731, 732, 739, 746, 748, 756, 835 | `border-accent-400` `bg-accent-500/[0.08]` `border-line-strong` `bg-fg-strong/[0.03]` |
-| `ad-hoc-shadow` (3) | 254, 731, 835 | `shadow-sm` `shadow-lg` |
-| `ad-hoc-radius` (10) | 114, 143, 254, 684, 708, 718, 729, 746, 750, 835 | `rounded-full` `rounded-md` `rounded-xl` `rounded` |
-| `ad-hoc-z-index` (1) | 835 | `z-30` |
-| `arbitrary-value` (19) | 114, 129, 135, 143, 150, 153, 200, 203, 234, 237, 247, 252, 254, 703, 706, 708, 729, 739 | `text-[11px]` `text-[13px]` `text-[10.5px]` `max-w-[160px]` |
-
-**`src/hooks/useDraftKeyboardShortcuts.ts`** (5)
-
-| Rule | Lines | Examples |
-|---|---|---|
-| `custom-combobox` (4) | 65, 76 | `role="menuitem"` `role="combobox"` `role="listbox"` `role="option"` |
-| `raw-dialog` (1) | 47 | `role="dialog"` |
+| `raw-button` (3) | 76, 119, 171 | `<button` |
+| `native-tooltip` (3) | 122, 410, 422 | ` title={`` ` title="` |
+| `palette-colour` (42) | 61, 62, 66, 67, 71, 72, 123, 164, 173, 191, 192, 193 | `hover:border-amber-400/50` `group-hover:text-amber-700` `dark:group-hover:text-amber-200` `hover:border-emerald-400/50` |
+| `legacy-token` (52) | 60, 65, 70, 71, 72, 80, 106, 108, 110, 147, 149, 153, 156, 159, 163, 194, 241, 245, 273, 278, 281, 284, 356, 359, 409, 414, 426 | `hover:border-accent-400/50` `group-hover:text-accent-500` `dark:group-hover:text-accent-200` `bg-accent-500/12` |
+| `ad-hoc-shadow` (1) | 80 | `hover:shadow-card-hover` |
+| `ad-hoc-radius` (12) | 80, 86, 123, 149, 173, 207, 235, 245, 273, 414, 416, 426 | `rounded-2xl` `rounded-xl` `rounded-md` `rounded-lg` |
+| `arbitrary-value` (16) | 90, 99, 106, 108, 123, 153, 156, 173, 207, 241, 245, 281, 284, 356, 359 | `h-[18px]` `w-[18px]` `text-[34px]` `text-[13px]` |
 
 <!-- audit:end -->
 

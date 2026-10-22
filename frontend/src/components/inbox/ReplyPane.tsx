@@ -9,9 +9,7 @@ import { Kbd, KbdGroup } from '@/components/ui/kbd';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
-import AddToLeverButton from '@/components/AddToLeverButton';
 import DraftCcSelect from '@/components/DraftCcSelect';
-import { CandidateLeverBadge } from '@/components/LeverBadge';
 import {
   fetchDraftCcOptions,
   type Candidate,
@@ -26,6 +24,7 @@ import type { DraftEditorState } from '@/hooks/useDraftEditor';
 import { LabelChip, PresenceChip, firstName } from './chips';
 import DraftEditor from './DraftEditor';
 import EvidenceMessage from './EvidenceMessage';
+import LeverSection, { type LeverFields } from './LeverSection';
 
 export interface LockState {
   name: string;
@@ -47,7 +46,7 @@ export function LockedAlert({ lock, onCancel }: { lock: LockState; onCancel: () 
       <AlertTitle>{`${firstName(lock.name)} is editing this reply`}</AlertTitle>
       <AlertDescription className="flex flex-col gap-2">
         <span>They opened it first. Sending now may overwrite their changes.</span>
-        <span className="flex gap-2">
+        <span className="flex flex-wrap gap-2">
           <Button size="sm" variant="destructive" onClick={lock.retry}>
             {lock.actionLabel}
           </Button>
@@ -57,20 +56,6 @@ export function LockedAlert({ lock, onCancel }: { lock: LockState; onCancel: () 
         </span>
       </AlertDescription>
     </Alert>
-  );
-}
-
-function LeverCard({ candidate }: { candidate: LeverCandidateFields & { id: string } }) {
-  return (
-    <Card size="sm">
-      <CardHeader>
-        <CardTitle className="text-sm">Lever</CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-wrap items-center gap-2">
-        <CandidateLeverBadge candidate={candidate} />
-        <AddToLeverButton target={{ candidateId: candidate.id }} inLever={!!candidate.leverOpportunityId} />
-      </CardContent>
-    </Card>
   );
 }
 
@@ -215,15 +200,19 @@ export default function ReplyPane(props: Props) {
   }
 
   const candidate = (draft.thread?.candidate ?? null) as (Candidate & LeverCandidateFields) | null;
-  const leverFields: (LeverCandidateFields & { id: string }) | null = item?.candidate
-    ? {
-        id: item.candidate.id,
-        leverState: item.candidate.leverState as LeverCandidateFields['leverState'],
-        leverStage: item.candidate.leverStage,
-        leverPostingTitle: item.candidate.leverPostingTitle,
-        leverOpportunityId: item.candidate.leverOpportunityId,
-      }
-    : candidate;
+  const candidateId = candidate?.id ?? item?.candidate?.id;
+  // The draft's candidate row has every Lever column (checked time, archived
+  // reason); the inbox item has the core ones and is the fallback.
+  const lever: LeverFields = {
+    leverState: (candidate?.leverState ?? item?.candidate?.leverState ?? null) as LeverFields['leverState'],
+    leverOpportunityId: candidate?.leverOpportunityId ?? item?.candidate?.leverOpportunityId ?? null,
+    leverPostingTitle: candidate?.leverPostingTitle ?? item?.candidate?.leverPostingTitle ?? null,
+    leverStage: candidate?.leverStage ?? item?.candidate?.leverStage ?? null,
+    leverArchivedReason: candidate?.leverArchivedReason ?? null,
+    leverCheckedAt: candidate?.leverCheckedAt ?? null,
+    leverError: candidate?.leverError ?? null,
+  };
+  const role = candidate?.role ?? item?.candidate?.role ?? null;
   const mailbox = draft.thread?.mailbox?.emailAddress ?? item?.mailbox?.emailAddress ?? '';
   const original = draft.originalMessage;
   const sendable = isSendable(draft);
@@ -240,7 +229,10 @@ export default function ReplyPane(props: Props) {
             <LabelChip classification={draft.classification} confidenceLabel={draft.confidenceLabel} />
             <PresenceChip presence={presence} />
           </div>
-          <p className="truncate text-sm text-muted-foreground">{candidate?.email ?? item?.candidate?.email}</p>
+          <p className="truncate text-sm text-muted-foreground">
+            {[candidate?.email ?? item?.candidate?.email, role].filter(Boolean).join(' · ')}
+          </p>
+          {candidateId && <LeverSection candidateId={candidateId} lever={lever} draftId={draft.id} />}
           {draft.classificationReason && (
             <p className="text-sm text-foreground">
               <span className="text-muted-foreground">Why: </span>
@@ -268,8 +260,6 @@ export default function ReplyPane(props: Props) {
             </CardContent>
           </Card>
         )}
-
-        {leverFields && <LeverCard candidate={leverFields} />}
 
         <ThreadContext draft={draft} />
 

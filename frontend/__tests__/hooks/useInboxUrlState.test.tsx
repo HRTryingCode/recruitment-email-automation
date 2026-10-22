@@ -11,7 +11,7 @@ function setup(url: string) {
 
 describe('useInboxUrlState', () => {
   it('reads view, mailbox and item from the URL', () => {
-    const { result } = setup('/inbox?view=interested&mailbox=mb1&item=d1');
+    const { result } = setup('/inbox?view=interested&mailboxId=mb1&item=d1');
     expect(result.current.state).toMatchObject({ view: 'interested', mailboxId: 'mb1', itemId: 'd1' });
   });
 
@@ -27,12 +27,27 @@ describe('useInboxUrlState', () => {
   });
 
   it('setView switches view and closes the open item', () => {
-    const { result } = setup('/inbox?view=interested&item=d1&mailbox=mb1');
+    const { result } = setup('/inbox?view=interested&item=d1&mailboxId=mb1');
     act(() => result.current.state.setView('snoozed'));
     const params = new URLSearchParams(result.current.location.search);
     expect(params.get('view')).toBe('snoozed');
     expect(params.get('item')).toBeNull();
-    expect(params.get('mailbox')).toBe('mb1');
+    expect(params.get('mailboxId')).toBe('mb1');
+  });
+
+  it('ignores the Gmail OAuth ?mailbox= flag (the shell filter is mailboxId)', () => {
+    expect(setup('/inbox?mailbox=connected').result.current.state.mailboxId).toBeUndefined();
+  });
+
+  it('legacy ?status=SENT opens Sent today', () => {
+    expect(setup('/inbox?status=SENT').result.current.state.view).toBe('sent_today');
+  });
+
+  it('exposes a legacy ?candidateId= and resolveCandidate swaps it for the item', () => {
+    const { result } = setup('/inbox?candidateId=c2');
+    expect(result.current.state.legacyCandidateId).toBe('c2');
+    act(() => result.current.state.resolveCandidate('d2'));
+    expect(result.current.location.search).toBe('?item=d2');
   });
 
   it('setItem and setMailbox update their params', () => {

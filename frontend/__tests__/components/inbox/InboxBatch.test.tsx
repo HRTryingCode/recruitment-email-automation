@@ -1,4 +1,4 @@
-// R2 inbox: batch send for Not interested, ? help, ⌘K palette (msw).
+// R2 inbox: batch send for Not interested and ? help (msw). ⌘K is the shell palette.
 import { http, HttpResponse } from 'msw';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -94,7 +94,7 @@ describe('batch send (Not interested)', () => {
   });
 });
 
-describe('help and palette', () => {
+describe('help', () => {
   it('? opens the shortcut help', async () => {
     installInbox([item('d1', 'interested')]);
     renderInbox('/inbox?view=interested');
@@ -103,15 +103,5 @@ describe('help and palette', () => {
     const help = await screen.findByRole('dialog', { name: 'Keyboard shortcuts' });
     expect(within(help).getByText('Send')).toBeInTheDocument();
     expect(within(help).getByText('Undo send')).toBeInTheDocument();
-  });
-
-  it('⌘K opens the palette and runs a view switch', async () => {
-    installInbox([item('d1', 'interested')]);
-    const user = userEvent.setup();
-    renderInbox('/inbox');
-    await screen.findByRole('navigation', { name: 'Inbox views' });
-    fireEvent.keyDown(document.body, { key: 'k', metaKey: true });
-    await user.click(await screen.findByRole('option', { name: /Go to Interested/ }));
-    await waitFor(() => expect(search().get('view')).toBe('interested'));
   });
 });

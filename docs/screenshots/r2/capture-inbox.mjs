@@ -1,7 +1,8 @@
 // R2 Inbox screenshots: every view, light/dark, 1440 + 1024 + 390 (stacked),
 // plus pane states (locked, undo toast, dismiss menu, snooze, show changes).
-// Runs against `vite dev` with /inbox mounted and every /api/* call served
-// from the fake fixtures below — no backend, no real data.
+// Runs against `vite dev` (the Inbox is mounted at /inbox inside the R1
+// shell) with every /api/* call served from the fake fixtures below — no
+// backend, no real data.
 //
 //   cd frontend && npx vite --port 5173 &
 //   node ../docs/screenshots/r2/capture-inbox.mjs <outDir> [baseUrl]
@@ -80,7 +81,8 @@ function draftFor(it) {
     originalMessage: { id: `m-${d.id}`, fromAddress: c.email, fromName: c.name, subject: d.subject,
       bodyText: `Hi Rae,\n\nThanks for reaching out — ${d.evidenceQuote}. Let me know what you think.\n\n${first}`, bodyHtml: null, receivedAt: ago(45) },
     thread: { id: d.threadId, mailboxId: it.mailbox.id, mailbox: { ...it.mailbox, provider: 'GMAIL' }, externalThreadId: 'x', subject: 'Senior Engineer', lastMessageAt: ago(45), createdAt: ago(5000),
-      candidate: { id: c.id, name: c.name, email: c.email, status: c.status, role: c.role, leverState: c.leverState },
+      candidate: { id: c.id, name: c.name, email: c.email, status: c.status, role: c.role, leverState: c.leverState, leverOpportunityId: c.leverOpportunityId,
+        leverPostingTitle: c.leverPostingTitle, leverStage: c.leverStage, leverArchivedReason: null, leverCheckedAt: ago(14), leverError: null },
       messages: [
         { id: `m-${d.id}`, fromAddress: c.email, fromName: c.name, toAddresses: [], subject: d.subject, bodyText: '…', receivedAt: ago(45), headers: {}, createdAt: ago(45) },
         { id: `m0-${d.id}`, fromAddress: it.mailbox.emailAddress, fromName: 'Rae', toAddresses: [c.email], subject: 'Senior Engineer', bodyText: `Hi ${first}! We're hiring a Senior Engineer at Example Co — would you be open to a chat?`, receivedAt: ago(5000), headers: {}, createdAt: ago(5000) },
@@ -94,10 +96,11 @@ function respond(method, path, url) {
   if (path === '/api/auth/me') return [200, ok({ user })];
   if (path === '/api/inbox') {
     const view = url.searchParams.get('view') ?? 'needs_review';
-    const empty = url.searchParams.get('mailbox') === 'none' || url.searchParams.get('mailboxId') === 'none';
+    const empty = url.searchParams.get('mailboxId') === 'none';
     const counts = Object.fromEntries(views.map((v) => [v, items.filter((i) => i.view === v).length]));
     return [200, ok({ items: empty ? [] : items.filter((i) => i.view === view), counts, nextCursor: null })];
   }
+  if (path === '/api/drafts') return [200, ok([], { meta: { total: items.filter((i) => i.draft?.status === 'PENDING').length, page: 1, limit: 1 } })];
   if (path === '/api/mailboxes') return [200, ok(mailboxes.map((m) => ({ ...m, provider: 'GMAIL', isActive: true, createdAt: ago(9e4), updatedAt: ago(5) })))];
   if (path === '/api/views') return [200, ok([{ id: 'v1', userId: null, name: 'Talent — interested', scope: 'inbox', filters: { view: 'interested', mailboxId: 'mb2' }, shared: true, createdAt: ago(99), updatedAt: ago(9) }])];
   if (path === '/api/lever/me') return [200, ok({ configured: true, createEnabled: true, leverUser: { id: 'lu1', name: 'Rae' }, appEmail: 'rae@example.com' })];
@@ -146,7 +149,7 @@ for (const theme of ['light', 'dark']) {
     await go('?view=needs_review&item=candidate:cand-z'); await shot('pane-candidate');
     await go('?view=snoozed&item=s1'); await shot('pane-snoozed');
     await go('?view=sent_today&item=t2'); await shot('pane-scheduled');
-    await go('?view=interested&mailbox=none'); await shot('empty');
+    await go('?view=interested&mailboxId=none'); await shot('empty');
 
     await go('?view=interested&item=i1'); await shot('pane-interested');
     await page.getByRole('button', { name: /^Dismiss/ }).click(); await shot('dismiss-menu');

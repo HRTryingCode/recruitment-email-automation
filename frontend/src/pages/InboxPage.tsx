@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { MousePointerClick } from 'lucide-react';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
 import { Kbd } from '@/components/ui/kbd';
@@ -8,9 +8,8 @@ import BatchSendDialog from '@/components/inbox/BatchSendDialog';
 import CandidatePane from '@/components/inbox/CandidatePane';
 import DismissMenu from '@/components/inbox/DismissMenu';
 import { focusEditor } from '@/components/inbox/DraftEditor';
-import InboxCommandPalette from '@/components/inbox/InboxCommandPalette';
 import InboxList, { itemKey } from '@/components/inbox/InboxList';
-import InboxRail, { MailboxSelect } from '@/components/inbox/InboxRail';
+import InboxRail from '@/components/inbox/InboxRail';
 import ReplyPane, { isSendable } from '@/components/inbox/ReplyPane';
 import ShortcutHelpDialog from '@/components/inbox/ShortcutHelpDialog';
 import SnoozeMenu from '@/components/inbox/SnoozeMenu';
@@ -19,11 +18,17 @@ import { useDraftPresence } from '@/hooks/useDraftPresence';
 import { useInboxActions } from '@/hooks/useInboxActions';
 import { useInboxShortcuts } from '@/hooks/useInboxShortcuts';
 import { useInboxUrlState } from '@/hooks/useInboxUrlState';
-import { fetchDraft, fetchInbox, type InboxView } from '@/lib/api';
+import { fetchCandidate, fetchDraft, fetchInbox, type InboxView } from '@/lib/api';
+import { fetchLeverMe } from '@/lib/leverApi';
+import { prefetchAddToLever } from '@/lib/leverQueries';
+import { toastWarning } from '@/lib/toast';
 import { VIEWS, isInboxView } from '@/lib/inbox';
 import { cn } from '@/lib/utils';
 
 export const INBOX_POLL_MS = 15_000;
+
+/** Draft statuses a legacy ?candidateId= link can land on. */
+const LIVE_STATUSES = new Set(['PENDING', 'APPROVED', 'FAILED', 'SCHEDULED', 'SENDING']);
 
 function isTyping(el: Element | null): el is HTMLElement {
   return el instanceof HTMLElement && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
@@ -35,7 +40,8 @@ function isTyping(el: Element | null): el is HTMLElement {
  * or Snooze, and the next one opens automatically.
  */
 export default function InboxPage() {
-  const { view, mailboxId, itemId, setView, setMailbox, setItem } = useInboxUrlState();
+  const qc = useQueryClient();
+  const { view, mailboxId, itemId, legacyCandidateId, setView, setItem, resolveCandidate } = useInboxUrlState();
   const inboxQ = useQuery({
     queryKey: ['inbox', view, mailboxId ?? null],
     queryFn: () => fetchInbox({ view, mailboxId }),
@@ -58,13 +64,49 @@ export default function InboxPage() {
   const presence = useDraftPresence(draftId, editor.focused || editor.dirty ? 'editing' : 'viewing');
   const actions = useInboxActions({ keys, setItem });
 
+  // Legacy ?candidateId= (old Drafts tab, Today, Slack): open that
+  // candidate's row if it's in this view, else their newest live draft.
+  const listReady = !!inboxQ.data;
+  useEffect(() => {
+    if (!legacyCandidateId || !listReady) return;
+    const hit = items.find((i) => i.candidate?.id === legacyCandidateId);
+    if (hit) {
+      resolveCandidate(itemKey(hit));
+      return;
+    }
+    let alive = true;
+    fetchCandidate(legacyCandidateId)
+      .then((res) => {
+        if (!alive) return;
+        const live = (res.data.threads ?? [])
+          .flatMap((t) => t.drafts ?? [])
+          .filter((d) => LIVE_STATUSES.has(d.status))
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+        if (!live) toastWarning(`No reply waiting for ${res.data.name}`);
+        resolveCandidate(live?.id);
+      })
+      .catch(() => {
+        if (alive) resolveCandidate(undefined);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [legacyCandidateId, listReady, items, resolveCandidate]);
+
+  // H5: warm the Add to Lever dialog for the selected candidate.
+  const { data: leverMe } = useQuery({ queryKey: ['lever-me'], queryFn: fetchLeverMe, staleTime: 5 * 60_000, retry: false });
+  const leverReady = !!leverMe?.configured && !!leverMe.createEnabled && !!leverMe.leverUser;
+  const selectedCandidateId = draft?.thread?.candidate?.id ?? current?.candidate?.id;
+  useEffect(() => {
+    if (leverReady && selectedCandidateId) prefetchAddToLever(qc, { candidateId: selectedCandidateId });
+  }, [leverReady, selectedCandidateId, qc]);
+
   const [cursor, setCursor] = useState<string>();
   const [dismissOpen, setDismissOpen] = useState(false);
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [batchOpen, setBatchOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [paletteOpen, setPaletteOpen] = useState(false);
   const [checkedFor, setCheckedFor] = useState(`${view}|${mailboxId ?? ''}`);
   // Selection belongs to one view: switching view or mailbox clears it.
   if (checkedFor !== `${view}|${mailboxId ?? ''}`) {
@@ -122,7 +164,6 @@ export default function InboxPage() {
     },
     close,
     help: () => setHelpOpen(true),
-    palette: () => setPaletteOpen((o) => !o),
   });
 
   const menus =
@@ -142,9 +183,9 @@ export default function InboxPage() {
     ) : null;
 
   const mobileHeader = (
-    <div className="flex gap-2 lg:hidden">
+    <div className="flex gap-2 xl:hidden">
       <Select value={view} onValueChange={(v) => isInboxView(v) && setView(v as InboxView)}>
-        <SelectTrigger size="sm" aria-label="View" className="flex-1">
+        <SelectTrigger size="sm" aria-label="View" className="w-full">
           <SelectValue />
         </SelectTrigger>
         <SelectContent position="popper" align="start">
@@ -155,16 +196,13 @@ export default function InboxPage() {
           ))}
         </SelectContent>
       </Select>
-      <div className="flex-1">
-        <MailboxSelect mailboxId={mailboxId} onChange={setMailbox} />
-      </div>
     </div>
   );
 
   return (
-    <div className="flex h-dvh min-h-0 w-full bg-background text-foreground">
-      <aside aria-label="Inbox" className="w-56 shrink-0 overflow-y-auto border-r border-border max-lg:hidden xl:w-60">
-        <InboxRail view={view} mailboxId={mailboxId} counts={counts} onMailboxChange={setMailbox} />
+    <div className="flex min-h-0 w-full flex-1 bg-background text-foreground">
+      <aside aria-label="Inbox" className="w-52 shrink-0 overflow-y-auto border-r border-border max-xl:hidden 2xl:w-56">
+        <InboxRail view={view} counts={counts} />
       </aside>
 
       <div
@@ -249,22 +287,6 @@ export default function InboxPage() {
         }}
       />
       <ShortcutHelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
-      <InboxCommandPalette
-        open={paletteOpen}
-        onOpenChange={setPaletteOpen}
-        onView={setView}
-        onHelp={() => setHelpOpen(true)}
-        reply={
-          sendable && draft
-            ? {
-                send: doSend,
-                edit: () => window.setTimeout(() => focusEditor(draft.id), 0),
-                dismiss: () => setDismissOpen(true),
-                snooze: () => setSnoozeOpen(true),
-              }
-            : undefined
-        }
-      />
     </div>
   );
 }

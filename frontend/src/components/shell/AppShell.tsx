@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
-import { Outlet } from 'react-router-dom';
+import { Outlet, useMatch } from 'react-router-dom';
 import { fetchDrafts, fetchMailboxes } from '../../lib/api';
 import { useMailboxFilter } from '../../lib/urlState';
+import { cn } from '../../lib/utils';
 import { SidebarInset, SidebarProvider } from '../ui/sidebar';
 import AppHeader from './AppHeader';
 import AppSidebar from './AppSidebar';
@@ -17,6 +18,9 @@ import { useOAuthCallbackToasts } from './useOAuthCallbackToasts';
 export default function AppShell() {
   useOAuthCallbackToasts();
   const [mailboxId, setMailboxId] = useMailboxFilter();
+  // The Inbox is a full-bleed, viewport-high three-pane layout whose panes
+  // scroll on their own; every other view is a centred, page-scrolling column.
+  const fullBleed = !!useMatch('/inbox');
 
   const { data: mailboxesData } = useQuery({
     queryKey: ['mailboxes'],
@@ -35,14 +39,19 @@ export default function AppShell() {
   return (
     <SidebarProvider>
       <AppSidebar pendingCount={pendingData?.meta.total ?? 0} />
-      <SidebarInset className="min-w-0">
+      <SidebarInset className={cn('min-w-0', fullBleed && 'h-svh overflow-hidden')}>
         <AppHeader
           mailboxes={mailboxesData?.data ?? []}
           mailboxId={mailboxId}
           onMailboxChange={setMailboxId}
         />
         <StatusBanner />
-        <div className="mx-auto w-full min-w-0 max-w-7xl flex-1 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
+        <div
+          className={cn(
+            'w-full min-w-0 flex-1',
+            fullBleed ? 'flex min-h-0 flex-col' : 'mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8'
+          )}
+        >
           <Outlet />
         </div>
       </SidebarInset>

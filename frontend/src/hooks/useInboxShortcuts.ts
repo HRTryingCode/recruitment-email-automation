@@ -10,7 +10,6 @@ export type InboxShortcut =
   | 'dismiss'
   | 'snooze'
   | 'close'
-  | 'palette'
   | 'help';
 
 /** The approved (simplified) map; also rendered by the ? help dialog. */
@@ -24,7 +23,6 @@ export const SHORTCUTS: Array<{ id: InboxShortcut; keys: string[]; label: string
   { id: 'dismiss', keys: ['D'], label: 'Dismiss' },
   { id: 'snooze', keys: ['S'], label: 'Snooze' },
   { id: 'close', keys: ['Esc'], label: 'Close / back' },
-  { id: 'palette', keys: ['⌘', 'K'], label: 'Command palette' },
   { id: 'help', keys: ['?'], label: 'Keyboard shortcuts' },
 ];
 
@@ -34,6 +32,9 @@ function isTypingTarget(target: EventTarget | null): boolean {
   const tag = target.tagName;
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
 }
+
+/** The shell's `g` + letter navigation (ShortcutsDialog) waits this long for the letter. */
+const G_SEQUENCE_MS = 1200;
 
 /** Menus, dialogs and listboxes own their keys (arrows, Enter, typeahead). */
 const OVERLAY_SELECTOR = ['menu', 'dialog', 'alertdialog', 'listbox'].map((r) => `[role=${r}]`).join(',');
@@ -48,7 +49,6 @@ function resolve(e: KeyboardEvent): InboxShortcut | null {
   if (mod) {
     if (key === 'Enter') return 'send';
     if (key.toLowerCase() === 'z' && !e.shiftKey) return 'undo';
-    if (key.toLowerCase() === 'k') return 'palette';
     return null;
   }
   if (e.altKey) return null;
@@ -81,7 +81,10 @@ function resolve(e: KeyboardEvent): InboxShortcut | null {
 
 /**
  * Inbox keyboard map. While typing only ⌘↵ (send) and Esc (close) fire;
- * inside menus/dialogs nothing does except the palette toggle.
+ * inside menus/dialogs nothing does. ⌘K stays with the shell palette, and
+ * the key right after `g` is left to the shell's g-navigation (g s =
+ * Settings, not Snooze). Handled keys are preventDefault-ed so the shell's
+ * own `?` help yields to the Inbox one.
  */
 export function useInboxShortcuts(handlers: Partial<Record<InboxShortcut, () => void>>, enabled = true): void {
   const ref = useRef(handlers);
@@ -91,11 +94,17 @@ export function useInboxShortcuts(handlers: Partial<Record<InboxShortcut, () => 
 
   useEffect(() => {
     if (!enabled) return;
+    let gAt = 0;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.isComposing) return;
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && !isTypingTarget(e.target)) {
+        const afterG = Date.now() - gAt < G_SEQUENCE_MS;
+        gAt = e.key === 'g' && !afterG ? Date.now() : 0;
+        if (afterG) return;
+      }
       const id = resolve(e);
       if (!id) return;
-      if (inOverlay(e.target) && id !== 'palette') return;
+      if (inOverlay(e.target)) return;
       if (isTypingTarget(e.target) && id !== 'send' && id !== 'close') return;
       const fn = ref.current[id];
       if (!fn) return;
