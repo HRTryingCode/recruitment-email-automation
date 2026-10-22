@@ -113,6 +113,7 @@ describe('U0 draft actions', () => {
     deleteDraft.mockReset().mockResolvedValue(undefined);
     sendDraft.mockReset().mockResolvedValue(undefined);
     sendAsList.mockReset();
+    rewriteDraftWithNotes.mockReset();
     app = await loadApp();
   });
 
