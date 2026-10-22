@@ -61,6 +61,8 @@ describe('/api/candidates — candidate state (H6, M18, M19, M20, L16, M12)', ()
       // Tagged template: first arg is the TemplateStringsArray.
       const sql = (mockPrisma.$queryRaw.mock.calls[0]![0] as string[]).join('?');
       expect(sql).toContain('"lastInboundAt" > c."lastOutboundAt"');
+      // Role-less candidates (spam/noise) never count as awaiting.
+      expect(sql).toContain('c.role IS NOT NULL');
     });
 
     it('rejects a malformed mailboxId', async () => {

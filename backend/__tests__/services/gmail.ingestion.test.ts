@@ -197,6 +197,12 @@ vi.mock('../../src/db/client', () => {
     },
     candidate: {
       findUnique: vi.fn(async ({ where }: Row) => db.candidates.find((c) => c.email === where.email) ?? null),
+      // findCandidateByEmail: case-insensitive `email: { equals, mode }` (B7 / M12).
+      findFirst: vi.fn(async ({ where }: Row) => {
+        const want = String(where.email?.equals ?? where.email).toLowerCase();
+        return db.candidates.find((c) => String(c.email).toLowerCase() === want) ?? null;
+      }),
+      updateMany: vi.fn(async () => ({ count: 0 })),
       upsert: vi.fn(async ({ where, update, create }: Row) => {
         let c = db.candidates.find((x) => x.email === where.email);
         if (c) applyData(c, update);
@@ -478,7 +484,7 @@ describe('fetchAndStoreMessage store section (L2, M24, M3)', () => {
     gmailApi.messagesGet.mockResolvedValueOnce(gmailMessage('g-1'));
     // DB blip inside classifyAndDraft (candidate lookup).
     const { prisma } = await import('../../src/db/client');
-    (prisma.candidate.findUnique as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+    (prisma.candidate.findFirst as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new Error('P2024 timed out fetching a new connection')
     );
 
@@ -686,7 +692,7 @@ describe('sweepStuckMessages (M3)', () => {
     seedMailbox();
     const row = stuck({ processingState: 'FAILED', attempts: 2 });
     const { prisma } = await import('../../src/db/client');
-    (prisma.candidate.findUnique as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('db down'));
+    (prisma.candidate.findFirst as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('db down'));
 
     const result = await sweepStuckMessages();
 

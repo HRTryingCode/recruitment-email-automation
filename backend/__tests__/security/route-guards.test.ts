@@ -46,6 +46,8 @@ const MANIFEST: Record<string, Guard> = {
   'DELETE /api/mailboxes/:id': 'admin',
 
   'GET /api/candidates/': 'auth',
+  // B7 dashboard counts: aggregate numbers only, same audience as the list.
+  'GET /api/candidates/counts': 'auth',
   'GET /api/candidates/:id': 'auth',
   'PATCH /api/candidates/:id': 'auth',
   'POST /api/candidates/:id/ignore': 'auth',
