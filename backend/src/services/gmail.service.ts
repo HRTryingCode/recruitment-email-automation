@@ -25,35 +25,31 @@ export function serializeCredentials(creds: Record<string, unknown>): string {
   return encrypt(JSON.stringify(creds));
 }
 
-function parseCredentials(mailbox: Mailbox): Record<string, unknown> {
+/**
+ * Decrypt a mailbox's stored credentials. Throws when they can't be decrypted
+ * or parsed (audit B6 / L9) — the old plaintext-JSON fallback is gone (all
+ * prod rows were verified encrypted) and a broken row now surfaces as an error
+ * instead of an empty credential set. The message never includes the payload.
+ */
+export function parseCredentials(mailbox: Mailbox): Record<string, unknown> {
   const raw = mailbox.credentials;
   if (typeof raw !== 'string' || raw.length === 0) {
     return {};
   }
 
-  // Try decrypting (current format). Fall back to plaintext JSON for rows
-  // written before encryption was introduced.
-  // TODO: remove plaintext fallback after backfill (re-encrypt all existing
-  // Mailbox.credentials rows and remove this try/catch).
+  let plaintext: string;
   try {
-    const plaintext = decrypt(raw);
+    plaintext = decrypt(raw);
+  } catch (err) {
+    throw new Error(
+      `[Gmail] Failed to decrypt credentials for mailbox ${mailbox.id}: ` +
+        (err instanceof Error ? err.message : 'unknown error')
+    );
+  }
+  try {
     return JSON.parse(plaintext) as Record<string, unknown>;
-  } catch (decryptErr) {
-    try {
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      console.warn(
-        `[Gmail] Mailbox ${mailbox.id} credentials are stored as plaintext; ` +
-          'they will be re-encrypted on next write. Remove plaintext fallback ' +
-          'after backfilling.'
-      );
-      return parsed;
-    } catch {
-      console.error(
-        `[Gmail] Failed to parse credentials for mailbox ${mailbox.id}:`,
-        decryptErr
-      );
-      return {};
-    }
+  } catch {
+    throw new Error(`[Gmail] Decrypted credentials for mailbox ${mailbox.id} are not valid JSON`);
   }
 }
 

@@ -115,9 +115,11 @@ function validateEnv(): void {
     } catch {
       decodedLen = 0;
     }
-    if (decodedLen < 32) {
+    // Must match lib/crypto exactly — a longer key used to pass boot
+    // validation and then fail on the first encrypt/decrypt (L9).
+    if (decodedLen !== 32) {
       problems.push(
-        `ENCRYPTION_KEY must decode to at least 32 bytes (got ${decodedLen}); generate with: openssl rand -base64 32`
+        `ENCRYPTION_KEY must decode to exactly 32 bytes (got ${decodedLen}); generate with: openssl rand -base64 32`
       );
     }
   }
