@@ -1,6 +1,6 @@
 // Pure helpers for the R2 Inbox: label wording, view metadata, snooze
 // presets (ET), evidence highlighting, word diff and auto-advance.
-import type { ConfidenceLabel, InboxView } from './api';
+import type { ConfidenceLabel, InboxItem, InboxView } from './api';
 
 export type LabelTone = 'success' | 'warning' | 'destructive';
 export type LabelText = 'Interested' | 'Unsure' | 'Not interested';
@@ -26,6 +26,53 @@ export const VIEWS: Array<{ id: InboxView; label: string; empty: string }> = [
 
 export function isInboxView(v: string | null | undefined): v is InboxView {
   return VIEWS.some((x) => x.id === v);
+}
+
+// ── Role filter / grouping ───────────────────────────────────────────────
+/** `?role=` value for candidates whose role Claude couldn't detect. */
+export const ROLE_UNKNOWN = '__none__';
+export const ROLE_UNKNOWN_LABEL = 'Role unknown';
+
+export type InboxSort = 'newest' | 'oldest';
+export const SORTS: Array<{ id: InboxSort; label: string }> = [
+  { id: 'newest', label: 'Newest first' },
+  { id: 'oldest', label: 'Oldest waiting first' },
+];
+
+/** Role key of an item: the trimmed role, or ROLE_UNKNOWN. */
+export function roleKey(item: InboxItem): string {
+  return item.candidate?.role?.trim() || ROLE_UNKNOWN;
+}
+
+export interface RoleGroup {
+  key: string;
+  label: string;
+  count: number;
+  items: InboxItem[];
+}
+
+/**
+ * Sections for "Group by role": count desc, then name; Role unknown last.
+ * Counts come from the server's roleCounts (the whole view); a role missing
+ * there falls back to how many are loaded. Items keep their list order.
+ */
+export function groupByRole(items: InboxItem[], roleCounts: Array<{ role: string | null; count: number }> = []): RoleGroup[] {
+  const total = new Map(roleCounts.map((r) => [r.role?.trim() || ROLE_UNKNOWN, r.count]));
+  const groups = new Map<string, RoleGroup>();
+  for (const item of items) {
+    const key = roleKey(item);
+    let g = groups.get(key);
+    if (!g) {
+      g = { key, label: key === ROLE_UNKNOWN ? ROLE_UNKNOWN_LABEL : key, count: 0, items: [] };
+      groups.set(key, g);
+    }
+    g.items.push(item);
+  }
+  for (const g of groups.values()) g.count = total.get(g.key) ?? g.items.length;
+  return [...groups.values()].sort((a, b) => {
+    if (a.key === ROLE_UNKNOWN || b.key === ROLE_UNKNOWN) return a.key === ROLE_UNKNOWN ? 1 : -1;
+    return b.count - a.count || a.label.localeCompare(b.label);
+  });
 }
 
 // ── ET time ──────────────────────────────────────────────────────────────

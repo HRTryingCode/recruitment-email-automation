@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useId, useRef } from 'react';
 import { AlertCircle, Inbox as InboxIcon, Send } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -7,7 +7,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { InboxItem, InboxView } from '@/lib/api';
-import { VIEWS, formatAge } from '@/lib/inbox';
+import { VIEWS, formatAge, type RoleGroup } from '@/lib/inbox';
 import { LabelChip, MailboxChip, PresenceChip, RoleChip } from './chips';
 
 /** URL key of an item: the draft id, or `candidate:<id>` for draftless rows. */
@@ -79,7 +79,7 @@ function Row({
             <span className="truncate font-medium text-foreground">{name}</span>
             <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{formatAge(item.ageMs)}</span>
           </span>
-          <span className="flex flex-wrap items-center gap-1">
+          <span className="flex min-w-0 items-center gap-1 overflow-hidden">
             <RoleChip role={item.candidate?.role} />
             {item.mailbox && <MailboxChip email={item.mailbox.emailAddress} />}
             {item.draft ? (
@@ -113,6 +113,12 @@ interface Props {
   onCheckedChange: (next: Set<string>) => void;
   onBatchSend: () => void;
   header?: React.ReactNode;
+  /** Sort / role filter / group controls, shown beside the title. */
+  controls?: React.ReactNode;
+  /** Group by role: sections in display order (items as in `items`). */
+  groups?: RoleGroup[];
+  /** A role filter is on: empty means "no replies for this role". */
+  roleFiltered?: boolean;
 }
 
 export default function InboxList({
@@ -130,17 +136,43 @@ export default function InboxList({
   onCheckedChange,
   onBatchSend,
   header,
+  controls,
+  groups,
+  roleFiltered,
 }: Props) {
   const meta = VIEWS.find((v) => v.id === view)!;
+  const groupId = useId();
   const batchable = view === 'not_interested';
   const draftIds = items.filter((i) => i.kind === 'draft').map((i) => i.id);
   const allChecked = draftIds.length > 0 && draftIds.every((id) => checked.has(id));
+
+  const renderRow = (item: InboxItem) => {
+    const key = itemKey(item);
+    return (
+      <Row
+        key={key}
+        item={item}
+        selected={key === selectedKey}
+        focused={key === focusedKey}
+        highlighted={key === highlightKey}
+        checkable={batchable && item.kind === 'draft'}
+        checked={checked.has(item.id)}
+        onOpen={() => onOpen(key)}
+        onCheck={(v) => {
+          const next = new Set(checked);
+          if (v) next.add(item.id);
+          else next.delete(item.id);
+          onCheckedChange(next);
+        }}
+      />
+    );
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex flex-col gap-2 border-b border-border p-3">
         {header}
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             {batchable && draftIds.length > 0 && (
               <Checkbox
@@ -152,6 +184,7 @@ export default function InboxList({
             <h2 className="font-heading text-sm font-semibold text-foreground">{meta.label}</h2>
             <span className="text-xs tabular-nums text-muted-foreground">{total ?? items.length}</span>
           </div>
+          {controls}
           {batchable && checked.size > 0 && (
             <Button size="sm" onClick={onBatchSend}>
               <Send data-icon="inline-start" />
@@ -185,33 +218,32 @@ export default function InboxList({
               <EmptyMedia variant="icon">
                 <InboxIcon />
               </EmptyMedia>
-              <EmptyTitle>{meta.empty}</EmptyTitle>
-              <EmptyDescription>New replies show up here as candidates write back.</EmptyDescription>
+              <EmptyTitle>{roleFiltered ? 'No replies for this role' : meta.empty}</EmptyTitle>
+              <EmptyDescription>
+                {roleFiltered ? 'Try another role, or show all roles.' : 'New replies show up here as candidates write back.'}
+              </EmptyDescription>
             </EmptyHeader>
           </Empty>
+        ) : groups ? (
+          <ul aria-label={`${meta.label} replies`} className="flex flex-col gap-2">
+            {groups.map((g, i) => (
+              // Header after its rows in the DOM so it paints over them when
+              // stuck (rows hold positioned avatars); order-first shows it on top.
+              <li key={g.key} aria-labelledby={`${groupId}-${i}`} className="flex flex-col">
+                <ul className="flex flex-col gap-0.5">{g.items.map(renderRow)}</ul>
+                <h3
+                  id={`${groupId}-${i}`}
+                  className="sticky top-0 order-first flex items-center gap-2 bg-background px-4 py-1.5 text-xs font-semibold text-muted-foreground"
+                >
+                  <span className="truncate">{g.label}</span>
+                  <span className="tabular-nums font-normal">{g.count}</span>
+                </h3>
+              </li>
+            ))}
+          </ul>
         ) : (
           <ul aria-label={`${meta.label} replies`} className="flex flex-col gap-0.5">
-            {items.map((item) => {
-              const key = itemKey(item);
-              return (
-                <Row
-                  key={key}
-                  item={item}
-                  selected={key === selectedKey}
-                  focused={key === focusedKey}
-                  highlighted={key === highlightKey}
-                  checkable={batchable && item.kind === 'draft'}
-                  checked={checked.has(item.id)}
-                  onOpen={() => onOpen(key)}
-                  onCheck={(v) => {
-                    const next = new Set(checked);
-                    if (v) next.add(item.id);
-                    else next.delete(item.id);
-                    onCheckedChange(next);
-                  }}
-                />
-              );
-            })}
+            {items.map(renderRow)}
           </ul>
         )}
       </div>

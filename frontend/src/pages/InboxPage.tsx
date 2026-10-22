@@ -10,6 +10,7 @@ import DismissMenu from '@/components/inbox/DismissMenu';
 import DraftedBanner from '@/components/inbox/DraftedBanner';
 import { focusEditor } from '@/components/inbox/DraftEditor';
 import InboxList, { itemKey } from '@/components/inbox/InboxList';
+import InboxListControls from '@/components/inbox/InboxListControls';
 import InboxRail from '@/components/inbox/InboxRail';
 import ReplyPane, { isSendable } from '@/components/inbox/ReplyPane';
 import ShortcutHelpDialog from '@/components/inbox/ShortcutHelpDialog';
@@ -24,7 +25,7 @@ import { fetchCandidate, fetchDraft, fetchInbox, type InboxView } from '@/lib/ap
 import { fetchLeverMe } from '@/lib/leverApi';
 import { prefetchAddToLever } from '@/lib/leverQueries';
 import { toastWarning } from '@/lib/toast';
-import { VIEWS, isInboxView, nextItemId } from '@/lib/inbox';
+import { VIEWS, groupByRole, isInboxView, nextItemId } from '@/lib/inbox';
 import { cn } from '@/lib/utils';
 
 export const INBOX_POLL_MS = 15_000;
@@ -58,7 +59,22 @@ function isTyping(el: Element | null): el is HTMLElement {
  */
 export default function InboxPage() {
   const qc = useQueryClient();
-  const { view, mailboxId, itemId, legacyCandidateId, setView, setItem, setPlace, resolveCandidate } = useInboxUrlState();
+  const {
+    view,
+    mailboxId,
+    itemId,
+    legacyCandidateId,
+    sort,
+    roles,
+    grouped,
+    setView,
+    setItem,
+    setPlace,
+    resolveCandidate,
+    setSort,
+    setRoles,
+    setGrouped,
+  } = useInboxUrlState();
 
   // H8: after a triage draft the URL already names the draft's new view (so a
   // refresh lands on it), but the list stays on the view being worked through.
@@ -80,11 +96,22 @@ export default function InboxPage() {
   );
 
   const inboxQ = useQuery({
-    queryKey: ['inbox', listView, mailboxId ?? null],
-    queryFn: () => fetchInbox({ view: listView, mailboxId }),
+    // ['inbox', view, …] prefix stays first: mutations invalidate ['inbox'].
+    queryKey: ['inbox', listView, mailboxId ?? null, sort, roles],
+    queryFn: () => fetchInbox({ view: listView, mailboxId, order: sort, role: roles.length ? roles : undefined }),
     refetchInterval: INBOX_POLL_MS,
+    placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[1] === listView ? prev : undefined),
   });
-  const items = useMemo(() => inboxQ.data?.data.items ?? [], [inboxQ.data]);
+  const roleCounts = useMemo(() => inboxQ.data?.data.roleCounts ?? [], [inboxQ.data]);
+  const groups = useMemo(
+    () => (grouped ? groupByRole(inboxQ.data?.data.items ?? [], roleCounts) : undefined),
+    [grouped, inboxQ.data, roleCounts]
+  );
+  // Display order: grouped sections flatten in order, so ↑/↓ walk across them.
+  const items = useMemo(
+    () => (groups ? groups.flatMap((g) => g.items) : (inboxQ.data?.data.items ?? [])),
+    [groups, inboxQ.data]
+  );
   const keys = useMemo(() => items.map(itemKey), [items]);
   const counts = inboxQ.data?.data.counts;
   const current = items.find((i) => itemKey(i) === itemId);
@@ -284,6 +311,19 @@ export default function InboxPage() {
           onCheckedChange={setChecked}
           onBatchSend={() => setBatchOpen(true)}
           header={mobileHeader}
+          groups={groups}
+          roleFiltered={roles.length > 0}
+          controls={
+            <InboxListControls
+              sort={sort}
+              onSortChange={setSort}
+              roles={roles}
+              onRolesChange={setRoles}
+              roleCounts={roleCounts}
+              grouped={grouped}
+              onGroupedChange={setGrouped}
+            />
+          }
         />
       </div>
 

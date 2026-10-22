@@ -165,8 +165,21 @@ export function installInbox(initial: InboxItem[], drafts: Record<string, Partia
     http.get('*/api/inbox', ({ request }) => {
       const url = new URL(request.url);
       const view = (url.searchParams.get('view') ?? 'needs_review') as InboxView;
-      const counts = Object.fromEntries(views.map((v) => [v, store.items.filter((i) => i.view === v).length]));
-      return ok({ items: store.items.filter((i) => i.view === view), counts, nextCursor: null });
+      const roles = url.searchParams.getAll('role');
+      const roleOf = (i: InboxItem) => i.candidate?.role?.trim() || null;
+      const roleOk = (i: InboxItem) =>
+        roles.length === 0 || roles.some((r) => (r === '__none__' ? roleOf(i) === null : r === roleOf(i)));
+      const inView = store.items.filter((i) => i.view === view);
+      const counts = Object.fromEntries(
+        views.map((v) => [v, store.items.filter((i) => i.view === v && (v !== view || roleOk(i))).length])
+      );
+      const roleCounts = [...new Set(inView.map(roleOf))].map((role) => ({
+        role,
+        count: inView.filter((i) => roleOf(i) === role).length,
+      }));
+      let items = inView.filter(roleOk);
+      if (url.searchParams.get('order') === 'oldest') items = [...items].reverse();
+      return ok({ items, counts, roleCounts, nextCursor: null });
     }),
     http.get('*/api/drafts/cc-options', () =>
       ok([

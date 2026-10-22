@@ -1,6 +1,7 @@
 import { Briefcase, Eye, Pencil } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { cn } from '@/lib/utils';
 import type { ConfidenceLabel, DraftPresenceEntry } from '@/lib/api';
 import { labelFor } from '@/lib/inbox';
 
@@ -59,10 +60,11 @@ export function RoleChip({ role }: { role: string | null | undefined }) {
       data-testid="role-chip"
       data-role-known={title ? 'true' : 'false'}
       aria-label={title ? `Role: ${title}` : 'Role unknown'}
-      className={title ? 'text-foreground' : 'border-dashed text-muted-foreground'}
+      // Shrinks before the meta line wraps, so rows keep their height.
+      className={cn('min-w-0 shrink justify-start', title ? 'text-foreground' : 'border-dashed text-muted-foreground')}
     >
       <Briefcase data-icon="inline-start" />
-      {text}
+      <span className="min-w-0 truncate">{text}</span>
     </Badge>
   );
   if (!tip) return chip;
