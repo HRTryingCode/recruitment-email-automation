@@ -98,7 +98,7 @@ function convertUtility(u) {
     u = u.slice(1);
   }
   // Tailwind 4 theme functions inside arbitrary values: `--spacing(6)`.
-  u = u.replace(/--spacing\(([\d.]+)\)/g, 'calc(0.25rem*$1)');
+  u = u.replace(/--spacing\(((?:[^()]|\([^()]*\))+)\)/g, 'calc(0.25rem*$1)');
   // `max-h-(--x)` → `max-h-[var(--x)]`; `-z-(--x)` likewise.
   u = u.replace(/^(-?[a-z-]+)-\((--[\w-]+)\)$/, '$1-[var($2)]');
   return important + u;
@@ -127,7 +127,7 @@ export function convertSource(source) {
     if (!/[:()!]/.test(body) || /^(@|\.|https?:)/.test(body)) return lit;
     const next = body
       .split(/(\s+)/)
-      .map((t) => (/^\s+$/.test(t) || !t || t.includes('${') ? t : convertToken(t)))
+      .map((t) => (/^\s+$/.test(t) || !t || t.includes('${') || /[A-Za-z]\.[A-Za-z]+\(/.test(t) ? t : convertToken(t)))
       .join('');
     return q + next + q;
   });

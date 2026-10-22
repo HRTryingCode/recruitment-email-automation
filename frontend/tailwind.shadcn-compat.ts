@@ -40,6 +40,8 @@ export default plugin(({ addVariant, addUtilities }) => {
   }
   addUtilities({
     '.outline-hidden': { outline: '2px solid transparent', 'outline-offset': '2px' },
+    '.field-sizing-content': { 'field-sizing': 'content' },
+    '.field-sizing-fixed': { 'field-sizing': 'fixed' },
     '.no-scrollbar': { '-ms-overflow-style': 'none', 'scrollbar-width': 'none' },
     '.no-scrollbar::-webkit-scrollbar': { display: 'none' },
   });
@@ -48,7 +50,7 @@ export default plugin(({ addVariant, addUtilities }) => {
 /** Theme scale entries Tailwind 4 has and Tailwind 3 lacks. */
 export const shadcnCompatTheme = {
   ringWidth: { 3: '3px' },
-  spacing: { 18: '4.5rem' },
+  spacing: { 9.5: '2.375rem', 18: '4.5rem' },
   zIndex: { 1: '1' },
   textUnderlineOffset: { 3: '3px' },
   boxShadow: { xs: '0 1px 2px 0 rgb(0 0 0 / 0.05)' },

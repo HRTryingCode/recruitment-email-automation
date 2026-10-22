@@ -36,7 +36,7 @@ export function candidateTokens(source) {
   for (const m of source.matchAll(/(["'`])((?:(?!\1)[^\\\n]|\\.)*)\1/g)) {
     for (const t of m[2].split(/\s+/)) {
       if (!t || t.includes('${') || t.startsWith('--') || t.startsWith('var(') || t.startsWith('@/') || t.startsWith('./') || t.startsWith('../')) continue;
-      if (/^(https?:|data-slot|aria-label|group\/|peer\/)/.test(t)) continue;
+      if (/^(https?:|data-slot|aria-label|group\/|peer\/)/.test(t) || /[A-Za-z]\.[A-Za-z]+\(/.test(t)) continue;
       if (/[:\[\]()!]/.test(t) || /^[a-z-]+\/[\w.]+$/.test(t) || TW4_BARE.test(t)) tokens.add(t);
     }
   }
