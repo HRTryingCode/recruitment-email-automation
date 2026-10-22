@@ -144,7 +144,7 @@ describe('fetchAndStoreMessage', () => {
       'msg-1'
     );
 
-    expect(stored).toBe(true);
+    expect(stored).toBe('stored');
     expect(mockPrisma.candidate.update).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'cand-1' } })
     );
