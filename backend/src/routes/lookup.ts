@@ -8,6 +8,7 @@ import {
   type LookupMessageRow,
   type SkipReason,
 } from '../lib/lookup';
+import { leverLookupIntegration, type LeverLookupIntegration } from '../services/leverLookup';
 
 const router = Router();
 
@@ -30,7 +31,7 @@ const SKIP_EVENTS: Record<string, SkipReason> = {
 
 /**
  * External-system status for the looked-up address, keyed by integration.
- * F1 always returns `{}`. Contract for integrations (F2 adds `lever`):
+ * Contract for integrations (`lever`: services/leverLookup.ts, F2):
  *   - each key is optional and absent when the integration is not configured;
  *   - a value is `{ status: 'FOUND' | 'NOT_FOUND' | 'ERROR', ... }` plus
  *     integration-specific display fields (no secrets, no raw API payloads);
@@ -38,7 +39,7 @@ const SKIP_EVENTS: Record<string, SkipReason> = {
  *     `{ status: 'ERROR', message }` under its key instead;
  *   - integrations are read-only (no writes to the external system).
  */
-export type LookupIntegrations = Record<string, never>;
+export type LookupIntegrations = { lever?: LeverLookupIntegration };
 
 // GET /api/lookup?email=<email>
 // "Do we know this person?" — Candidate row, message/draft metadata, recent
@@ -49,6 +50,8 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     if (!email) {
       return next(createError('email must be a single valid email address', 400));
     }
+    // Live Lever check, in parallel with the DB queries. Never rejects.
+    const leverP = leverLookupIntegration(email);
 
     const [candidate, rows] = await Promise.all([
       prisma.candidate.findFirst({
@@ -154,7 +157,8 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       now: new Date(),
     });
 
-    const integrations: LookupIntegrations = {};
+    const lever = await leverP;
+    const integrations: LookupIntegrations = lever ? { lever } : {};
 
     res.json({
       success: true,

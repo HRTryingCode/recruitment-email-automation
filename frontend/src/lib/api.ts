@@ -580,6 +580,7 @@ export interface LookupResult {
 export async function fetchLookup(email: string): Promise<SingleResponse<LookupResult>> {
   const res = await api.get('/lookup', { params: { email } });
   return res.data as SingleResponse<LookupResult>;
+}
 
 // ── Lever status (F2, read-only) ─────────────────────────────────────────
 export type LeverState = 'ACTIVE' | 'ARCHIVED' | 'HIRED' | 'NOT_FOUND' | 'ERROR';
