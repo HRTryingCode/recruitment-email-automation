@@ -20,3 +20,11 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
   (globalThis as { ResizeObserver: typeof ResizeObserverStub }).ResizeObserver =
     ResizeObserverStub;
 }
+
+// jsdom lacks the pointer-capture API Radix Select calls when opened by
+// pointer; stub it so the CC dropdown can be driven from tests.
+if (typeof Element !== 'undefined' && !Element.prototype.hasPointerCapture) {
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.setPointerCapture = () => {};
+  Element.prototype.releasePointerCapture = () => {};
+}

@@ -184,6 +184,9 @@ model EmailDraft {
   model              String?
   promptVersion      String?
   usage              Json?
+  /// CC this draft goes out with (F4). NULL = pre-F4 row: use the configured
+  /// default (DRAFT_CC_EMAIL). '' = the recruiter chose "No CC".
+  ccEmail            String?
   createdAt          DateTime    @default(now())
   updatedAt          DateTime    @updatedAt
 

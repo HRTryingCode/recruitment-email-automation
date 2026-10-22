@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { config } from '../config';
 import { fenceUntrusted, renderPlainTextAsHtml, replySubject, stripHeaderBreaks } from '../lib/draftBody';
+import { loopInSentence } from '../lib/handoffLoopIn';
 
 const client = new Anthropic({
   apiKey: config.anthropicApiKey,
@@ -159,7 +160,7 @@ export interface DraftReplyResult {
  */
 export const PROMPT_VERSIONS = {
   classify: 'classify-2026-10-22',
-  handoff: 'handoff-2026-10-22',
+  handoff: 'handoff-2026-10-22b',
   reply: 'reply-2026-10-22',
   rewrite: 'rewrite-2026-10-22',
 } as const;
@@ -522,17 +523,6 @@ export function getHandoffType(
   return 'coordinator';
 }
 
-function handoffInstruction(type: HandoffType, ccName: string, ccEmail: string): string {
-  switch (type) {
-    case 'coordinator':
-      return `I'm looping in ${ccName} (${ccEmail}) — she'll share more details about the position and get some time on the calendar.`;
-    case 'sofia_interviews':
-      return `I'm looping in ${ccName} (${ccEmail}) — she's the interviewer and will get something on the calendar with you.`;
-    case 'ethan_interviews_sofia_schedules':
-      return `I'm looping in ${ccName} (${ccEmail}) — she'll coordinate timing for the interview on both our ends.`;
-  }
-}
-
 export async function generateHandoffDraftReply(
   thread: ThreadContext & { ccName: string; ccEmail: string; handoffType?: HandoffType },
   caller: DraftCaller
@@ -548,7 +538,7 @@ export async function generateHandoffDraftReply(
   const firstName = deriveFirstName(caller);
   const candidateFirst = thread.candidateName.split(/\s+/)[0] ?? thread.candidateName;
   const handoffType = thread.handoffType ?? 'coordinator';
-  const loopInExample = handoffInstruction(handoffType, thread.ccName, thread.ccEmail);
+  const loopIn = loopInSentence(handoffType, thread.ccName);
 
   const model = config.claudeDraftModel;
   const response = await client.messages.create({
@@ -562,7 +552,7 @@ export async function generateHandoffDraftReply(
 
 The candidate replied to an outreach email. Your job is to write a SHORT, warm reply that:
 1. Briefly acknowledges or addresses anything specific the candidate said (a question about the role, a request for the JD, etc.) — but SKIP any mention of specific times or availability the candidate proposed, because ${firstName} does not know ${thread.ccName}'s calendar
-2. Loops in ${thread.ccName} using EXACTLY the phrasing provided below — do not paraphrase or change the meaning
+2. Loops in ${thread.ccName} using EXACTLY the sentence provided below, verbatim — do not paraphrase it, change it or add pronouns for ${thread.ccName}
 3. Does NOT over-explain or add filler — keep it to 2-3 sentences max
 
 Candidate name: ${thread.candidateName}
@@ -582,7 +572,7 @@ Respond with a JSON object in this exact format:
 Requirements:
 - Open with "Hi ${candidateFirst},"
 - Address any specific question/request from the candidate in one sentence if present; do NOT reference or confirm any specific times/dates the candidate mentioned; otherwise skip straight to the loop-in
-- Use this loop-in line (keep the wording close to this): "${loopInExample}"
+- Use this loop-in sentence verbatim, word for word, as its own paragraph: "${loopIn}"
 - Close with "Best," on its own line${thread.signatureHtml ? ' — the signature will be appended automatically, do not write a name after Best,' : `\n- Sign off as ${firstName}`}
 - Plain text and HTML must match in content`,
       },
