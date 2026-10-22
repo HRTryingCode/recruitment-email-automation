@@ -70,7 +70,35 @@ const cuidPattern = /^[a-z0-9]{20,30}$/;
 const draftListFilterSchema = z.object({
   status: z.enum(DRAFT_STATUSES).optional(),
   mailboxId: z.string().regex(cuidPattern, 'mailboxId must be a cuid').optional(),
+  expired: z.enum(['true', 'false']).optional(),
 });
+
+/**
+ * PENDING drafts older than this are treated as expired: they leave the
+ * review queue and are listed under ?expired=true instead (M16). Derived from
+ * createdAt, so there is no schema change.
+ */
+export const DRAFT_EXPIRY_DAYS = 21;
+const DRAFT_EXPIRY_MS = DRAFT_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
+
+/**
+ * Ids of PENDING drafts written before the candidate's latest recruiter reply
+ * (Candidate.repliedAt > draft.createdAt): the recruiter already answered
+ * outside the app, so the draft is stale. Prisma can't compare columns across
+ * relations, hence the raw SELECT. Drafts created *after* repliedAt (the
+ * candidate wrote again) stay visible (H5).
+ */
+async function stalePendingDraftIds(): Promise<string[]> {
+  const rows = await prisma.$queryRaw<Array<{ id: string }>>`
+    SELECT d.id
+    FROM "EmailDraft" d
+    JOIN "EmailThread" t ON t.id = d."threadId"
+    JOIN "Candidate" c ON c.id = t."candidateId"
+    WHERE d.status = 'PENDING'
+      AND c."repliedAt" IS NOT NULL
+      AND c."repliedAt" > d."createdAt"`;
+  return (rows ?? []).map((r) => r.id);
+}
 
 const draftWithThreadInclude = {
   thread: {
@@ -167,11 +195,12 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const filterParsed = draftListFilterSchema.safeParse({
       status: qs(req.query.status),
       mailboxId: qs(req.query.mailboxId),
+      expired: qs(req.query.expired),
     });
     if (!filterParsed.success) {
       return next(createError(filterParsed.error.errors[0]?.message ?? 'Invalid filter', 400));
     }
-    const { status, mailboxId } = filterParsed.data;
+    const { status, mailboxId, expired } = filterParsed.data;
     const paged = paginationSchema.safeParse({
       page: qs(req.query.page),
       limit: qs(req.query.limit),
@@ -186,17 +215,21 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     if (status) where.status = status;
     if (mailboxId) where.thread = { ...(where.thread as object), mailboxId };
 
-    // By default, hide PENDING drafts for candidates who have already been
-    // replied to (either via the app or directly from Gmail/Superhuman).
+    // Hide PENDING drafts the recruiter already answered outside the app.
     // APPROVED, SENT, and DISCARDED drafts are always shown — they represent
     // intentional recruiter actions and should never disappear from the UI.
     const includeReplied = qs(req.query.includeReplied) === 'true';
     const isPendingOnlyView = !status || status === 'PENDING';
     if (!includeReplied && isPendingOnlyView) {
-      where.thread = {
-        ...(where.thread as object),
-        candidate: { repliedAt: null },
-      };
+      const staleIds = await stalePendingDraftIds();
+      if (staleIds.length > 0) where.id = { notIn: staleIds };
+    }
+
+    // Expiry: the PENDING queue holds drafts younger than DRAFT_EXPIRY_DAYS;
+    // older ones are served separately under ?expired=true (M16).
+    if (status === 'PENDING') {
+      const cutoff = new Date(Date.now() - DRAFT_EXPIRY_MS);
+      where.createdAt = expired === 'true' ? { lt: cutoff } : { gte: cutoff };
     }
 
     const [drafts, total] = await Promise.all([
@@ -205,6 +238,8 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
         include: {
           thread: {
             include: {
+              // Metadata only: bodies for the whole thread were ~3.6 MB per
+              // list load (L14). The reply target's body is fetched below.
               messages: {
                 orderBy: { receivedAt: 'desc' },
                 select: {
@@ -213,8 +248,6 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
                   fromAddress: true,
                   fromName: true,
                   subject: true,
-                  bodyText: true,
-                  bodyHtml: true,
                   receivedAt: true,
                 },
               },
@@ -234,16 +267,33 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       prisma.emailDraft.count({ where }),
     ]);
 
-    const data = drafts.map((draft) => {
-      const originalMessage = pickOriginalMessage(
-        draft.thread.messages,
+    const originals = drafts.map((draft) =>
+      pickOriginalMessage(
+        draft.thread.messages.map((m) => ({ ...m, bodyText: null, bodyHtml: null })),
         draft.thread.mailbox,
         draft.inReplyToMessageId
-      );
+      )
+    );
+    const originalIds = [...new Set(originals.flatMap((o) => (o ? [o.id] : [])))];
+    const bodies = originalIds.length
+      ? await prisma.emailMessage.findMany({
+          where: { id: { in: originalIds } },
+          select: { id: true, bodyText: true, bodyHtml: true },
+        })
+      : [];
+    const bodyById = new Map(bodies.map((b) => [b.id, b]));
+
+    const data = drafts.map((draft, i) => {
+      const picked = originals[i];
+      const body = picked ? bodyById.get(picked.id) : undefined;
+      const originalMessage = picked
+        ? { ...picked, bodyText: body?.bodyText ?? null, bodyHtml: body?.bodyHtml ?? null }
+        : null;
       // Drop the bulk-fetched messages from the wire payload — the list view
       // only needs the resolved originalMessage.
       const { messages: _messages, ...threadRest } = draft.thread;
-      return { ...draft, thread: threadRest, originalMessage };
+      const expiresAt = new Date(new Date(draft.createdAt).getTime() + DRAFT_EXPIRY_MS);
+      return { ...draft, thread: threadRest, originalMessage, expiresAt };
     });
 
     res.json({ success: true, data, meta: { total, page, limit } });

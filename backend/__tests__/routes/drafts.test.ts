@@ -143,6 +143,9 @@ describe('/api/drafts', () => {
         },
       ]);
       mockPrisma.emailDraft.count.mockResolvedValueOnce(1);
+      mockPrisma.emailMessage.findMany.mockResolvedValueOnce([
+        { id: 'msg-1', bodyText: 'hi', bodyHtml: null },
+      ]);
 
       const res = await request(app)
         .get('/api/drafts?page=1&limit=10')
@@ -156,7 +159,114 @@ describe('/api/drafts', () => {
       expect(res.body.data[0].thread.messages).toBeUndefined();
       expect(res.body.data[0].originalMessage).toMatchObject({
         fromAddress: 'a@example.com',
+        bodyText: 'hi',
       });
+    });
+  });
+
+  describe('GET /api/drafts filtering (H5 / M16 / L14)', () => {
+    const DAY = 24 * 60 * 60 * 1000;
+
+    function listRow(id: string, createdAt: Date) {
+      return {
+        id,
+        status: 'PENDING',
+        subject: 'Re: opportunity',
+        createdAt,
+        inReplyToMessageId: null,
+        thread: {
+          id: 'thread-1',
+          mailbox: { ...baseMailbox },
+          candidate: { id: 'cand-1', name: 'A', email: 'a@example.com' },
+          messages: [
+            {
+              id: 'msg-1',
+              externalMessageId: 'gm-1',
+              fromAddress: 'a@example.com',
+              fromName: 'A',
+              subject: 'opportunity',
+              receivedAt: createdAt,
+            },
+          ],
+        },
+      };
+    }
+
+    function lastFindManyWhere() {
+      return mockPrisma.emailDraft.findMany.mock.calls.at(-1)![0].where;
+    }
+
+    it('shows every SENT draft: no replied-at filter on the Sent tab', async () => {
+      mockPrisma.emailDraft.findMany.mockResolvedValueOnce([]);
+      mockPrisma.emailDraft.count.mockResolvedValueOnce(0);
+
+      await request(app).get('/api/drafts?status=SENT').set('Authorization', AUTH).expect(200);
+
+      const where = lastFindManyWhere();
+      expect(where.status).toBe('SENT');
+      expect(JSON.stringify(where)).not.toContain('repliedAt');
+      expect(where.id).toBeUndefined();
+      expect(mockPrisma.$queryRaw).not.toHaveBeenCalled();
+    });
+
+    it('hides only PENDING drafts that predate the candidate\'s last reply, not every replied candidate', async () => {
+      mockPrisma.$queryRaw.mockResolvedValueOnce([{ id: 'stale-1' }, { id: 'stale-2' }]);
+      mockPrisma.emailDraft.findMany.mockResolvedValueOnce([]);
+      mockPrisma.emailDraft.count.mockResolvedValueOnce(0);
+
+      await request(app).get('/api/drafts?status=PENDING').set('Authorization', AUTH).expect(200);
+
+      const where = lastFindManyWhere();
+      expect(JSON.stringify(where)).not.toContain('repliedAt');
+      expect(where.id).toEqual({ notIn: ['stale-1', 'stale-2'] });
+    });
+
+    it('keeps drafts older than 21 days out of the PENDING queue and returns them under expired=true', async () => {
+      mockPrisma.$queryRaw.mockResolvedValue([]);
+      mockPrisma.emailDraft.findMany.mockResolvedValue([]);
+      mockPrisma.emailDraft.count.mockResolvedValue(0);
+      const before = Date.now();
+
+      await request(app).get('/api/drafts?status=PENDING').set('Authorization', AUTH).expect(200);
+      const pendingCutoff = lastFindManyWhere().createdAt.gte as Date;
+      expect(Math.abs(new Date(pendingCutoff).getTime() - (before - 21 * DAY))).toBeLessThan(5000);
+
+      await request(app).get('/api/drafts?status=PENDING&expired=true').set('Authorization', AUTH).expect(200);
+      const expiredWhere = lastFindManyWhere();
+      expect(expiredWhere.status).toBe('PENDING');
+      expect(expiredWhere.createdAt.lt).toBeDefined();
+    });
+
+    it('annotates each draft with expiresAt (createdAt + 21 days)', async () => {
+      const created = new Date(Date.now() - 2 * DAY);
+      mockPrisma.$queryRaw.mockResolvedValueOnce([]);
+      mockPrisma.emailDraft.findMany.mockResolvedValueOnce([listRow('draft-1', created)]);
+      mockPrisma.emailDraft.count.mockResolvedValueOnce(1);
+      mockPrisma.emailMessage.findMany.mockResolvedValueOnce([]);
+
+      const res = await request(app).get('/api/drafts?status=PENDING').set('Authorization', AUTH).expect(200);
+      expect(res.body.data[0].expiresAt).toBe(new Date(created.getTime() + 21 * DAY).toISOString());
+    });
+
+    it('does not bulk-load message bodies; fetches the body of the reply target only', async () => {
+      const created = new Date();
+      mockPrisma.$queryRaw.mockResolvedValueOnce([]);
+      mockPrisma.emailDraft.findMany.mockResolvedValueOnce([listRow('draft-1', created)]);
+      mockPrisma.emailDraft.count.mockResolvedValueOnce(1);
+      mockPrisma.emailMessage.findMany.mockResolvedValueOnce([
+        { id: 'msg-1', bodyText: 'hello there', bodyHtml: null },
+      ]);
+
+      const res = await request(app).get('/api/drafts?status=PENDING').set('Authorization', AUTH).expect(200);
+
+      const include = mockPrisma.emailDraft.findMany.mock.calls.at(-1)![0].include;
+      const msgSelect = include.thread.include.messages.select;
+      expect(msgSelect.bodyText).toBeUndefined();
+      expect(msgSelect.bodyHtml).toBeUndefined();
+      expect(mockPrisma.emailMessage.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: { in: ['msg-1'] } } })
+      );
+      expect(res.body.data[0].originalMessage).toMatchObject({ id: 'msg-1', bodyText: 'hello there' });
     });
   });
 
