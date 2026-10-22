@@ -10,59 +10,59 @@ import { prisma as injectedPrisma } from '../../src/db/client';
 import { listCcOptions, ccFirstName, resolveDraftCc, NO_CC } from '../../src/services/draftCc.service';
 const mockPrisma = injectedPrisma as unknown as MockPrisma;
 
+const ORIGINAL_OPTIONS = process.env.DRAFT_CC_OPTIONS;
 const ORIGINAL_ADMINS = process.env.ADMIN_EMAILS;
 
 describe('listCcOptions', () => {
   beforeEach(() => {
     resetPrismaMock(mockPrisma);
-    process.env.ADMIN_EMAILS = 'Sofia@archive.com, ethan@archive.com,andriy.korzhenevskyy@archive.com';
-    mockPrisma.user.findMany.mockResolvedValue([
-      { email: 'catalina.roman@archive.com', name: 'Catalina Roman' },
-      { email: 'ethan@archive.com', name: null },
-    ]);
+    // Prod values: the recruitment team, and a wider admin list that must NOT leak in.
+    process.env.DRAFT_CC_OPTIONS = 'Sofia@archive.com, andriy.korzhenevskyy@archive.com,catalina.roman@archive.com,sofia@archive.com';
+    process.env.ADMIN_EMAILS = 'sofia@archive.com,ethan@archive.com';
+    mockPrisma.user.findMany.mockResolvedValue([{ email: 'catalina.roman@archive.com', name: 'Catalina Roman' }]);
     mockPrisma.mailbox.findMany.mockResolvedValue([
-      { emailAddress: 'ethan@archive.com', displayName: 'Ethan Maenza' },
       { emailAddress: 'sofia@archive.com', displayName: 'Sofia Delgado' },
+      { emailAddress: 'catalina.roman@archive.com', displayName: 'Cat R' },
     ]);
   });
   afterEach(() => {
+    process.env.DRAFT_CC_OPTIONS = ORIGINAL_OPTIONS;
     process.env.ADMIN_EMAILS = ORIGINAL_ADMINS;
   });
 
-  it('unions admin users and ADMIN_EMAILS, deduped case-insensitively', async () => {
+  it('offers exactly DRAFT_CC_OPTIONS, deduped case-insensitively', async () => {
     const opts = await listCcOptions();
     expect(opts.map((o) => o.email).sort()).toEqual([
       'andriy.korzhenevskyy@archive.com',
       'catalina.roman@archive.com',
-      'ethan@archive.com',
       'sofia@archive.com',
     ]);
-    expect(mockPrisma.user.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { role: 'admin' } })
-    );
+  });
+
+  it('never offers an admin who is not on the recruitment team', async () => {
+    const opts = await listCcOptions();
+    expect(opts.map((o) => o.email)).not.toContain('ethan@archive.com');
   });
 
   it('names come from User.name, then Mailbox.displayName, then the local-part', async () => {
     const byEmail = Object.fromEntries((await listCcOptions()).map((o) => [o.email, o]));
     expect(byEmail['catalina.roman@archive.com']).toMatchObject({ name: 'Catalina Roman', firstName: 'Catalina' });
-    expect(byEmail['ethan@archive.com']).toMatchObject({ name: 'Ethan Maenza', firstName: 'Ethan' });
+    expect(byEmail['sofia@archive.com']).toMatchObject({ name: 'Sofia Delgado', firstName: 'Sofia' });
     expect(byEmail['andriy.korzhenevskyy@archive.com']).toMatchObject({
       name: 'andriy.korzhenevskyy',
       firstName: 'Andriy',
     });
   });
 
-  it('includes the configured default CC even when it is not an admin', async () => {
-    process.env.ADMIN_EMAILS = '';
-    mockPrisma.user.findMany.mockResolvedValue([]);
-    const opts = await listCcOptions();
-    expect(opts.map((o) => o.email)).toEqual(['sofia@archive.com']);
+  it('falls back to the configured default CC when DRAFT_CC_OPTIONS is unset', async () => {
+    delete process.env.DRAFT_CC_OPTIONS;
+    expect((await listCcOptions()).map((o) => o.email)).toEqual(['sofia@archive.com']);
   });
 
   it('excludes the draft mailbox owner', async () => {
-    const opts = await listCcOptions({ excludeEmail: 'ETHAN@archive.com' });
-    expect(opts.map((o) => o.email)).not.toContain('ethan@archive.com');
-    expect(opts).toHaveLength(3);
+    const opts = await listCcOptions({ excludeEmail: 'SOFIA@archive.com' });
+    expect(opts.map((o) => o.email)).not.toContain('sofia@archive.com');
+    expect(opts).toHaveLength(2);
   });
 });
 

@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import type { EmailDraft, OriginalMessage } from '../lib/api';
 import { toastError } from '../lib/toast';
+import DraftCcSelect from './DraftCcSelect';
 
 // Minimal typings for Web Speech API (not in all TS lib targets)
 interface SpeechRecognitionResult {
@@ -58,6 +59,8 @@ interface Props {
   onDiscard: (id: string) => void;
   onSend: (id: string) => void;
   onUpdate: (id: string, body: string) => void;
+  /** Change who the draft CCs (null = No CC). */
+  onChangeCc?: (id: string, ccEmail: string | null) => void;
   onRegenerate: (id: string) => void;
   onDictate: (id: string, notes: string) => void;
   regenerating: boolean;
@@ -231,6 +234,7 @@ export default function DraftReviewPane({
   onDiscard,
   onSend,
   onUpdate,
+  onChangeCc,
   onRegenerate,
   onDictate,
   regenerating,
@@ -482,14 +486,10 @@ export default function DraftReviewPane({
                   <span className="inline-block h-px w-3 bg-accent-500/70" />
                   Your reply
                 </p>
-                {draft.ccAddress && (
-                  <p className="mb-2 text-[11px] text-fg-subtle">
-                    Will Cc{' '}
-                    <span className="font-mono text-fg-muted">
-                      {draft.ccAddress}
-                    </span>
-                  </p>
-                )}
+                <DraftCcSelect
+                  draft={draft}
+                  onChange={(ccEmail) => onChangeCc?.(draft.id, ccEmail)}
+                />
                 {editing ? (
                   <div className="flex flex-col gap-3">
                     <textarea

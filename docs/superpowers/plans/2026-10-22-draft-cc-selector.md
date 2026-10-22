@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Migration folder `backend/prisma/migrations/9e_draft_cc`, additive only: `ALTER TABLE "EmailDraft" ADD COLUMN "ccEmail" TEXT;` No backfill.
-- Options = Users with `role = 'admin'` ∪ `ADMIN_EMAILS` (∪ `config.draftCcEmail`, the default), lowercased, deduped; name = `User.name` → `Mailbox.displayName` → local-part; firstName = first token. Plus a "No CC" option (`email: null`).
+- Options = env `DRAFT_CC_OPTIONS` (recruitment team; scope change 2026-10-22 — NOT admins/ADMIN_EMAILS), fallback `[config.draftCcEmail]`, lowercased, deduped; name = `User.name` → `Mailbox.displayName` → local-part; firstName = first token. Plus a "No CC" option (`email: null`).
 - Never CC the mailbox owner — evaluated against the selected CC.
 - `ccEmail` changes allowed only on PENDING or APPROVED (unsent) drafts; APPROVED drafts accept `ccEmail` only (no body/subject edits). Invalid address → 400.
 - Loop-in phrasing is pronoun-free: `I'm looping in {Name} from the recruitment team here, who will …`. Never " she" / " he ".
@@ -55,7 +55,7 @@
 - `ccFirstName(email: string): Promise<string>`
 - `resolveDraftCc(stored: string | null | undefined, ownerEmail: string): string | null` — null/undefined → `draftCcAddressFor` logic (config default, owner-excluded); `''` → null; else stored unless it equals owner.
 
-- [ ] Tests: union of admin users + ADMIN_EMAILS + default, case-insensitive dedupe; name precedence User.name > Mailbox.displayName > local-part; excludeEmail drops owner; resolveDraftCc cases (null legacy, '', owner, other).
+- [ ] Tests: exactly DRAFT_CC_OPTIONS (an admin like ethan@ not offered), fallback to default, case-insensitive dedupe; name precedence User.name > Mailbox.displayName > local-part; excludeEmail drops owner; resolveDraftCc cases (null legacy, '', owner, other).
 - [ ] Fail → implement → pass → commit.
 
 ### Task 3: Migration + MIME uses stored CC + hand-off generation

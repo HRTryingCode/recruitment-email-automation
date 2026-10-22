@@ -11,6 +11,13 @@ export function toastSuccess(message: string, description?: string) {
   });
 }
 
+export function toastWarning(message: string, description?: string) {
+  return sonner.warning(message, {
+    description,
+    duration: ERROR_DURATION,
+  });
+}
+
 export function toastError(message: string, description?: string) {
   return sonner.error(message, {
     description,

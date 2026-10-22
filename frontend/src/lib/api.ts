@@ -142,6 +142,8 @@ export interface EmailDraft {
   originalMessage?: OriginalMessage | null;
   /** Address createDraft will CC (null when none) — served by the API. */
   ccAddress?: string | null;
+  /** Stored CC choice: null = default (pre-F4), '' = "No CC". Use ccAddress for display. */
+  ccEmail?: string | null;
   /** PENDING drafts move to the Expired bucket after this (createdAt + 21d). */
   expiresAt?: string;
 }
@@ -326,12 +328,32 @@ export async function fetchDraft(id: string): Promise<SingleResponse<EmailDraft>
   return res.data as SingleResponse<EmailDraft>;
 }
 
+export interface CcChange {
+  ccAddress: string | null;
+  firstName: string | null;
+  /** 'not_found' = the loop-in sentence was reworded; the recruiter must rename by hand. */
+  loopIn: 'updated' | 'not_found' | 'not_handoff';
+  handoffWithoutCc: boolean;
+}
+
 export async function updateDraft(
   id: string,
-  data: { bodyText?: string; bodyHtml?: string | null; subject?: string }
-): Promise<SingleResponse<EmailDraft>> {
+  data: { bodyText?: string; bodyHtml?: string | null; subject?: string; ccEmail?: string | null }
+): Promise<SingleResponse<EmailDraft> & { ccChange?: CcChange }> {
   const res = await api.patch(`/drafts/${id}`, data);
-  return res.data as SingleResponse<EmailDraft>;
+  return res.data as SingleResponse<EmailDraft> & { ccChange?: CcChange };
+}
+
+/** Someone a draft can CC; `email: null` is the "No CC" choice. */
+export interface CcOption {
+  email: string | null;
+  name: string;
+  firstName: string | null;
+}
+
+export async function fetchDraftCcOptions(draftId?: string): Promise<{ success: boolean; data: CcOption[] }> {
+  const res = await api.get('/drafts/cc-options', { params: draftId ? { draftId } : undefined });
+  return res.data as { success: boolean; data: CcOption[] };
 }
 
 export async function approveDraft(id: string): Promise<{ success: boolean; message: string }> {

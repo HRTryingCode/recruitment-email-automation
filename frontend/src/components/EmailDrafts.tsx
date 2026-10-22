@@ -26,6 +26,7 @@ import {
 import { cn, formatTimeAgo } from '../lib/utils';
 import {
   toastSuccess,
+  toastWarning,
   toastError,
   toastLoading,
   dismissToast,
@@ -479,6 +480,47 @@ export default function EmailDrafts({ mailboxId }: Props) {
     },
   });
 
+  // F4: change who a draft CCs. Optimistic on the CC; the server's reply
+  // carries the re-rendered hand-off body ("I'm looping in <name> …").
+  type DraftsPage = { success: boolean; data: EmailDraft[]; meta: unknown };
+  const patchCachedDraft = (id: string, patch: Partial<EmailDraft>) =>
+    queryClient.setQueriesData<DraftsPage>({ queryKey: ['drafts'] }, (old) =>
+      old ? { ...old, data: old.data.map((d) => (d.id === id ? { ...d, ...patch } : d)) } : old
+    );
+  const ccMutation = useMutation({
+    mutationFn: ({ id, ccEmail }: { id: string; ccEmail: string | null }) =>
+      updateDraft(id, { ccEmail }),
+    onMutate: async ({ id, ccEmail }) => {
+      await queryClient.cancelQueries({ queryKey: ['drafts'] });
+      const snapshot = queryClient.getQueriesData<DraftsPage>({ queryKey: ['drafts'] });
+      patchCachedDraft(id, { ccAddress: ccEmail, ccEmail: ccEmail ?? '' });
+      return { snapshot };
+    },
+    onSuccess: (response) => {
+      const updated = response.data;
+      patchCachedDraft(updated.id, {
+        ccAddress: updated.ccAddress ?? null,
+        ccEmail: updated.ccEmail,
+        bodyText: updated.bodyText,
+        bodyHtml: updated.bodyHtml,
+        updatedAt: updated.updatedAt,
+      });
+      const change = response.ccChange;
+      toastSuccess(change?.firstName ? `CC changed to ${change.firstName}` : 'CC removed');
+      if (change?.loopIn === 'not_found') {
+        toastWarning("Update the name in the email body — we couldn't do it automatically");
+      }
+      if (change?.handoffWithoutCc) {
+        toastWarning('No one is CC\'d, but the email still says you\'re looping someone in', 'Pick a CC or edit the body.');
+      }
+      void queryClient.invalidateQueries({ queryKey: ['drafts'] });
+    },
+    onError: (err, _vars, context) => {
+      for (const [key, data] of context?.snapshot ?? []) queryClient.setQueryData(key, data);
+      toastError('Could not change the CC', extractApiErrorMessage(err, 'Please try again.'));
+    },
+  });
+
   const regenerateLoadingToastRef = useRef<string | number | null>(null);
   const regenerateMutation = useMutation({
     mutationFn: (id: string) => {
@@ -763,6 +805,7 @@ export default function EmailDrafts({ mailboxId }: Props) {
         onDiscard={(id) => discardMutation.mutate(id)}
         onSend={(id) => sendMutation.mutate(id)}
         onUpdate={(id, bodyText) => updateMutation.mutate({ id, bodyText })}
+        onChangeCc={(id, ccEmail) => ccMutation.mutate({ id, ccEmail })}
         onRegenerate={(id) => regenerateMutation.mutate(id)}
         onDictate={(id, notes) => dictateMutation.mutate({ id, notes })}
         regenerating={

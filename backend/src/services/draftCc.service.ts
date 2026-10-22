@@ -3,7 +3,6 @@
 // NO_CC ('') = the recruiter chose "No CC"; otherwise the address.
 import { prisma } from '../db/client';
 import { config } from '../config';
-import { adminEmails } from '../lib/accessPolicy';
 
 export const NO_CC = '';
 
@@ -25,38 +24,43 @@ function firstNameOf(name: string | null | undefined, email: string): string {
 }
 
 /**
- * Everyone a draft may CC: admin users ∪ ADMIN_EMAILS ∪ the configured
- * default, deduped case-insensitively and sorted by name. `excludeEmail`
- * (the draft's mailbox owner) is left out — a mailbox never CCs itself.
+ * DRAFT_CC_OPTIONS: comma-separated addresses a draft may CC — the
+ * recruitment team, not every admin. Unset/empty falls back to the configured
+ * default CC alone. Read per call so a Vercel env change needs no deploy.
+ */
+export function draftCcOptionEmails(): string[] {
+  const raw = (process.env.DRAFT_CC_OPTIONS ?? '')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+  const list = raw.length ? raw : [config.draftCcEmail.trim().toLowerCase()].filter(Boolean);
+  return [...new Set(list)];
+}
+
+/**
+ * Everyone a draft may CC (DRAFT_CC_OPTIONS), sorted by name.
+ * `excludeEmail` (the draft's mailbox owner) is left out — a mailbox never
+ * CCs itself.
  */
 export async function listCcOptions(opts: { excludeEmail?: string } = {}): Promise<CcOption[]> {
-  const admins = await prisma.user.findMany({
-    where: { role: 'admin' },
-    select: { email: true, name: true },
-  });
-  const nameByEmail = new Map<string, string | null>();
-  for (const u of admins) nameByEmail.set(u.email.trim().toLowerCase(), u.name ?? null);
-  for (const e of [...adminEmails(), config.draftCcEmail.trim().toLowerCase()]) {
-    if (e && !nameByEmail.has(e)) nameByEmail.set(e, null);
-  }
   const exclude = opts.excludeEmail?.trim().toLowerCase();
-  if (exclude) nameByEmail.delete(exclude);
+  const emails = draftCcOptionEmails().filter((e) => e !== exclude);
+  if (!emails.length) return [];
 
-  const emails = [...nameByEmail.keys()];
-  const mailboxes = emails.length
-    ? await prisma.mailbox.findMany({
-        where: { emailAddress: { in: emails } },
-        select: { emailAddress: true, displayName: true },
-      })
-    : [];
-  const displayByEmail = new Map(
-    mailboxes.map((m) => [m.emailAddress.toLowerCase(), m.displayName?.trim() || null])
-  );
+  const [users, mailboxes] = await Promise.all([
+    prisma.user.findMany({ where: { email: { in: emails } }, select: { email: true, name: true } }),
+    prisma.mailbox.findMany({
+      where: { emailAddress: { in: emails } },
+      select: { emailAddress: true, displayName: true },
+    }),
+  ]);
+  const userName = new Map(users.map((u) => [u.email.toLowerCase(), u.name?.trim() || null]));
+  const displayName = new Map(mailboxes.map((m) => [m.emailAddress.toLowerCase(), m.displayName?.trim() || null]));
 
   return emails
     .map((email) => {
-      const name = nameByEmail.get(email)?.trim() || displayByEmail.get(email) || localPart(email);
-      return { email, name, firstName: firstNameOf(name === localPart(email) ? null : name, email) };
+      const known = userName.get(email) || displayName.get(email);
+      return { email, name: known || localPart(email), firstName: firstNameOf(known, email) };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
 }

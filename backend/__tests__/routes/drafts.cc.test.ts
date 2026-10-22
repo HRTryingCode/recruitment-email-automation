@@ -61,7 +61,6 @@ const thread = {
 };
 
 const USERS: Record<string, { name: string | null }> = {
-  'ethan@archive.com': { name: 'Ethan Maenza' },
   'catalina.roman@archive.com': { name: 'Catalina Roman' },
   'sofia@archive.com': { name: 'Sofia Delgado' },
 };
@@ -109,13 +108,16 @@ function handoffBody(type: HandoffType, name: string): string {
   return `Hi Jane,\n\nThanks for getting back to me.\n\n${loopInSentence(type, name)}\n\nBest,\n${SIGNATURE_PLAIN}`;
 }
 
+const ORIGINAL_OPTIONS = process.env.DRAFT_CC_OPTIONS;
 const ORIGINAL_ADMINS = process.env.ADMIN_EMAILS;
+const RECRUITMENT_TEAM = 'sofia@archive.com,andriy.korzhenevskyy@archive.com,catalina.roman@archive.com';
 let app: Awaited<ReturnType<typeof loadApp>>;
 
 beforeEach(async () => {
   resetPrismaMock(mockPrisma);
-  process.env.ADMIN_EMAILS =
-    'sofia@archive.com,andriy.korzhenevskyy@archive.com,catalina.roman@archive.com,ethan@archive.com';
+  process.env.DRAFT_CC_OPTIONS = RECRUITMENT_TEAM;
+  // Ethan is an admin but not on the recruitment team: never a CC option.
+  process.env.ADMIN_EMAILS = `${RECRUITMENT_TEAM},ethan@archive.com`;
   draftsCreate.mockReset().mockResolvedValue({ data: { id: 'gmail-draft-1' } });
   draftsUpdate.mockReset().mockResolvedValue({ data: { id: 'gmail-draft-1' } });
   draftsSend.mockReset().mockResolvedValue({ data: {} });
@@ -135,15 +137,16 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  process.env.DRAFT_CC_OPTIONS = ORIGINAL_OPTIONS;
   process.env.ADMIN_EMAILS = ORIGINAL_ADMINS;
 });
 
 describe('approve/send MIME uses the draft\'s stored CC', () => {
   it('stored ccEmail replaces the default Cc header', async () => {
-    installDraftStore({ status: 'PENDING', bodyText: 'Hi', bodyHtml: '<div>Hi</div>', ccEmail: 'ethan@archive.com' });
+    installDraftStore({ status: 'PENDING', bodyText: 'Hi', bodyHtml: '<div>Hi</div>', ccEmail: 'catalina.roman@archive.com' });
     await request(app).post('/api/drafts/draft-1/approve').set('Authorization', AUTH).expect(200);
     const headers = headersOf(draftsCreate.mock.calls.at(-1)![0].requestBody.message.raw);
-    expect(headers).toContain('Cc: ethan@archive.com');
+    expect(headers).toContain('Cc: catalina.roman@archive.com');
     expect(headers.join('\n')).not.toContain('sofia@archive.com');
   });
 
@@ -169,41 +172,38 @@ describe('approve/send MIME uses the draft\'s stored CC', () => {
   });
 
   it('GET /api/drafts/:id serves the stored CC as ccAddress', async () => {
-    installDraftStore({ status: 'PENDING', bodyText: 'Hi', ccEmail: 'ethan@archive.com' });
+    installDraftStore({ status: 'PENDING', bodyText: 'Hi', ccEmail: 'catalina.roman@archive.com' });
     mockPrisma.emailDraft.findUnique.mockResolvedValueOnce({
       id: 'draft-1',
       status: 'PENDING',
-      ccEmail: 'ethan@archive.com',
+      ccEmail: 'catalina.roman@archive.com',
       inReplyToMessageId: null,
       thread: { ...thread, messages: [] },
     });
     const res = await request(app).get('/api/drafts/draft-1').set('Authorization', AUTH).expect(200);
-    expect(res.body.data.ccAddress).toBe('ethan@archive.com');
+    expect(res.body.data.ccAddress).toBe('catalina.roman@archive.com');
   });
 });
 
 describe('GET /api/drafts/cc-options', () => {
-  it('returns No CC plus admins (DB role ∪ ADMIN_EMAILS), deduped, with names', async () => {
-    mockPrisma.user.findMany.mockResolvedValue([
-      { email: 'ethan@archive.com', name: 'Ethan Maenza' },
-      { email: 'pat@archive.com', name: 'Pat Admin' },
-    ]);
+  it('returns No CC plus the recruitment team (DRAFT_CC_OPTIONS), with names', async () => {
+    mockPrisma.user.findMany.mockResolvedValue([{ email: 'catalina.roman@archive.com', name: 'Catalina Roman' }]);
     mockPrisma.mailbox.findMany.mockResolvedValue([{ emailAddress: 'sofia@archive.com', displayName: 'Sofia Delgado' }]);
     const res = await request(app).get('/api/drafts/cc-options').set('Authorization', AUTH).expect(200);
     expect(res.body.data[0]).toEqual({ email: null, name: 'No CC', firstName: null });
     const emails = res.body.data.slice(1).map((o: { email: string }) => o.email).sort();
-    expect(emails).toEqual([
-      'andriy.korzhenevskyy@archive.com',
-      'catalina.roman@archive.com',
-      'ethan@archive.com',
-      'pat@archive.com',
-      'sofia@archive.com',
-    ]);
+    expect(emails).toEqual(['andriy.korzhenevskyy@archive.com', 'catalina.roman@archive.com', 'sofia@archive.com']);
     expect(res.body.data.find((o: { email: string }) => o.email === 'sofia@archive.com').name).toBe('Sofia Delgado');
   });
 
+  it('does not offer an admin who is not on the recruitment team', async () => {
+    mockPrisma.user.findMany.mockResolvedValue([{ email: 'ethan@archive.com', name: 'Ethan Maenza', role: 'admin' }]);
+    const res = await request(app).get('/api/drafts/cc-options').set('Authorization', AUTH).expect(200);
+    expect(res.body.data.map((o: { email: string | null }) => o.email)).not.toContain('ethan@archive.com');
+  });
+
   it('?draftId= leaves out the draft mailbox owner', async () => {
-    process.env.ADMIN_EMAILS = 'sofia@archive.com,aaron@archive.com';
+    process.env.DRAFT_CC_OPTIONS = 'sofia@archive.com,aaron@archive.com';
     installDraftStore({ status: 'PENDING', bodyText: 'Hi' });
     const res = await request(app)
       .get('/api/drafts/cc-options?draftId=draft-1')
@@ -223,11 +223,11 @@ describe('PATCH /api/drafts/:id { ccEmail }', () => {
     const res = await request(app)
       .patch('/api/drafts/draft-1')
       .set('Authorization', AUTH)
-      .send({ ccEmail: 'Ethan@archive.com' })
+      .send({ ccEmail: 'Catalina.Roman@archive.com' })
       .expect(200);
-    expect(store.get().ccEmail).toBe('ethan@archive.com');
-    expect(res.body.data.ccAddress).toBe('ethan@archive.com');
-    expect(res.body.ccChange).toMatchObject({ ccAddress: 'ethan@archive.com', firstName: 'Ethan', loopIn: 'not_handoff' });
+    expect(store.get().ccEmail).toBe('catalina.roman@archive.com');
+    expect(res.body.data.ccAddress).toBe('catalina.roman@archive.com');
+    expect(res.body.ccChange).toMatchObject({ ccAddress: 'catalina.roman@archive.com', firstName: 'Catalina', loopIn: 'not_handoff' });
     expect(store.get().bodyText).toBe('Hi Jane');
   });
 
@@ -245,15 +245,21 @@ describe('PATCH /api/drafts/:id { ccEmail }', () => {
     expect(store.get().ccEmail).toBe('sofia@archive.com');
   });
 
+  it('400s on an admin who is not on the recruitment team (ethan@archive.com)', async () => {
+    const store = installDraftStore({ status: 'PENDING', bodyText: 'Hi', ccEmail: 'sofia@archive.com' });
+    await request(app).patch('/api/drafts/draft-1').set('Authorization', AUTH).send({ ccEmail: 'ethan@archive.com' }).expect(400);
+    expect(store.get().ccEmail).toBe('sofia@archive.com');
+  });
+
   it('400s when the CC would be the mailbox owner', async () => {
-    process.env.ADMIN_EMAILS = 'sofia@archive.com,aaron@archive.com';
+    process.env.DRAFT_CC_OPTIONS = 'sofia@archive.com,aaron@archive.com';
     installDraftStore({ status: 'PENDING', bodyText: 'Hi' });
     await request(app).patch('/api/drafts/draft-1').set('Authorization', AUTH).send({ ccEmail: 'aaron@archive.com' }).expect(400);
   });
 
   it.each(['SENT', 'DISCARDED'])('400s on a %s draft', async (status) => {
     const store = installDraftStore({ status, bodyText: 'Hi', ccEmail: 'sofia@archive.com' });
-    await request(app).patch('/api/drafts/draft-1').set('Authorization', AUTH).send({ ccEmail: 'ethan@archive.com' }).expect(400);
+    await request(app).patch('/api/drafts/draft-1').set('Authorization', AUTH).send({ ccEmail: 'catalina.roman@archive.com' }).expect(400);
     expect(store.get().ccEmail).toBe('sofia@archive.com');
   });
 
@@ -262,7 +268,7 @@ describe('PATCH /api/drafts/:id { ccEmail }', () => {
     await request(app)
       .patch('/api/drafts/draft-1')
       .set('Authorization', AUTH)
-      .send({ ccEmail: 'ethan@archive.com', bodyText: 'changed' })
+      .send({ ccEmail: 'catalina.roman@archive.com', bodyText: 'changed' })
       .expect(400);
   });
 
@@ -273,15 +279,15 @@ describe('PATCH /api/drafts/:id { ccEmail }', () => {
       ccEmail: 'sofia@archive.com',
       externalDraftId: 'gmail-draft-1',
     });
-    await request(app).patch('/api/drafts/draft-1').set('Authorization', AUTH).send({ ccEmail: 'ethan@archive.com' }).expect(200);
+    await request(app).patch('/api/drafts/draft-1').set('Authorization', AUTH).send({ ccEmail: 'catalina.roman@archive.com' }).expect(200);
     expect(draftsUpdate).toHaveBeenCalledTimes(1);
     const call = draftsUpdate.mock.calls[0]![0];
     expect(call.id).toBe('gmail-draft-1');
     const mime = decodeRaw(call.requestBody.message.raw);
-    expect(headersOf(call.requestBody.message.raw)).toContain('Cc: ethan@archive.com');
-    expect(mime).toContain("looping in Ethan from the recruitment team here");
+    expect(headersOf(call.requestBody.message.raw)).toContain('Cc: catalina.roman@archive.com');
+    expect(mime).toContain("looping in Catalina from the recruitment team here");
     expect(call.requestBody.message.threadId).toBe('ext-thread-1');
-    expect(store.get().ccEmail).toBe('ethan@archive.com');
+    expect(store.get().ccEmail).toBe('catalina.roman@archive.com');
   });
 
   it('APPROVED draft whose Gmail draft is gone: clears externalDraftId so send re-creates it', async () => {
@@ -293,9 +299,9 @@ describe('PATCH /api/drafts/:id { ccEmail }', () => {
       ccEmail: 'sofia@archive.com',
       externalDraftId: 'gmail-draft-1',
     });
-    await request(app).patch('/api/drafts/draft-1').set('Authorization', AUTH).send({ ccEmail: 'ethan@archive.com' }).expect(200);
+    await request(app).patch('/api/drafts/draft-1').set('Authorization', AUTH).send({ ccEmail: 'catalina.roman@archive.com' }).expect(200);
     expect(store.get().externalDraftId).toBeNull();
-    expect(store.get().ccEmail).toBe('ethan@archive.com');
+    expect(store.get().ccEmail).toBe('catalina.roman@archive.com');
   });
 
   it('APPROVED draft: a Gmail failure leaves the DB untouched (502)', async () => {
@@ -306,7 +312,7 @@ describe('PATCH /api/drafts/:id { ccEmail }', () => {
       ccEmail: 'sofia@archive.com',
       externalDraftId: 'gmail-draft-1',
     });
-    await request(app).patch('/api/drafts/draft-1').set('Authorization', AUTH).send({ ccEmail: 'ethan@archive.com' }).expect(502);
+    await request(app).patch('/api/drafts/draft-1').set('Authorization', AUTH).send({ ccEmail: 'catalina.roman@archive.com' }).expect(502);
     expect(store.get().ccEmail).toBe('sofia@archive.com');
   });
 
@@ -339,10 +345,10 @@ describe('PATCH /api/drafts/:id { ccEmail }', () => {
       const res = await request(app)
         .patch('/api/drafts/draft-1')
         .set('Authorization', AUTH)
-        .send({ ccEmail: 'ethan@archive.com' })
+        .send({ ccEmail: 'catalina.roman@archive.com' })
         .expect(200);
       expect(store.get().bodyText).toBe(edited);
-      expect(store.get().ccEmail).toBe('ethan@archive.com');
+      expect(store.get().ccEmail).toBe('catalina.roman@archive.com');
       expect(res.body.ccChange.loopIn).toBe('not_found');
     });
 
@@ -357,8 +363,8 @@ describe('PATCH /api/drafts/:id { ccEmail }', () => {
     it('rewrites a legacy draft (ccEmail null, old "she\'ll" template)', async () => {
       const legacy = `Hi Jane,\n\nI hope you're doing well.\n\nI'm looping in Sofia from the recruitment team here to schedule time with you and share more about the position.\n\nBest,\n${SIGNATURE_PLAIN}`;
       const store = installDraftStore({ status: 'PENDING', bodyText: legacy, ccEmail: null });
-      await request(app).patch('/api/drafts/draft-1').set('Authorization', AUTH).send({ ccEmail: 'ethan@archive.com' }).expect(200);
-      expect(store.get().bodyText).toContain(loopInSentence('coordinator', 'Ethan'));
+      await request(app).patch('/api/drafts/draft-1').set('Authorization', AUTH).send({ ccEmail: 'catalina.roman@archive.com' }).expect(200);
+      expect(store.get().bodyText).toContain(loopInSentence('coordinator', 'Catalina'));
       expect(store.get().bodyText).not.toMatch(/\bshe\b|she'll/);
     });
   });

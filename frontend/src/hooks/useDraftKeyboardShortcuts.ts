@@ -66,6 +66,16 @@ function isInteractiveControl(target: EventTarget | null): boolean {
   );
 }
 
+/**
+ * A focused dropdown (the pane's CC Select, F4) owns its keys: arrows move
+ * through options, Enter picks, Escape closes it — not the draft queue.
+ */
+function isInListWidget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el || typeof el.closest !== 'function') return false;
+  return el.closest('[role="combobox"], [role="listbox"], [role="option"]') !== null;
+}
+
 const PANE_SELECTOR = '[data-draft-pane="true"]';
 
 /**
@@ -86,6 +96,7 @@ export function useDraftKeyboardShortcuts(
 
     function onKeyDown(e: KeyboardEvent) {
       if (isTypingInEditable(e.target)) return;
+      if (isInListWidget(e.target)) return;
       if (isBlockingDialogOpen(PANE_SELECTOR)) return;
 
       // Don't fire on modified keystrokes — leave them for browser/system.

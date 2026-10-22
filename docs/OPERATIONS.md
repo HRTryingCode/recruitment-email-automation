@@ -338,7 +338,8 @@ Set under **Project Settings → Environment Variables** (Production scope).
 | `CRON_SECRET` | Bearer secret for `/api/internal/cron/*`. |
 | `LEVER_API_KEY` | Lever API key (read-only use, Bearer). Optional — unset = Lever status disabled. See [Lever status](#lever-status-read-only). |
 | `SLACK_ALERT_WEBHOOK_URL` | Slack incoming-webhook URL for watchdog alerts. Optional — unset = alerting disabled (no-op, warned once). See [Alerting](#alerting). |
-| `DRAFT_CC_EMAIL` | Optional — defaults to `sofia@archive.com`. |
+| `DRAFT_CC_EMAIL` | Optional — defaults to `sofia@archive.com`. The default CC stored on each new draft (`EmailDraft.ccEmail`); drafts created before migration `9e_draft_cc` (NULL) keep using it. |
+| `DRAFT_CC_OPTIONS` | Comma-separated recruitment-team addresses offered in the draft CC dropdown and accepted by `PATCH /api/drafts/:id { ccEmail }` (plus "No CC"). Deliberately **not** derived from `ADMIN_EMAILS`/admin role. Unset = only `DRAFT_CC_EMAIL`. Prod: `sofia@archive.com,andriy.korzhenevskyy@archive.com,catalina.roman@archive.com`. Read per request. |
 | `FRONTEND_URL` | Not used in production (same-origin) but Express CORS config reads it — set to the prod domain to be safe. |
 
 Optional / inactive:
