@@ -560,6 +560,25 @@ export async function fetchInbox(params: {
   return res.data as SingleResponse<InboxPage>;
 }
 
+/** GET /api/today — the R4 Today page summary (backend today.service). */
+export interface TodaySummary {
+  generatedAt: string;
+  views: { needs_review: number; interested: number; not_interested: number };
+  sentToday: number;
+  oldestWaitingAt: string | null;
+  draftsExpiringSoon: number;
+  mailboxes: Array<{ mailboxId: string; waiting: number; sentToday: number; lastReceivedAt: string | null }>;
+  /** addedToday / addedThisWeek are team-wide even with a mailbox filter. */
+  lever: { interestedNotInLever: number; addedToday: number; addedThisWeek: number };
+  /** 14 ET days, oldest first, ending today. */
+  series: Array<{ day: string; received: number; sent: number }>;
+}
+
+export async function fetchToday(params: { mailboxId?: string }): Promise<SingleResponse<TodaySummary>> {
+  const res = await api.get('/today', { params });
+  return res.data as SingleResponse<TodaySummary>;
+}
+
 export type SavedViewScope = 'candidates' | 'inbox';
 
 export interface SavedView {

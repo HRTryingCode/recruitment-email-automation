@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -13,6 +13,7 @@ vi.mock('../../src/lib/api', () => ({
   fetchMailboxes: vi.fn(),
   fetchDrafts: vi.fn(),
   fetchSyncHealth: vi.fn(),
+  fetchToday: vi.fn(),
   fetchLookup: vi.fn(),
   fetchCandidates: vi.fn(),
   addGmailMailbox: vi.fn(),
@@ -35,13 +36,6 @@ vi.mock('../../src/pages/InboxPage', async () => {
 });
 vi.mock('../../src/components/CandidateTable', () => ({
   default: ({ mailboxId }: { mailboxId?: string }) => <div data-testid="screen">candidates:{mailboxId ?? 'all'}</div>,
-}));
-vi.mock('../../src/components/Dashboard', () => ({
-  default: ({ onSwitchToCandidates }: { onSwitchToCandidates: (f?: string) => void }) => (
-    <button data-testid="screen" onClick={() => onSwitchToCandidates('AWAITING_REPLY')}>
-      today
-    </button>
-  ),
 }));
 vi.mock('../../src/pages/settings/MailboxesSettings', () => ({ default: () => <div data-testid="screen">settings:mailboxes</div> }));
 vi.mock('../../src/pages/settings/IntegrationsSettings', () => ({ default: () => <div data-testid="screen">settings:integrations</div> }));
@@ -80,6 +74,19 @@ beforeEach(() => {
   vi.mocked(api.fetchMailboxes).mockResolvedValue({ success: true, data: MAILBOXES });
   vi.mocked(api.fetchDrafts).mockResolvedValue({ success: true, data: [], meta: { total: 7, page: 1, limit: 1 } });
   vi.mocked(api.fetchSyncHealth).mockResolvedValue({ success: true, data: [] });
+  vi.mocked(api.fetchToday).mockResolvedValue({
+    success: true,
+    data: {
+      generatedAt: '',
+      views: { needs_review: 1, interested: 2, not_interested: 0 },
+      sentToday: 0,
+      oldestWaitingAt: null,
+      draftsExpiringSoon: 0,
+      mailboxes: [],
+      lever: { interestedNotInLever: 0, addedToday: 0, addedThisWeek: 0 },
+      series: [],
+    },
+  });
 });
 
 describe('routes', () => {
@@ -90,7 +97,7 @@ describe('routes', () => {
   });
 
   it.each([
-    ['/?tab=dashboard', '/today', 'today'],
+    ['/?tab=dashboard', '/today', "Replies waiting, what went out, and what's next for Lever."],
     ['/?tab=drafts&draftId=d1', '/inbox?draftId=d1', 'inbox:all'],
     ['/?tab=candidates&filter=AWAITING_REPLY&q=bob', '/candidates?filter=AWAITING_REPLY&q=bob', 'candidates:all'],
   ])('legacy %s → %s', async (from, to, screenText) => {
@@ -128,10 +135,12 @@ describe('URL state across the shell', () => {
     expect(loc()).toBe('/inbox?mailboxId=mb2');
   });
 
-  it('Today → awaiting-reply pill opens Candidates with only that filter', async () => {
+  it('Today → a waiting count opens that Inbox view with only the mailbox filter', async () => {
     renderAt('/today?mailboxId=mb1&q=stale');
-    await userEvent.click(await screen.findByText('today'));
-    expect(loc()).toBe('/candidates?mailboxId=mb1&filter=AWAITING_REPLY');
+    const strip = await screen.findByRole('region', { name: 'Today' });
+    await userEvent.click(within(strip).getByRole('link', { name: /^interested/i }));
+    expect(await screen.findByText('inbox:mb1')).toBeInTheDocument();
+    expect(loc()).toBe('/inbox?mailboxId=mb1&view=interested');
   });
 
   it('the mailbox filter writes ?mailboxId= and the screen follows', async () => {

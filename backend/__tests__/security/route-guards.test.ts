@@ -98,6 +98,8 @@ const MANIFEST: Record<string, Guard> = {
   'DELETE /api/views/:id': 'auth',
 
   'GET /api/internal/sync-health': 'auth',
+  // R4 Today page summary (read-only).
+  'GET /api/today/': 'auth',
 
   // F1 global lookup: "do we know this email?" — metadata only.
   'GET /api/lookup/': 'auth',

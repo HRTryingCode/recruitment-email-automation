@@ -176,7 +176,7 @@ screens; the last batch deletes the legacy mappings from `tailwind.config.ts`.
 | `sonner` | kept local (our theme sync, not `next-themes`) | toasts via `lib/toast.ts` |
 | `StatusBadge` | kept local (app-specific status → colour map) | candidate/draft status pills — still uses palette colours; move them onto the R1 `success`/`warning`/`info` tokens |
 | `avatar` | **new** | user/candidate initials (replaces `Avatar` in `Index.tsx`, list avatars) |
-| `chart` | **new** (+ `recharts` 3.8.0) | Dashboard (R2) |
+| `chart` | **new** (+ `recharts` 3.8.0) | Today 14-day activity chart (R4) |
 | `checkbox` | **new** | bulk-select / toggles in tables |
 | `collapsible` | **new** | Sender coverage / Mailbox health disclosure panels (R2) |
 | `command` | **new** (+ `cmdk` 1.1.1) | ⌘K LookupBar combobox (R3), searchable pickers |
@@ -248,9 +248,9 @@ variant. `navigation-menu` is still not needed.
 |---|---|---|---|
 | ui/ compiles under Tailwind 3 | `__tests__/design-system/tw3-classes.test.ts` | **strict** | — |
 | No purple (full taupe) | `__tests__/design-system/theme-tokens.test.ts` | **strict** | — |
-| Hand-rolled UI per batch | `__tests__/design-system/hotspots.test.ts` + `scripts/design-system-audit.mjs` | **R1 strict**; R2–R4 report-only (prints the per-batch baseline on every `npm test` / CI run) | each batch adds its area to `STRICT_AREAS` |
-| ESLint `no-restricted-syntax` / `no-restricted-imports` | `frontend/eslint.config.mjs`, `npm run lint:ds` | `warn` (exit 0) | the last batch sets `DS_SEVERITY = 'error'` |
-| CI | `.github/workflows/test.yml` → "Design-system baseline (report-only)" | prints `audit:ds` + the ESLint warning count | — |
+| Hand-rolled UI per batch | `__tests__/design-system/hotspots.test.ts` + `scripts/design-system-audit.mjs` | **R1, R2, R4 strict**; R3 report-only until it merges | orchestrator adds `R3` to `STRICT_AREAS` after R3 merges |
+| ESLint `no-restricted-syntax` / `no-restricted-imports` | `frontend/eslint.config.mjs`, `npm run lint:ds`, pinned by `__tests__/design-system/eslint-guard.test.ts` | **`error` app-wide** (flipped by R4); R3's files `warn` via the `R3_FILES` override | orchestrator deletes `R3_FILES` after R3 merges |
+| CI | `.github/workflows/test.yml` → "Design-system guard" | prints `audit:ds`; fails on any ESLint design-system error | — |
 
 The audit rules (ids used in §7): `raw-button`, `raw-input`, `raw-select`,
 `raw-textarea`, `raw-table`, `raw-label`, `raw-img`, `raw-svg`, `raw-kbd`,
@@ -270,7 +270,7 @@ components, `lib/`, other hooks, and any **new** file) · `R2` = the Inbox
 DraftReviewPane and useDraftKeyboardShortcuts were deleted when the Inbox
 was mounted · `R3` = CandidateTable, LookupBar, LookupIntegrations,
 LeverBadge, AddToLeverButton, AddToLeverDialog, JobCombobox, GemConnect,
-GemReturnToast · `R4` = the Today page: Dashboard, UnmonitoredSenders. New
+GemReturnToast · `R4` = the Today page: TodayPage, components/today/*, UnmonitoredSenders. New
 feature files default to R1. If one belongs elsewhere, add it to
 `AREA_BY_FILE`.
 
@@ -286,8 +286,8 @@ regenerated it.
 | R1 | Shell — App, main, pages (Login, NotFound, route pages, settings), components/shell + settings, ThemeToggle, MailboxFilter, ProtectedRoute, lib, hooks | 0 |
 | R2 | Inbox — InboxPage, components/inbox/*, inbox hooks, DraftCcSelect, lib/inbox | 0 |
 | R3 | Candidates — CandidateTable, LookupBar, LookupIntegrations, LeverBadge, AddToLever*, JobCombobox, Gem* | 282 |
-| R4 | Today — Dashboard, UnmonitoredSenders | 129 |
-| **Total** | | **411** |
+| R4 | Today — TodayPage, components/today/*, UnmonitoredSenders | 0 |
+| **Total** | | **282** |
 
 ### R1 — Shell (0)
 
@@ -374,21 +374,9 @@ _none_
 | `legacy-token` (1) | 28 | `text-fg-muted` |
 | `arbitrary-value` (1) | 24 | `text-[13px]` |
 
-### R4 — Today (129)
+### R4 — Today (0)
 
-`legacy-token` 52 · `palette-colour` 42 · `arbitrary-value` 16 · `ad-hoc-radius` 12 · `raw-button` 3 · `native-tooltip` 3 · `ad-hoc-shadow` 1
-
-**`src/components/Dashboard.tsx`** (129)
-
-| Rule | Lines | Examples |
-|---|---|---|
-| `raw-button` (3) | 76, 119, 171 | `<button` |
-| `native-tooltip` (3) | 122, 410, 422 | ` title={`` ` title="` |
-| `palette-colour` (42) | 61, 62, 66, 67, 71, 72, 123, 164, 173, 191, 192, 193 | `hover:border-amber-400/50` `group-hover:text-amber-700` `dark:group-hover:text-amber-200` `hover:border-emerald-400/50` |
-| `legacy-token` (52) | 60, 65, 70, 71, 72, 80, 106, 108, 110, 147, 149, 153, 156, 159, 163, 194, 241, 245, 273, 278, 281, 284, 356, 359, 409, 414, 426 | `hover:border-accent-400/50` `group-hover:text-accent-500` `dark:group-hover:text-accent-200` `bg-accent-500/12` |
-| `ad-hoc-shadow` (1) | 80 | `hover:shadow-card-hover` |
-| `ad-hoc-radius` (12) | 80, 86, 123, 149, 173, 207, 235, 245, 273, 414, 416, 426 | `rounded-2xl` `rounded-xl` `rounded-md` `rounded-lg` |
-| `arbitrary-value` (16) | 90, 99, 106, 108, 123, 153, 156, 173, 207, 241, 245, 281, 284, 356, 359 | `h-[18px]` `w-[18px]` `text-[34px]` `text-[13px]` |
+_none_
 
 <!-- audit:end -->
 

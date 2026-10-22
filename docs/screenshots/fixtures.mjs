@@ -43,7 +43,27 @@ const counts = { candidates: 312, awaitingReply: 14, needsReview: 3, pendingDraf
 export const user = { id: 'u1', email: 'rae@example.com', name: 'Rae Recruiter', avatarUrl: null };
 
 const ok = (data, extra = {}) => ({ success: true, data, ...extra });
+// R4 Today summary (GET /api/today): 14 ET days ending today.
+export const today = {
+  generatedAt: ago(0),
+  views: { needs_review: 4, interested: 9, not_interested: 3 },
+  sentToday: 11,
+  oldestWaitingAt: ago(52),
+  draftsExpiringSoon: 2,
+  mailboxes: [
+    { mailboxId: 'mb1', waiting: 12, sentToday: 8, lastReceivedAt: ago(0.3) },
+    { mailboxId: 'mb2', waiting: 4, sentToday: 3, lastReceivedAt: ago(30) },
+  ],
+  lever: { interestedNotInLever: 6, addedToday: 2, addedThisWeek: 7 },
+  series: Array.from({ length: 14 }, (_, i) => ({
+    day: new Date(now - (13 - i) * 86400_000).toISOString().slice(0, 10),
+    received: [5, 8, 3, 0, 0, 9, 12, 7, 6, 10, 2, 0, 11, 8][i],
+    sent: [4, 6, 3, 0, 0, 7, 10, 8, 5, 9, 1, 0, 9, 11][i],
+  })),
+};
+
 export function respond(path) {
+  if (path === '/api/today') return ok(today);
   if (path === '/api/auth/me') return ok({ user });
   if (path === '/api/mailboxes') return ok([mailbox, mailbox2]);
   if (path === '/api/candidates/counts') return ok(counts);
