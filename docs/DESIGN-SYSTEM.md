@@ -218,8 +218,8 @@ variant. `navigation-menu` is still not needed.
 | Piece | File | Notes |
 |---|---|---|
 | Page | `components/CandidateTable.tsx` | saved views → filter bar → table → side panel |
-| Row | `components/candidates/CandidateRow.tsx` | ~40px; Candidate (sticky) · Reply · Lever · Role · Mailbox · Last activity; ≤2 chips; actions on hover/focus/cursor |
-| Reply label | `lib/candidates.ts` `replyLabel` | one chip: Interested / Unsure / Not interested / No reply / Ignored |
+| Row | `components/candidates/CandidateRow.tsx` | ~40px; Candidate (sticky) · Reply · Lever · Role · Mailbox · Last activity; ≤2 status chips (Role/Mailbox use the Inbox `RoleChip`/`MailboxChip`); actions on hover/focus/cursor |
+| Reply label | `lib/candidates.ts` `replyLabel` | one chip: Interested / Unsure / Needs review / Not interested / No reply / Ignored (see Status vocabulary) |
 | Side panel | `components/candidates/CandidateSheet.tsx` | `Sheet`; every thread, Lever, past outreach, Open in Inbox |
 | Lever section | `components/lever/LeverSection.tsx` | shared with the Inbox reply pane header |
 | Saved views | `components/candidates/SavedViewsBar.tsx` | 4 defaults + `/api/views?scope=candidates` |

@@ -1,9 +1,25 @@
+import { MailboxChip } from '@/components/inbox/chips';
 import { Badge } from '@/components/ui/badge';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { Candidate } from '@/lib/api';
 import { replyLabel } from '@/lib/candidates';
 
 /** The Inbox's role chip (H7), shared with the side panel. */
 export { RoleChip } from '@/components/inbox/chips';
+
+/** The Inbox's mailbox chip (local part) with the full address in a tooltip. */
+export function CandidateMailboxChip({ email }: { email: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span data-testid="mailbox-chip" aria-label={`Mailbox: ${email}`} className="inline-flex min-w-0">
+          <MailboxChip email={email} />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{email}</TooltipContent>
+    </Tooltip>
+  );
+}
 
 /** Interest + reply state as one chip, in words (Interested / Unsure / Not interested …). */
 export function ReplyLabelChip({ candidate }: { candidate: Pick<Candidate, 'status' | 'lastInboundAt' | 'repliedAt'> }) {

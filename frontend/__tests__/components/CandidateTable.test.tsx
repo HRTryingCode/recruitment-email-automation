@@ -68,18 +68,24 @@ describe('<CandidateTable /> columns', () => {
     expect(within(ada).getByTestId('reply-label')).toHaveTextContent('Interested');
     expect(within(ada).getByTestId('lever-badge')).toHaveTextContent('Founding Engineer · Phone Screen');
     expect(within(ada).getAllByText('Founding Engineer').length).toBeGreaterThan(0);
-    expect(within(ada).getByText('rae@archive.com')).toBeInTheDocument();
+    // U2a: the Inbox's MailboxChip and RoleChip, not bare text.
+    expect(within(ada).getByTestId('mailbox-chip')).toHaveTextContent('rae');
+    expect(within(ada).getByTestId('role-chip')).toHaveAttribute('aria-label', 'Role: Founding Engineer');
     expect(within(ada).getByText('2h ago')).toBeInTheDocument();
-    expect(within(row('Grace Hopper')).getByTestId('reply-label')).toHaveTextContent('Unsure');
+    expect(within(row('Grace Hopper')).getByTestId('reply-label')).toHaveTextContent('Needs review');
+    expect(within(row('Grace Hopper')).getByTestId('role-chip')).toHaveTextContent('Role unknown');
     expect(within(row('Marie Curie')).getByTestId('reply-label')).toHaveTextContent('Not interested');
     expect(within(row('Linus Torvalds')).getByTestId('lever-badge')).toHaveTextContent('Checking Lever…');
   });
 
-  it('never shows more than two chips in a row', async () => {
+  it('never shows more than two status chips in a row (role and mailbox are identity chips)', async () => {
     renderCandidates();
     await screen.findByText('Ada Lovelace');
     for (const r of screen.getAllByTestId('candidate-row')) {
-      expect(r.querySelectorAll('[data-slot=badge]').length).toBeLessThanOrEqual(2);
+      const status = [...r.querySelectorAll('[data-slot=badge]')].filter(
+        (b) => !b.matches('[data-testid=role-chip], [data-testid=mailbox-chip] *, [data-testid=mailbox-chip]')
+      );
+      expect(status.length).toBeLessThanOrEqual(2);
     }
   });
 

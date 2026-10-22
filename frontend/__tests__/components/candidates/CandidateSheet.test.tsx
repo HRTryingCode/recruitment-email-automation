@@ -1,9 +1,17 @@
 import { screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../../src/lib/api';
 import type { Candidate, EmailDraft, EmailMessage, EmailThread } from '../../../src/lib/api';
 import { resetLeverAutoRefreshForTests } from '../../../src/lib/leverAutoRefresh';
-import { ago, CANDIDATES, listResponse, renderCandidates } from './harness';
+import * as toast from '../../../src/lib/toast';
+import { ago, CANDIDATES, listResponse, location, renderCandidates } from './harness';
+
+vi.mock('../../../src/lib/toast', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/lib/toast')>()),
+  toastSuccess: vi.fn(),
+  toastError: vi.fn(),
+}));
 
 vi.mock('../../../src/lib/api', () => ({
   fetchCandidates: vi.fn(),
@@ -126,7 +134,44 @@ describe('<CandidateSheet /> (side panel)', () => {
     expect(within(sheet).getByTestId('reply-label')).toHaveTextContent('Interested');
     // The shared Inbox RoleChip (H7).
     expect(within(sheet).getByTestId('role-chip')).toHaveAttribute('aria-label', 'Role: Founding Engineer');
-    expect(within(sheet).getByText('rae@archive.com')).toBeInTheDocument();
+    // The shared Inbox MailboxChip: local part, full address in the tooltip.
+    expect(within(sheet).getByTestId('mailbox-chip')).toHaveTextContent('rae');
+  });
+
+  describe('Generate draft (U2a)', () => {
+    const NO_DRAFT = [{ ...TWO_THREADS[0]!, drafts: [draft('d1', 'SENT', 1)] }];
+
+    it('says "Draft ready" with a "Review in Inbox" action that opens the new draft', async () => {
+      vi.mocked(api.fetchCandidate).mockResolvedValue({ success: true, data: detail(NO_DRAFT) });
+      vi.mocked(api.generateDraftForThread).mockResolvedValue({ success: true, data: { id: 'd-new' } as EmailDraft });
+      renderCandidates('/candidates?candidate=c1&mailboxId=mb-1');
+      const sheet = await screen.findByRole('dialog');
+      await userEvent.click(await within(sheet).findByRole('button', { name: 'Generate draft' }));
+      await waitFor(() => expect(toast.toastSuccess).toHaveBeenCalled());
+      const [title, , action] = vi.mocked(toast.toastSuccess).mock.calls[0]!;
+      expect(title).toBe('Draft ready');
+      expect(action?.label).toBe('Review in Inbox');
+      action!.onClick();
+      await waitFor(() => expect(location.current).toBe('/inbox?mailboxId=mb-1&item=d-new'));
+    });
+
+    it('on failure shows an error toast with Retry that generates again', async () => {
+      vi.mocked(api.fetchCandidate).mockResolvedValue({ success: true, data: detail(NO_DRAFT) });
+      vi.mocked(api.generateDraftForThread).mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce({
+        success: true,
+        data: { id: 'd-2' } as EmailDraft,
+      });
+      renderCandidates('/candidates?candidate=c1');
+      const sheet = await screen.findByRole('dialog');
+      await userEvent.click(await within(sheet).findByRole('button', { name: 'Generate draft' }));
+      await waitFor(() => expect(toast.toastError).toHaveBeenCalled());
+      const [title, , action] = vi.mocked(toast.toastError).mock.calls[0]!;
+      expect(title).toBe("Couldn't generate a draft");
+      expect(action?.label).toBe('Retry');
+      action!.onClick();
+      await waitFor(() => expect(api.generateDraftForThread).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(toast.toastSuccess).toHaveBeenCalledWith('Draft ready', expect.any(String), expect.anything()));
+    });
   });
 
   it('auto-refreshes never-checked Lever rows once (H1)', async () => {
