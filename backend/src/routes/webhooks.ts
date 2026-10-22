@@ -7,49 +7,113 @@ import { safeError } from '../lib/safeError';
 
 const router = Router();
 
-// Opt-in Pub/Sub push authentication. When PUBSUB_AUDIENCE is set, the
-// subscription in GCP must be configured with an authentication service
-// account whose OIDC token target audience matches this value. Google then
-// sends `Authorization: Bearer <jwt>` on each push; we verify it here so
-// random POSTs to the public webhook URL can't trigger Gmail history fetches.
-// Left unset, the handler accepts any POST (back-compat with the current
-// unauthenticated subscription setup).
-const PUBSUB_AUDIENCE = process.env.PUBSUB_AUDIENCE;
-const pubsubVerifier = PUBSUB_AUDIENCE ? new OAuth2Client() : null;
+// Pub/Sub push authentication (audit B6 / M8).
+//
+// PUBSUB_AUDIENCE set: every push must carry `Authorization: Bearer <OIDC
+// JWT>` signed by Google with `aud` equal to PUBSUB_AUDIENCE. When
+// PUBSUB_SERVICE_ACCOUNT_EMAIL is also set, the token's verified `email`
+// claim must equal it. Audience alone is weak (any GCP principal can mint a
+// Google-signed ID token for an arbitrary audience), so set both.
+//
+// PUBSUB_AUDIENCE unset: back-compat fail-open. Pushes are accepted and a
+// sampled console warning is emitted, so deploying this code before the GCP
+// subscription is configured for OIDC never drops real pushes (the May
+// 21–25 incident). Env vars are read per request so flipping them on Vercel
+// takes effect without a code change.
+//
+// Rejections write at most one WEBHOOK_AUTH_REJECTED SystemLog row per minute
+// per instance (with a suppressed count) — previously every unauthenticated
+// POST wrote a row, which produced 490k rows in four days.
+const pubsubVerifier = new OAuth2Client();
+const SAMPLE_WINDOW_MS = 60_000;
+let lastRejectLogAt = 0;
+let suppressedRejects = 0;
+let lastFailOpenWarnAt = 0;
+let lastNoEmailWarnAt = 0;
+
+/** Test hook: reset the per-instance sampling state. */
+export function _resetWebhookAuthSampler(): void {
+  lastRejectLogAt = 0;
+  suppressedRejects = 0;
+  lastFailOpenWarnAt = 0;
+  lastNoEmailWarnAt = 0;
+}
+
+async function recordRejection(reason: string, error?: string): Promise<void> {
+  const now = Date.now();
+  if (now - lastRejectLogAt < SAMPLE_WINDOW_MS) {
+    suppressedRejects += 1;
+    return;
+  }
+  const suppressedSinceLastLog = suppressedRejects;
+  lastRejectLogAt = now;
+  suppressedRejects = 0;
+  await logEvent(
+    'WEBHOOK_AUTH_REJECTED',
+    { reason, ...(error ? { error } : {}), suppressedSinceLastLog },
+    'WARN'
+  );
+}
 
 async function verifyPubSubJwt(req: Request, res: Response): Promise<boolean> {
-  if (!PUBSUB_AUDIENCE || !pubsubVerifier) return true;
+  const audience = process.env.PUBSUB_AUDIENCE?.trim();
+  if (!audience) {
+    const now = Date.now();
+    if (now - lastFailOpenWarnAt >= SAMPLE_WINDOW_MS) {
+      lastFailOpenWarnAt = now;
+      console.warn(
+        '[Webhook] PUBSUB_AUDIENCE is not set — accepting unauthenticated ' +
+          'Pub/Sub pushes (fail-open). Configure OIDC on the push subscription, ' +
+          'then set PUBSUB_AUDIENCE and PUBSUB_SERVICE_ACCOUNT_EMAIL.'
+      );
+    }
+    return true;
+  }
 
-  const authHeader = req.header('authorization') ?? req.header('Authorization');
+  const authHeader = req.header('authorization');
   if (!authHeader || !authHeader.toLowerCase().startsWith('bearer ')) {
-    await logEvent(
-      'WEBHOOK_AUTH_REJECTED',
-      { reason: 'missing-bearer-token' },
-      'WARN'
-    );
+    await recordRejection('missing-bearer-token');
     res.status(401).json({ error: 'Missing bearer token' });
     return false;
   }
 
   const idToken = authHeader.slice(7).trim();
+  let payload;
   try {
-    await pubsubVerifier.verifyIdToken({
-      idToken,
-      audience: PUBSUB_AUDIENCE,
-    });
-    return true;
+    const ticket = await pubsubVerifier.verifyIdToken({ idToken, audience });
+    payload = ticket.getPayload();
   } catch (err) {
-    await logEvent(
-      'WEBHOOK_AUTH_REJECTED',
-      {
-        reason: 'jwt-verification-failed',
-        error: err instanceof Error ? err.message : String(err),
-      },
-      'WARN'
+    await recordRejection(
+      'jwt-verification-failed',
+      err instanceof Error ? err.message : String(err)
     );
     res.status(401).json({ error: 'Invalid Pub/Sub auth token' });
     return false;
   }
+
+  const expectedEmail = process.env.PUBSUB_SERVICE_ACCOUNT_EMAIL?.trim().toLowerCase();
+  if (!expectedEmail) {
+    const now = Date.now();
+    if (now - lastNoEmailWarnAt >= SAMPLE_WINDOW_MS) {
+      lastNoEmailWarnAt = now;
+      console.warn(
+        '[Webhook] PUBSUB_SERVICE_ACCOUNT_EMAIL is not set — Pub/Sub JWT ' +
+          'audience is verified but the signer identity is not.'
+      );
+    }
+    return true;
+  }
+
+  if (
+    !payload?.email ||
+    payload.email_verified !== true ||
+    payload.email.toLowerCase() !== expectedEmail
+  ) {
+    await recordRejection('unexpected-service-account');
+    res.status(401).json({ error: 'Invalid Pub/Sub auth token' });
+    return false;
+  }
+  return true;
 }
 
 // Trim a multiline stack to the top 10 frames — enough to identify the call
@@ -105,7 +169,7 @@ function extractNotification(body: unknown): {
 //       silent drops stay visible even though Pub/Sub sees a 200.
 router.post('/gmail', async (req: Request, res: Response, _next: NextFunction) => {
   try {
-    // Authenticate Pub/Sub push (if PUBSUB_AUDIENCE is configured). Runs
+    // Authenticate Pub/Sub push (when PUBSUB_AUDIENCE is configured). Runs
     // before any body inspection so an unauthenticated request can't even
     // exercise the JSON parser.
     if (!(await verifyPubSubJwt(req, res))) return;

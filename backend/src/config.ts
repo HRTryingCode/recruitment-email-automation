@@ -99,6 +99,13 @@ function validateEnv(): void {
         'to enforce JWT verification.'
     );
   }
+  if (process.env.PUBSUB_AUDIENCE && !process.env.PUBSUB_SERVICE_ACCOUNT_EMAIL) {
+    console.error(
+      '[config] WARNING: PUBSUB_AUDIENCE is set but PUBSUB_SERVICE_ACCOUNT_EMAIL ' +
+        'is not — the webhook verifies the JWT audience but not which service ' +
+        'account signed it. Set it to the push subscription\'s service account.'
+    );
+  }
 
   const encKey = process.env.ENCRYPTION_KEY;
   if (encKey) {
