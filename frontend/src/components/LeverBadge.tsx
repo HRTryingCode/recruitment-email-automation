@@ -3,17 +3,19 @@ import { cn } from '@/lib/utils';
 import type { LeverCandidateFields, LeverLookupIntegration, LeverState } from '@/lib/api';
 
 // Read-only Lever status pill (F2). Colours follow StatusBadge: X-700 text in
-// light mode, X-300 in dark; unknown/not-found use the theme-aware fg tokens.
+// light mode, X-300 in dark; checking/unknown/not-found use the theme-aware
+// fg tokens. "Lever unknown" is reserved for real ERROR rows; never-checked
+// rows read "Checking Lever…" (H1) while the table/cron fill them in.
 const PILL =
   'inline-flex max-w-full items-center gap-1 truncate rounded-md px-2 py-0.5 text-[11.5px] font-medium ring-1 ring-inset';
 
-const STYLES: Record<LeverState | 'UNKNOWN', string> = {
+const STYLES: Record<LeverState | 'CHECKING', string> = {
   ACTIVE: 'bg-violet-500/10 text-violet-700 ring-violet-500/20 dark:text-violet-300',
   HIRED: 'bg-emerald-500/10 text-emerald-700 ring-emerald-500/20 dark:text-emerald-300',
   ARCHIVED: 'bg-fg-strong/[0.05] text-fg-default ring-fg-strong/[0.08]',
   NOT_FOUND: 'bg-fg-strong/[0.03] text-fg-subtle ring-fg-strong/[0.05]',
   ERROR: 'bg-fg-strong/[0.03] text-fg-subtle ring-fg-strong/[0.05]',
-  UNKNOWN: 'bg-fg-strong/[0.03] text-fg-subtle ring-fg-strong/[0.05]',
+  CHECKING: 'bg-fg-strong/[0.03] text-fg-subtle ring-fg-strong/[0.05]',
 };
 
 export interface LeverBadgeProps {
@@ -29,6 +31,26 @@ export interface LeverBadgeProps {
 
 function join(...parts: Array<string | null | undefined>): string {
   return parts.filter((p): p is string => !!p).join(' · ');
+}
+
+/** Human reason for an ERROR row; the raw code stays in parentheses. */
+function errorReason(code: string | null | undefined): string {
+  if (!code) return '';
+  const human =
+    code === 'unconfigured'
+      ? 'Lever API key not configured'
+      : code === 'timeout'
+        ? 'Lever timed out'
+        : code === 'network'
+          ? 'network error reaching Lever'
+          : code === 'http_401' || code === 'http_403'
+            ? 'Lever rejected the API key'
+            : code === 'http_429'
+              ? 'Lever rate limit'
+              : /^http_5\d\d$/.test(code)
+                ? 'Lever server error'
+                : null;
+  return human ? `: ${human} (${code})` : `: ${code}`;
 }
 
 function describe(p: LeverBadgeProps): { label: string; title: string } {
@@ -53,16 +75,16 @@ function describe(p: LeverBadgeProps): { label: string; title: string } {
     case 'ERROR':
       return {
         label: 'Lever unknown',
-        title: `Could not check Lever${p.error ? `: ${p.error}` : ''}${checked}`,
+        title: `Could not check Lever${errorReason(p.error)}${checked}`,
       };
     default:
-      return { label: 'Lever unknown', title: 'Lever status not checked yet' };
+      return { label: 'Checking Lever…', title: 'Lever status not checked yet — checking now' };
   }
 }
 
 export default function LeverBadge(props: LeverBadgeProps) {
   const { label, title } = describe(props);
-  const style = STYLES[props.state ?? 'UNKNOWN'];
+  const style = STYLES[props.state ?? 'CHECKING'];
   const linked =
     !!props.opportunityId && (props.state === 'ACTIVE' || props.state === 'ARCHIVED' || props.state === 'HIRED');
 
@@ -88,7 +110,7 @@ export default function LeverBadge(props: LeverBadgeProps) {
   return (
     <span
       data-testid="lever-badge"
-      data-state={props.state ?? 'UNKNOWN'}
+      data-state={props.state ?? 'CHECKING'}
       title={title}
       className={cn(PILL, style, props.className)}
     >

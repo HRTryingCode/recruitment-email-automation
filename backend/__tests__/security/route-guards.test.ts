@@ -34,6 +34,7 @@ const MANIFEST: Record<string, Guard> = {
   'GET /api/internal/cron/systemlog-retention': 'cron',
   'GET /api/internal/cron/coverage-summary': 'cron',
   'GET /api/internal/cron/lever-sync': 'cron',
+  'GET /api/internal/cron/lever-sync-new': 'cron',
   'GET /api/mailboxes/gmail/callback': 'oauth',
   // F3: Gem (GeMCP) OAuth callback, bound to the user by the one-time gem- state.
   'GET /api/integrations/gem/callback': 'oauth',

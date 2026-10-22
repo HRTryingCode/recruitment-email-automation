@@ -107,6 +107,19 @@ describe('syncStaleLever', () => {
     expect(arg.select).toEqual({ id: true, email: true });
   });
 
+  it('neverCheckedOnly: selects only never-checked candidates, newest first (15-min cron)', async () => {
+    mockPrisma.candidate.findMany.mockResolvedValueOnce([]);
+    await syncStaleLever({
+      client: fakeClient({}),
+      deadline: Date.now() + 10_000,
+      now: () => NOW.getTime(),
+      neverCheckedOnly: true,
+    });
+    const arg = mockPrisma.candidate.findMany.mock.calls[0]![0];
+    expect(arg.where).toEqual({ leverCheckedAt: null });
+    expect(arg.orderBy).toEqual([{ createdAt: 'desc' }]);
+  });
+
   it('refreshes each candidate and counts states', async () => {
     mockPrisma.candidate.findMany.mockResolvedValueOnce([
       { id: 'c1', email: 'a@x.com' },

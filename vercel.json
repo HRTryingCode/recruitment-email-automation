@@ -32,7 +32,8 @@
     { "path": "/api/internal/cron/systemlog-retention", "schedule": "30 3 * * *" },
     { "path": "/api/internal/cron/coverage-summary", "schedule": "0 14 * * 1" },
     { "path": "/api/internal/cron/purge-orphan-bodies", "schedule": "45 3 * * *" },
-    { "path": "/api/internal/cron/lever-sync", "schedule": "20 */3 * * *" }
+    { "path": "/api/internal/cron/lever-sync", "schedule": "20 */3 * * *" },
+    { "path": "/api/internal/cron/lever-sync-new", "schedule": "7-59/15 * * * *" }
   ],
   "git": {
     "deploymentEnabled": {

@@ -15,6 +15,8 @@ vi.mock('../../src/lib/api', () => ({
   ignoreCandidate: vi.fn(),
   unignoreCandidate: vi.fn(),
   generateDraftForThread: vi.fn(),
+  // H1 auto-refresh of never-checked Lever rows; never settles here.
+  refreshCandidateLever: vi.fn(() => new Promise(() => {})),
 }));
 
 const fetchCandidatesMock = vi.mocked(api.fetchCandidates);
@@ -316,5 +318,42 @@ describe('<CandidateTable />', () => {
     renderTable();
     const row = (await screen.findByText('Ada Lovelace')).closest('tr')!;
     expect(within(row).queryByRole('button', { name: /interested \+ draft/i })).not.toBeInTheDocument();
+  });
+
+  describe('layout (H1: Actions column clipped at ~1000px)', () => {
+    it('scrolls horizontally inside the table wrapper, keeping the rounded border on an outer element', async () => {
+      renderTable();
+      await screen.findByText('Ada Lovelace');
+      const scroller = screen.getByTestId('candidates-table-scroll');
+      expect(scroller).toHaveClass('overflow-x-auto');
+      expect(scroller).not.toHaveClass('overflow-hidden');
+      expect(scroller.parentElement).toHaveClass('rounded-xl', 'border', 'overflow-hidden');
+      expect(within(scroller).getByRole('table')).toBeInTheDocument();
+    });
+
+    it('never wraps or truncates the Actions header and cells', async () => {
+      renderTable();
+      const row = (await screen.findByText('Grace Hopper')).closest('tr')!;
+      const header = screen.getByRole('columnheader', { name: 'Actions' });
+      expect(header).toHaveClass('whitespace-nowrap', 'sticky', 'right-0', 'bg-surface-raised');
+      const actions = within(row).getByTestId('candidate-actions');
+      // Pinned to the right edge with an opaque surface token so it stays
+      // visible (and legible) while the rest of the row scrolls under it.
+      expect(actions).toHaveClass('whitespace-nowrap', 'sticky', 'right-0', 'bg-surface-raised');
+      expect(within(actions).getByRole('button', { name: 'Interested + draft' })).toHaveTextContent(
+        'Interested + draft'
+      );
+      expect(within(actions).getByRole('button', { name: 'Not interested' })).toHaveTextContent('Not interested');
+      expect(actions.querySelector('.truncate')).toBeNull();
+    });
+
+    it('puts the role and Lever pills on one wrapping row instead of stacking them', async () => {
+      renderTable();
+      const row = (await screen.findByText('Ada Lovelace')).closest('tr')!;
+      const pills = within(row).getByTestId('candidate-pills');
+      expect(pills).toHaveClass('flex', 'flex-wrap');
+      expect(within(pills).getByTestId('lever-badge')).toBeInTheDocument();
+      expect(within(pills).getByText('Role not detected')).toBeInTheDocument();
+    });
   });
 });

@@ -49,9 +49,31 @@ describe('LeverBadge', () => {
     expect(badge).toHaveAttribute('data-state', 'ERROR');
   });
 
-  it('never checked: muted Unknown with a "not checked yet" tooltip', () => {
+  it('ERROR: tooltip translates known reason codes', () => {
+    render(<LeverBadge state="ERROR" error="http_401" />);
+    expect(screen.getByTestId('lever-badge')).toHaveAttribute(
+      'title',
+      expect.stringContaining('Lever rejected the API key (http_401)')
+    );
+  });
+
+  it('ERROR: tooltip explains it could not be checked', () => {
+    render(<LeverBadge state="ERROR" />);
+    expect(screen.getByTestId('lever-badge')).toHaveAttribute('title', expect.stringMatching(/could not check lever/i));
+  });
+
+  it('never checked: muted "Checking Lever…", never "unknown"', () => {
     render(<LeverBadge state={null} />);
-    expect(screen.getByTestId('lever-badge')).toHaveAttribute('title', expect.stringMatching(/not checked yet/i));
+    const badge = screen.getByTestId('lever-badge');
+    expect(badge).toHaveTextContent('Checking Lever…');
+    expect(badge).not.toHaveTextContent(/unknown/i);
+    expect(badge).toHaveAttribute('data-state', 'CHECKING');
+    expect(badge).toHaveAttribute('title', expect.stringMatching(/not checked yet/i));
+  });
+
+  it('undefined state is treated as never checked too', () => {
+    render(<LeverBadge state={undefined} />);
+    expect(screen.getByTestId('lever-badge')).toHaveTextContent('Checking Lever…');
   });
 });
 

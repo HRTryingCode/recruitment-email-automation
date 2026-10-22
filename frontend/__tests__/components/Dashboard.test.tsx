@@ -23,6 +23,8 @@ vi.mock('../../src/lib/api', () => ({
   fetchSenderCoverage: vi.fn(),
   approveDraft: vi.fn(),
   addGmailMailbox: vi.fn(),
+  // H1 auto-refresh of never-checked Lever rows; never settles here.
+  refreshCandidateLever: vi.fn(() => new Promise(() => {})),
 }));
 
 const fetchCandidatesMock = vi.mocked(api.fetchCandidates);

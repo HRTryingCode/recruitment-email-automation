@@ -54,6 +54,7 @@ import { Skeleton } from './ui/skeleton';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './ui/empty';
 import { CandidateLeverBadge } from './LeverBadge';
 import AddToLeverButton from './AddToLeverButton';
+import { useLeverAutoRefresh } from '../lib/leverAutoRefresh';
 
 function ReplyStatusBadge({ candidate }: { candidate: Candidate }) {
   const derived: NonNullable<Candidate['replyStatus']> =
@@ -415,6 +416,7 @@ export default function CandidateTable({ mailboxId }: Props) {
 
   // Sorted server-side across every page (L16).
   const candidates = data?.data ?? [];
+  useLeverAutoRefresh(candidates);
 
   if (error) {
     return (
@@ -508,84 +510,88 @@ export default function CandidateTable({ mailboxId }: Props) {
         </span>
       </div>
 
-      {/* Table */}
+      {/* Table — the outer element clips to the rounded border; the inner one
+          scrolls horizontally so the Actions column is never cut off (H1). */}
       <div className="overflow-hidden rounded-xl border border-line bg-surface-raised/70">
-        <table className="w-full">
-          <thead>
-            <tr className="border-b border-line">
-              <SortableTh column="name" label="Name" current={sort} onSort={handleSort} />
-              <SortableTh column="email" label="Email" current={sort} onSort={handleSort} />
-              <SortableTh
-                column="company"
-                label="Company"
-                hiddenClass="hidden md:table-cell"
-                current={sort}
-                onSort={handleSort}
-              />
-              <SortableTh column="status" label="Status" current={sort} onSort={handleSort} />
-              <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.08em] text-fg-muted">
-                Reply
-              </th>
-              <SortableTh
-                column="updatedAt"
-                label="Last activity"
-                hiddenClass="hidden lg:table-cell"
-                current={sort}
-                onSort={handleSort}
-              />
-              <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.08em] text-fg-muted">
-                Actions
-              </th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-line-soft">
-            {isLoading
-              ? Array.from({ length: 5 }).map((_, i) => (
-                  <tr key={i}>
-                    {Array.from({ length: 7 }).map((_, j) => (
-                      <td key={j} className="px-4 py-3">
-                        <Skeleton className="h-4" />
-                      </td>
-                    ))}
-                  </tr>
-                ))
-              : candidates.map((candidate) => (
-                  <CandidateRow
-                    key={candidate.id}
-                    candidate={candidate}
-                    expanded={expandedId === candidate.id}
-                    onToggle={() =>
-                      setExpandedId(
-                        expandedId === candidate.id ? null : candidate.id
-                      )
-                    }
-                    onChangeStatus={(status) =>
-                      // IGNORED must discard live drafts: same flow as the
-                      // ignore button, not a bare status write (M20).
-                      status === 'IGNORED'
-                        ? ignoreMutation.mutate(candidate.id)
-                        : updateMutation.mutate({ id: candidate.id, status })
-                    }
-                    onTriage={(decision) => triageMutation.mutate({ candidate, decision })}
-                    triaging={
-                      triageMutation.isPending &&
-                      triageMutation.variables?.candidate.id === candidate.id
-                    }
-                    onIgnore={() => ignoreMutation.mutate(candidate.id)}
-                    onUnignore={() => unignoreMutation.mutate(candidate.id)}
-                    onClearReplied={() => clearRepliedMutation.mutate(candidate.id)}
-                    ignoring={
-                      ignoreMutation.isPending &&
-                      ignoreMutation.variables === candidate.id
-                    }
-                    unignoring={
-                      unignoreMutation.isPending &&
-                      unignoreMutation.variables === candidate.id
-                    }
-                  />
-                ))}
-          </tbody>
-        </table>
+        <div data-testid="candidates-table-scroll" className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-line">
+                <SortableTh column="name" label="Name" current={sort} onSort={handleSort} />
+                <SortableTh column="email" label="Email" current={sort} onSort={handleSort} />
+                <SortableTh
+                  column="company"
+                  label="Company"
+                  hiddenClass="hidden md:table-cell"
+                  current={sort}
+                  onSort={handleSort}
+                />
+                <SortableTh column="status" label="Status" current={sort} onSort={handleSort} />
+                <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.08em] text-fg-muted">
+                  Reply
+                </th>
+                <SortableTh
+                  column="updatedAt"
+                  label="Last activity"
+                  hiddenClass="hidden lg:table-cell"
+                  current={sort}
+                  onSort={handleSort}
+                />
+                {/* Sticky so Actions stay on screen when the table scrolls (H1). */}
+                <th className="sticky right-0 bg-surface-raised shadow-[-1px_0_0_rgb(var(--fg-strong)/0.06)] whitespace-nowrap px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.08em] text-fg-muted">
+                  Actions
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-line-soft">
+              {isLoading
+                ? Array.from({ length: 5 }).map((_, i) => (
+                    <tr key={i}>
+                      {Array.from({ length: 7 }).map((_, j) => (
+                        <td key={j} className="px-4 py-3">
+                          <Skeleton className="h-4" />
+                        </td>
+                      ))}
+                    </tr>
+                  ))
+                : candidates.map((candidate) => (
+                    <CandidateRow
+                      key={candidate.id}
+                      candidate={candidate}
+                      expanded={expandedId === candidate.id}
+                      onToggle={() =>
+                        setExpandedId(
+                          expandedId === candidate.id ? null : candidate.id
+                        )
+                      }
+                      onChangeStatus={(status) =>
+                        // IGNORED must discard live drafts: same flow as the
+                        // ignore button, not a bare status write (M20).
+                        status === 'IGNORED'
+                          ? ignoreMutation.mutate(candidate.id)
+                          : updateMutation.mutate({ id: candidate.id, status })
+                      }
+                      onTriage={(decision) => triageMutation.mutate({ candidate, decision })}
+                      triaging={
+                        triageMutation.isPending &&
+                        triageMutation.variables?.candidate.id === candidate.id
+                      }
+                      onIgnore={() => ignoreMutation.mutate(candidate.id)}
+                      onUnignore={() => unignoreMutation.mutate(candidate.id)}
+                      onClearReplied={() => clearRepliedMutation.mutate(candidate.id)}
+                      ignoring={
+                        ignoreMutation.isPending &&
+                        ignoreMutation.variables === candidate.id
+                      }
+                      unignoring={
+                        unignoreMutation.isPending &&
+                        unignoreMutation.variables === candidate.id
+                      }
+                    />
+                  ))}
+            </tbody>
+          </table>
+        </div>
 
         {!isLoading && candidates.length === 0 && (
           <Empty className="px-6 py-16">
@@ -714,7 +720,7 @@ function CandidateRow({
               <span className="text-[13.5px] font-medium text-fg-strong">
                 {candidate.name}
               </span>
-              <div className="mt-1">
+              <div data-testid="candidate-pills" className="mt-1 flex flex-wrap items-center gap-1">
                 {candidate.role ? (
                   <span
                     data-testid="role-pill"
@@ -733,8 +739,6 @@ function CandidateRow({
                     Role not detected
                   </span>
                 )}
-              </div>
-              <div className="mt-1 flex flex-wrap items-center gap-1.5">
                 <CandidateLeverBadge candidate={candidate} />
                 {candidate.leverState && candidate.leverState !== 'ERROR' && (
                   <AddToLeverButton
@@ -791,7 +795,11 @@ function CandidateRow({
               : formatTimeAgo(candidate.updatedAt)}
           </span>
         </td>
-        <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+        <td
+          data-testid="candidate-actions"
+          className="sticky right-0 bg-surface-raised shadow-[-1px_0_0_rgb(var(--fg-strong)/0.06)] whitespace-nowrap px-4 py-3 group-hover:bg-[linear-gradient(rgb(var(--fg-strong)/0.02),rgb(var(--fg-strong)/0.02))]"
+          onClick={(e) => e.stopPropagation()}
+        >
           <div className="flex items-center gap-1.5">
             <div className="relative">
               <select
