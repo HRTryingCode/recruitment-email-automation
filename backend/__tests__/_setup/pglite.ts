@@ -14,9 +14,10 @@ export function migrationNames(): string[] {
     .sort();
 }
 
-export async function migratedDb(): Promise<PGlite> {
+/** `names` overrides the apply order (e.g. prod's real history); default is Prisma's lexical order. */
+export async function migratedDb(names: string[] = migrationNames()): Promise<PGlite> {
   const db = new PGlite();
-  for (const name of migrationNames()) {
+  for (const name of names) {
     await db.exec(readFileSync(path.join(MIGRATIONS_DIR, name, 'migration.sql'), 'utf8'));
   }
   return db;

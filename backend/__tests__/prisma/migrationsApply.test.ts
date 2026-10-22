@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import type { PGlite } from '@electric-sql/pglite';
-import { migratedDb } from '../_setup/pglite';
+import { migratedDb, migrationNames } from '../_setup/pglite';
 
 describe('prisma migrations apply on a real Postgres', () => {
   let db: PGlite;
@@ -38,4 +38,17 @@ describe('prisma migrations apply on a real Postgres', () => {
     const left = await db.query(`SELECT count(*)::int AS n FROM "DraftPresence"`);
     expect(left.rows[0]).toEqual({ n: 0 });
   });
+
+  // Prod applied 9h_lever_webhooks (#80) before 9g_inbox existed, so
+  // `migrate deploy` runs 9g after 9h there; it must not depend on order.
+  it('9g_inbox also applies after 9h_lever_webhooks (prod history order)', async () => {
+    const names = migrationNames();
+    const prodOrder = [...names.filter((n) => n !== '9g_inbox'), '9g_inbox'];
+    expect(prodOrder.indexOf('9h_lever_webhooks')).toBeLessThan(prodOrder.indexOf('9g_inbox'));
+    const prod = await migratedDb(prodOrder);
+    const tables = await prod.query<{ t: string }>(
+      `SELECT table_name AS t FROM information_schema.tables WHERE table_name IN ('DraftPresence', 'SavedView', 'LeverWebhookEvent') ORDER BY 1`
+    );
+    expect(tables.rows.map((r) => r.t)).toEqual(['DraftPresence', 'LeverWebhookEvent', 'SavedView']);
+  }, 60_000);
 });
