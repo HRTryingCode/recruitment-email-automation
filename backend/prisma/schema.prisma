@@ -37,6 +37,14 @@ model Mailbox {
   watchExpiry   DateTime?
   lastHistoryId String?
   isActive      Boolean        @default(true)
+  /// OAuth grant health: "OK" | "NEEDS_REAUTH". Set to NEEDS_REAUTH when
+  /// Google returns invalid_grant / 401 (token revoked or expired); crons
+  /// skip such mailboxes until a human reconnects (handleCallback resets it).
+  /// Distinct from isActive, which only means "not manually disconnected".
+  authStatus    String         @default("OK")
+  /// Sanitized message of the error that flipped authStatus (no tokens).
+  lastAuthError String?
+  lastAuthErrorAt DateTime?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   threads       EmailThread[]

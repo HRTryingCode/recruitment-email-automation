@@ -1,7 +1,9 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../db/client';
 import { reconcileMailbox, renewGmailWatches } from '../services/gmail.service';
-import { logEvent } from '../services/monitoring.service';
+import { logEvent, runWatchdog } from '../services/monitoring.service';
+import { markMailboxNeedsReauth, AUTH_STATUS_NEEDS_REAUTH } from '../services/mailboxAuth.service';
+import { safeError, isAuthRevokedError, MailboxNeedsReauthError } from '../lib/safeError';
 
 const router = Router();
 
@@ -74,7 +76,9 @@ router.get(
       const perMailboxBudgetMs = 12_000;
 
       const mailboxes = await prisma.mailbox.findMany({
-        where: { provider: 'GMAIL', isActive: true },
+        // NEEDS_REAUTH mailboxes can't sync until a human reconnects them;
+        // the watchdog alerts on them instead of logging a failure hourly.
+        where: { provider: 'GMAIL', isActive: true, authStatus: { not: AUTH_STATUS_NEEDS_REAUTH } },
         orderBy: { createdAt: 'asc' },
       });
 
@@ -138,12 +142,19 @@ router.get(
             ...result,
           });
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          console.error(`[Reconcile] Mailbox ${mb.emailAddress} failed:`, err);
+          const safe = safeError(err);
+          const message = safe.message;
+          const authRevoked = isAuthRevokedError(err);
+          console.error(`[Reconcile] Mailbox ${mb.emailAddress} failed:`, safe);
+          // getGmailClient already marked the mailbox for MailboxNeedsReauthError;
+          // a 401 from a later Gmail call lands here unmarked.
+          if (authRevoked && !(err instanceof MailboxNeedsReauthError)) {
+            await markMailboxNeedsReauth(mb, err, 'reconcile');
+          }
           await logEvent(
             'RECONCILIATION_FAILED',
-            { mailboxId: mb.id, emailAddress: mb.emailAddress, error: message },
-            'WARN'
+            { mailboxId: mb.id, emailAddress: mb.emailAddress, error: message, authRevoked },
+            authRevoked ? 'ERROR' : 'WARN'
           );
           results.push({
             mailboxId: mb.id,
@@ -214,6 +225,28 @@ router.get(
           results,
         },
       });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// GET /api/internal/cron/watchdog
+// NOTE: Vercel cron jobs invoke via GET — must not be POST.
+// Every 15 min: evaluates mailbox auth/watch/reconcile health and pipeline
+// liveness (incl. a dead-man's switch on the hourly reconcile) and posts to
+// Slack on state change only. No-op alerting if SLACK_ALERT_WEBHOOK_URL is
+// unset. See services/monitoring.service.ts runWatchdog().
+router.get(
+  '/watchdog',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!isAuthorized(req)) {
+        res.status(401).json({ success: false, error: 'Unauthorized' });
+        return;
+      }
+      const result = await runWatchdog();
+      res.status(200).json({ success: true, data: result });
     } catch (err) {
       next(err);
     }

@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { safeError } from '../lib/safeError';
 
 export interface AppError extends Error {
   statusCode?: number;
@@ -21,8 +22,9 @@ export function errorHandler(
   const statusCode = err.statusCode ?? 500;
   const message = err.isOperational ? err.message : 'Internal server error';
 
-  // Always log the full stack server-side so we can debug.
-  console.error('[Error]', err);
+  // Log a sanitized summary + stack frames server-side so we can debug.
+  // Never log `err` itself: GaxiosErrors carry OAuth tokens in err.config.
+  console.error('[Error]', safeError(err), err.stack?.split('\n').slice(1, 8).join('\n'));
 
   // Only expose stack to the client when we're truly running on a developer
   // machine: NODE_ENV !== 'production' AND not on Vercel (Vercel sometimes

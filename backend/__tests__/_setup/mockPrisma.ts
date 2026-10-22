@@ -22,7 +22,7 @@ type MockedMethods<T extends string> = Record<T, Mock>;
 
 export interface MockPrisma {
   user: MockedMethods<'findUnique' | 'findMany' | 'create' | 'update'>;
-  mailbox: MockedMethods<'findUnique' | 'findMany' | 'update' | 'upsert'>;
+  mailbox: MockedMethods<'findUnique' | 'findMany' | 'update' | 'updateMany' | 'upsert'>;
   candidate: MockedMethods<
     'findUnique' | 'findMany' | 'count' | 'create' | 'update' | 'updateMany'
   >;
@@ -31,7 +31,7 @@ export interface MockPrisma {
   >;
   emailThread: MockedMethods<'findUnique' | 'findMany' | 'update'>;
   emailMessage: MockedMethods<'findUnique' | 'findFirst' | 'findMany' | 'count'>;
-  systemLog: MockedMethods<'create' | 'findMany'>;
+  systemLog: MockedMethods<'create' | 'findMany' | 'findFirst'>;
   oAuthState: MockedMethods<'create' | 'findUnique' | 'update' | 'deleteMany'>;
   $transaction: Mock;
   $queryRaw: Mock;
@@ -46,7 +46,7 @@ function methods<T extends string>(...names: T[]): MockedMethods<T> {
 export function buildPrismaMock(): MockPrisma {
   const mock: MockPrisma = {
     user: methods('findUnique', 'findMany', 'create', 'update'),
-    mailbox: methods('findUnique', 'findMany', 'update', 'upsert'),
+    mailbox: methods('findUnique', 'findMany', 'update', 'updateMany', 'upsert'),
     candidate: methods(
       'findUnique',
       'findMany',
@@ -65,7 +65,7 @@ export function buildPrismaMock(): MockPrisma {
     ),
     emailThread: methods('findUnique', 'findMany', 'update'),
     emailMessage: methods('findUnique', 'findFirst', 'findMany', 'count'),
-    systemLog: methods('create', 'findMany'),
+    systemLog: methods('create', 'findMany', 'findFirst'),
     oAuthState: methods('create', 'findUnique', 'update', 'deleteMany'),
     $transaction: vi.fn(),
     $queryRaw: vi.fn(),

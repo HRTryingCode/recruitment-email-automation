@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { OAuth2Client } from 'google-auth-library';
 import { processWebhook } from '../services/gmail.service';
 import { logEvent } from '../services/monitoring.service';
+import { safeError } from '../lib/safeError';
 
 const router = Router();
 
@@ -113,7 +114,7 @@ router.post('/gmail', async (req: Request, res: Response, _next: NextFunction) =
     // logged to SystemLog inside the catch.
     void processWebhook(body).catch(async (err: unknown) => {
       const notification = extractNotification(body);
-      console.error('[Webhook] Gmail processing error:', err);
+      console.error('[Webhook] Gmail processing error:', safeError(err));
       await logEvent(
         'WEBHOOK_HANDLER_ERROR',
         {

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import request from 'supertest';
 
 import { buildPrismaMock, resetPrismaMock, type MockPrisma } from '../_setup/mockPrisma';
@@ -28,124 +28,150 @@ describe('GET /api/internal/sync-health', () => {
     expect(mockPrisma.mailbox.findMany).not.toHaveBeenCalled();
   });
 
-  it('returns the expected sync-health shape per mailbox', async () => {
-    const now = new Date('2026-05-21T12:00:00Z');
-    const watchExpiry = new Date(now.getTime() + 36 * 60 * 60 * 1000); // ~36h ahead
-    const lastMsgAt = new Date(now.getTime() - 2 * 60 * 60 * 1000); // 2h ago
+  const NOW = new Date('2026-10-22T12:00:00Z');
+  const minsAgo = (m: number) => new Date(NOW.getTime() - m * 60_000);
 
-    const mb1 = {
-      id: 'mb-1',
-      provider: 'GMAIL',
-      emailAddress: 'inbox@archive.com',
-      displayName: 'Inbox',
-      isActive: true,
-      watchExpiry,
-      createdAt: new Date('2026-04-01T00:00:00Z'),
+  const mb1 = {
+    id: 'mb-1',
+    provider: 'GMAIL',
+    emailAddress: 'inbox@archive.com',
+    displayName: 'Inbox',
+    isActive: true,
+    authStatus: 'OK',
+    lastAuthError: null,
+    lastAuthErrorAt: null,
+    watchExpiry: new Date(NOW.getTime() + 36 * 3600_000),
+    createdAt: new Date('2026-04-01T00:00:00Z'),
+  };
+  const mb2 = {
+    id: 'mb-2',
+    provider: 'GMAIL',
+    emailAddress: 'sofia@archive.com',
+    displayName: null,
+    isActive: true,
+    authStatus: 'NEEDS_REAUTH',
+    lastAuthError: 'invalid_grant',
+    lastAuthErrorAt: minsAgo(90),
+    watchExpiry: new Date('2026-05-29T00:00:00Z'),
+    createdAt: new Date('2026-04-02T00:00:00Z'),
+  };
+
+  function statsRow(mailboxId: string, o: Record<string, unknown> = {}) {
+    // $queryRaw returns COUNT(*) as bigint.
+    return {
+      mailboxId,
+      lastSyncedMessageAt: null,
+      messagesLast24h: 0n,
+      totalMessages: 0n,
+      totalCandidates: 0n,
+      pendingDrafts: 0n,
+      candidatesNeedsReview: 0n,
+      ...o,
     };
-    const mb2 = {
-      id: 'mb-2',
-      provider: 'GMAIL',
-      emailAddress: 'second@archive.com',
-      displayName: null,
-      isActive: false,
-      watchExpiry: null,
-      createdAt: new Date('2026-04-02T00:00:00Z'),
-    };
+  }
 
-    mockPrisma.mailbox.findMany.mockResolvedValue([mb1, mb2]);
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
-    // Every mock below is keyed on the query's `where` arguments rather than
-    // on call order, so adding, removing or reordering queries in the handler
-    // can't silently hand one query another query's fixture (finding L18).
-    type Where = { where?: Record<string, unknown> };
+  it('returns per-mailbox health from at most 3 grouped queries', async () => {
+    mockPrisma.mailbox.findMany.mockResolvedValueOnce([mb1, mb2]);
+    mockPrisma.$queryRaw.mockResolvedValueOnce([
+      statsRow('mb-1', {
+        lastSyncedMessageAt: minsAgo(120),
+        messagesLast24h: 7n,
+        totalMessages: 42n,
+        totalCandidates: 5n,
+        pendingDrafts: 2n,
+        candidatesNeedsReview: 1n,
+      }),
+      statsRow('mb-2'),
+    ]);
+    mockPrisma.systemLog.findMany.mockResolvedValueOnce([
+      { event: 'WEBHOOK_HANDLER_ERROR', createdAt: minsAgo(5), details: JSON.stringify({ emailAddress: 'inbox@archive.com', error: 'boom' }) },
+      { event: 'RECONCILIATION_RUN', createdAt: minsAgo(30), details: JSON.stringify({ mailboxId: 'mb-1', missingBefore: 3, ingested: 3 }) },
+      { event: 'RECONCILIATION_RUN', createdAt: minsAgo(30), details: JSON.stringify({ summary: true }) },
+      { event: 'WEBHOOK_HANDLER_ERROR', createdAt: minsAgo(40), details: JSON.stringify({ emailAddress: 'inbox@archive.com', error: 'boom2' }) },
+      // sofia@: failing every hour since her last success.
+      { event: 'RECONCILIATION_FAILED', createdAt: minsAgo(30), details: JSON.stringify({ mailboxId: 'mb-2', error: 'invalid_grant' }) },
+      { event: 'RECONCILIATION_FAILED', createdAt: minsAgo(90), details: JSON.stringify({ mailboxId: 'mb-2', error: 'invalid_grant' }) },
+      { event: 'RECONCILIATION_RUN', createdAt: minsAgo(150), details: JSON.stringify({ mailboxId: 'mb-2', missingBefore: 0 }) },
+      { event: 'RECONCILIATION_FAILED', createdAt: minsAgo(210), details: JSON.stringify({ mailboxId: 'mb-2', error: 'older' }) },
+      // Older than 24h: excluded from the 24h webhook error count.
+      { event: 'WEBHOOK_HANDLER_ERROR', createdAt: minsAgo(25 * 60), details: JSON.stringify({ emailAddress: 'inbox@archive.com', error: 'old' }) },
+    ]);
 
-    mockPrisma.systemLog.findMany.mockImplementation(async ({ where }: Where = {}) => {
-      switch (where?.event) {
-        // Recent webhook errors, bucketed by emailAddress for the error count.
-        case 'WEBHOOK_HANDLER_ERROR':
-          return [
-            { details: JSON.stringify({ emailAddress: 'inbox@archive.com', error: 'boom' }) },
-            { details: JSON.stringify({ emailAddress: 'inbox@archive.com', error: 'boom2' }) },
-            { details: JSON.stringify({ emailAddress: 'second@archive.com', error: 'boom3' }) },
-          ];
-        // Latest reconciliation runs; only mb-1 has one.
-        case 'RECONCILIATION_RUN':
-          return [
-            {
-              id: 'log-1',
-              createdAt: new Date(now.getTime() - 30 * 60 * 1000),
-              details: JSON.stringify({ mailboxId: 'mb-1', missingBefore: 3, ingested: 3 }),
-            },
-          ];
-        default:
-          return [];
-      }
-    });
-
-    // mb-1 is active with recent mail; mb-2 is a quiet mailbox with nothing.
-    mockPrisma.emailMessage.findFirst.mockImplementation(async ({ where }: Where = {}) =>
-      where?.mailboxId === 'mb-1' ? { receivedAt: lastMsgAt } : null
-    );
-    mockPrisma.emailMessage.count.mockImplementation(async ({ where }: Where = {}) => {
-      if (where?.mailboxId !== 'mb-1') return 0;
-      return where.receivedAt ? 7 /* messagesLast24h */ : 42 /* totalMessages */;
-    });
-    mockPrisma.candidate.count.mockImplementation(async ({ where }: Where = {}) => {
-      if (where?.mailboxId !== 'mb-1') return 0;
-      return where.status === 'NEEDS_REVIEW' ? 1 : 5 /* totalCandidates */;
-    });
-    mockPrisma.emailDraft.count.mockImplementation(async ({ where }: Where = {}) => {
-      const thread = where?.thread as { mailboxId?: string } | undefined;
-      return where?.status === 'PENDING' && thread?.mailboxId === 'mb-1' ? 2 : 0;
-    });
-
-    const res = await request(app)
-      .get('/api/internal/sync-health')
-      .set('Authorization', AUTH);
+    const res = await request(app).get('/api/internal/sync-health').set('Authorization', AUTH);
 
     expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
     expect(res.body.data).toHaveLength(2);
 
-    const health1 = res.body.data.find(
-      (m: { mailboxId: string }) => m.mailboxId === 'mb-1'
-    );
-    expect(health1).toMatchObject({
-      mailboxId: 'mb-1',
+    // M2: no per-mailbox fan-out.
+    expect(mockPrisma.mailbox.findMany).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.systemLog.findMany).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.emailMessage.count).not.toHaveBeenCalled();
+    expect(mockPrisma.emailMessage.findFirst).not.toHaveBeenCalled();
+    expect(mockPrisma.candidate.count).not.toHaveBeenCalled();
+    expect(mockPrisma.emailDraft.count).not.toHaveBeenCalled();
+
+    const h1 = res.body.data.find((m: { mailboxId: string }) => m.mailboxId === 'mb-1');
+    expect(h1).toMatchObject({
       emailAddress: 'inbox@archive.com',
       displayName: 'Inbox',
       isActive: true,
+      authStatus: 'OK',
+      lastAuthError: null,
+      watchExpiresInHours: 36,
+      lastSyncedMessageAt: minsAgo(120).toISOString(),
+      lastReconciliationAt: minsAgo(30).toISOString(),
+      lastReconciliationFoundMissing: 3,
+      lastReconcileError: null,
+      consecutiveReconcileFailures: 0,
       messagesLast24h: 7,
+      totalMessages: 42,
+      totalCandidates: 5,
       pendingDrafts: 2,
       candidatesNeedsReview: 1,
-      lastReconciliationFoundMissing: 3,
       webhookErrorsLast24h: 2,
       lastWebhookError: 'boom',
+      error: false,
     });
-    expect(health1.totalMessages).toBe(42);
-    expect(health1.totalCandidates).toBe(5);
-    expect(typeof health1.watchExpiry).toBe('string');
-    expect(typeof health1.watchExpiresInHours).toBe('number');
-    expect(health1.lastSyncedMessageAt).toBe(lastMsgAt.toISOString());
-    expect(typeof health1.lastReconciliationAt).toBe('string');
 
-    const health2 = res.body.data.find(
-      (m: { mailboxId: string }) => m.mailboxId === 'mb-2'
-    );
-    expect(health2).toMatchObject({
-      mailboxId: 'mb-2',
-      emailAddress: 'second@archive.com',
-      displayName: null,
-      isActive: false,
-      watchExpiry: null,
-      watchExpiresInHours: null,
-      lastSyncedMessageAt: null,
-      lastReconciliationAt: null,
-      lastReconciliationFoundMissing: 0,
-      messagesLast24h: 0,
-      pendingDrafts: 0,
-      candidatesNeedsReview: 0,
-      webhookErrorsLast24h: 1,
+    const h2 = res.body.data.find((m: { mailboxId: string }) => m.mailboxId === 'mb-2');
+    expect(h2).toMatchObject({
+      authStatus: 'NEEDS_REAUTH',
+      lastAuthError: 'invalid_grant',
+      lastAuthErrorAt: minsAgo(90).toISOString(),
+      lastReconciliationAt: minsAgo(150).toISOString(),
+      lastReconcileError: 'invalid_grant',
+      consecutiveReconcileFailures: 2,
+      error: false,
     });
+    expect(h2.watchExpiresInHours).toBeLessThan(0);
+  });
+
+  it('flags rows with error=true instead of returning healthy-looking zeros when the stats query fails', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockPrisma.mailbox.findMany.mockResolvedValueOnce([mb1]);
+    mockPrisma.$queryRaw.mockRejectedValueOnce(new Error('pool timeout'));
+    mockPrisma.systemLog.findMany.mockResolvedValueOnce([]);
+
+    const res = await request(app).get('/api/internal/sync-health').set('Authorization', AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data[0]).toMatchObject({
+      mailboxId: 'mb-1',
+      authStatus: 'OK',
+      error: true,
+      messagesLast24h: null,
+      totalMessages: null,
+      pendingDrafts: null,
+    });
+    errSpy.mockRestore();
   });
 });

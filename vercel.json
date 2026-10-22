@@ -14,7 +14,8 @@
   ],
   "crons": [
     { "path": "/api/internal/cron/renew-watches", "schedule": "0 */6 * * *" },
-    { "path": "/api/internal/cron/reconcile", "schedule": "0 * * * *" }
+    { "path": "/api/internal/cron/reconcile", "schedule": "0 * * * *" },
+    { "path": "/api/internal/cron/watchdog", "schedule": "*/15 * * * *" }
   ],
   "git": {
     "deploymentEnabled": {
