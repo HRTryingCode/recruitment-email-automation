@@ -74,9 +74,25 @@ export interface CteParams {
   mailboxId?: string;
 }
 
+/** `?role=` filter: exact role titles, plus `unknown` for a null/blank role (`__none__`). */
+export interface InboxRoleFilter {
+  roles: string[];
+  unknown: boolean;
+}
+export const ROLE_UNKNOWN_PARAM = '__none__';
+
+/** SQL predicate on inbox_items.role; TRUE when there's no filter. */
+function roleMatch(f: InboxRoleFilter | null | undefined): Prisma.Sql {
+  if (!f || (f.roles.length === 0 && !f.unknown)) return Prisma.sql`TRUE`;
+  const parts: Prisma.Sql[] = [];
+  if (f.roles.length) parts.push(Prisma.sql`role IN (${Prisma.join(f.roles)})`);
+  if (f.unknown) parts.push(Prisma.sql`role IS NULL`);
+  return Prisma.sql`(${Prisma.join(parts, ' OR ')})`;
+}
+
 /**
  * The view rules as a CTE ending in `inbox_items (id, kind, view, sortAt,
- * mailboxId, expiresAt)`. expiresAt is set for PENDING/APPROVED drafts only
+ * mailboxId, expiresAt, role)`. role is the trimmed role or NULL. expiresAt is set for PENDING/APPROVED drafts only
  * (the ones the expiry window applies to). Shared with today.service.
  */
 export function inboxItemsCte({ now, mailboxId }: CteParams): Prisma.Sql {
@@ -111,7 +127,8 @@ export function inboxItemsCte({ now, mailboxId }: CteParams): Prisma.Sql {
         t."mailboxId" AS "mailboxId",
         CASE WHEN d.status IN ('PENDING', 'APPROVED')
           THEN d."createdAt" + make_interval(days => ${DRAFT_EXPIRY_DAYS}::int)
-        END AS "expiresAt"
+        END AS "expiresAt",
+        NULLIF(BTRIM(c.role), '') AS role
       FROM "EmailDraft" d
       JOIN "EmailThread" t ON t.id = d."threadId"
       LEFT JOIN "Candidate" c ON c.id = t."candidateId"
@@ -122,7 +139,8 @@ export function inboxItemsCte({ now, mailboxId }: CteParams): Prisma.Sql {
     candidate_items AS (
       SELECT c.id, 'candidate'::text AS kind, 'needs_review'::text AS view,
         COALESCE(c."lastInboundAt", c."updatedAt") AS "sortAt",
-        c."mailboxId" AS "mailboxId", NULL::timestamp AS "expiresAt"
+        c."mailboxId" AS "mailboxId", NULL::timestamp AS "expiresAt",
+        NULLIF(BTRIM(c.role), '') AS role
       FROM "Candidate" c
       WHERE c.status = 'NEEDS_REVIEW'
         AND COALESCE(c."lastInboundAt", c."updatedAt") >= ${expiryCutoff}
@@ -134,16 +152,26 @@ export function inboxItemsCte({ now, mailboxId }: CteParams): Prisma.Sql {
         )
     ),
     inbox_items AS (
-      SELECT id, kind, view, "sortAt", "mailboxId", "expiresAt" FROM draft_items WHERE view IS NOT NULL
+      SELECT id, kind, view, "sortAt", "mailboxId", "expiresAt", role FROM draft_items WHERE view IS NOT NULL
       UNION ALL
-      SELECT id, kind, view, "sortAt", "mailboxId", "expiresAt" FROM candidate_items
+      SELECT id, kind, view, "sortAt", "mailboxId", "expiresAt", role FROM candidate_items
     )`;
 }
 
-/** Item count per view: one query for all five tabs. */
-export function inboxCountsSql(params: CteParams): Prisma.Sql {
+/**
+ * Item count per view: one query for all five tabs. A role filter narrows
+ * only `view`'s count (the list it applies to); other tabs stay whole.
+ */
+export function inboxCountsSql(params: CteParams & { view?: InboxView; roleFilter?: InboxRoleFilter | null }): Prisma.Sql {
+  const where = params.view ? Prisma.sql`WHERE view <> ${params.view} OR ${roleMatch(params.roleFilter)}` : Prisma.empty;
   return Prisma.sql`${inboxItemsCte(params)}
-    SELECT view, COUNT(*)::int AS count FROM inbox_items GROUP BY view`;
+    SELECT view, COUNT(*)::int AS count FROM inbox_items ${where} GROUP BY view`;
+}
+
+/** Item count per role in one view (unfiltered by role), for the role filter. */
+export function inboxRoleCountsSql(params: CteParams & { view: InboxView }): Prisma.Sql {
+  return Prisma.sql`${inboxItemsCte(params)}
+    SELECT role, COUNT(*)::int AS count FROM inbox_items WHERE view = ${params.view} GROUP BY role`;
 }
 
 export interface InboxItemsParams extends CteParams {
@@ -151,6 +179,7 @@ export interface InboxItemsParams extends CteParams {
   order: InboxOrder;
   cursor: InboxCursor | null;
   limit: number;
+  roleFilter?: InboxRoleFilter | null;
 }
 
 /** One page of (id, kind, sortAt) for a view, keyset-paginated on (sortAt, kind, id). */
@@ -166,7 +195,7 @@ export function inboxItemsSql(p: InboxItemsParams): Prisma.Sql {
     : Prisma.sql`ORDER BY "sortAt" ASC, kind ASC, id ASC`;
   return Prisma.sql`${inboxItemsCte(p)}
     SELECT id, kind, "sortAt" FROM inbox_items
-    WHERE view = ${p.view} ${after}
+    WHERE view = ${p.view} AND ${roleMatch(p.roleFilter)} ${after}
     ${orderBy}
     LIMIT ${p.limit}`;
 }
@@ -220,6 +249,8 @@ export interface InboxItem {
 export interface InboxPage {
   items: InboxItem[];
   counts: Record<InboxView, number>;
+  /** Items per role in this view (ignoring the role filter); role null = unknown. */
+  roleCounts: Array<{ role: string | null; count: number }>;
   nextCursor: string | null;
 }
 
@@ -249,14 +280,25 @@ export async function releaseExpiredSnoozes(now: Date): Promise<number> {
 }
 
 export async function getInbox(
-  q: { view: InboxView; mailboxId?: string; order: InboxOrder; cursor: InboxCursor | null },
+  q: {
+    view: InboxView;
+    mailboxId?: string;
+    order: InboxOrder;
+    cursor: InboxCursor | null;
+    roleFilter?: InboxRoleFilter | null;
+  },
   userId: string | undefined,
   now: Date = new Date()
 ): Promise<InboxPage> {
   await releaseExpiredSnoozes(now);
 
-  const [countRows, pageRows] = await Promise.all([
-    prisma.$queryRaw<Array<{ view: InboxView; count: number }>>(inboxCountsSql({ now, mailboxId: q.mailboxId })),
+  const [countRows, roleRows, pageRows] = await Promise.all([
+    prisma.$queryRaw<Array<{ view: InboxView; count: number }>>(
+      inboxCountsSql({ now, mailboxId: q.mailboxId, view: q.view, roleFilter: q.roleFilter })
+    ),
+    prisma.$queryRaw<Array<{ role: string | null; count: number }>>(
+      inboxRoleCountsSql({ now, mailboxId: q.mailboxId, view: q.view })
+    ),
     prisma.$queryRaw<Array<{ id: string; kind: InboxItemKind; sortAt: Date }>>(
       inboxItemsSql({ ...q, now, limit: INBOX_PAGE_LIMIT + 1 })
     ),
@@ -264,6 +306,7 @@ export async function getInbox(
 
   const counts = Object.fromEntries(INBOX_VIEWS.map((v) => [v, 0])) as Record<InboxView, number>;
   for (const r of countRows ?? []) counts[r.view] = Number(r.count);
+  const roleCounts = (roleRows ?? []).map((r) => ({ role: r.role ?? null, count: Number(r.count) }));
 
   const rows = (pageRows ?? []).slice(0, INBOX_PAGE_LIMIT);
   const last = rows[rows.length - 1];
@@ -335,5 +378,5 @@ export async function getInbox(
     }
   }
 
-  return { items, counts, nextCursor };
+  return { items, counts, roleCounts, nextCursor };
 }

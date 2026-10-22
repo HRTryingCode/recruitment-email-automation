@@ -85,7 +85,8 @@ describe('InboxPage', () => {
     await user.click(await screen.findByRole('button', { name: /Ada Example/ }));
     const pane = await screen.findByRole('region', { name: 'Reply to Ada Example' });
     expect(search().get('item')).toBe('d1');
-    expect(within(pane).getByText('ada@example.org · Senior Engineer')).toBeInTheDocument();
+    expect(within(pane).getByText('ada@example.org')).toBeInTheDocument();
+    expect(within(pane).getByTestId('role-chip')).toHaveTextContent('Senior Engineer');
     expect(within(pane).getByText('Interested')).toBeInTheDocument();
     expect(within(pane).getByText('Asks for a call next week')).toBeInTheDocument();
     expect(within(pane).getByText('love to chat').tagName).toBe('MARK');
@@ -177,7 +178,9 @@ describe('InboxPage', () => {
     expect(within(lever).getByText('Senior Engineer · Phone Screen')).toBeInTheDocument();
     expect(within(lever).getByText('Checked 10m ago')).toBeInTheDocument();
     expect(within(lever).getByRole('link', { name: /Open in Lever/ })).toHaveAttribute('href', 'https://hire.lever.co/candidates/opp1');
-    expect(within(header).getByText('ada@example.org · Senior Engineer')).toBeInTheDocument();
+    expect(within(header).getByText('ada@example.org')).toBeInTheDocument();
+    // Role shows once, as the shared RoleChip, not appended to the email line.
+    expect(within(header).getByTestId('role-chip')).toHaveTextContent('Senior Engineer');
     // One label chip in words — no candidate-status badge ("Neutral"), no %.
     expect(within(header).getByText('Interested')).toBeInTheDocument();
     expect(within(header).queryByText(/neutral/i)).not.toBeInTheDocument();

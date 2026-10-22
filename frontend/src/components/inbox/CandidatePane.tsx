@@ -9,7 +9,7 @@ import { fetchCandidate, ignoreCandidate, unignoreCandidate, type InboxItem } fr
 import { messagePlainText, type TriageClass } from '@/lib/inbox';
 import { extractApiErrorMessage, toastError, toastSuccess } from '@/lib/toast';
 import { formatTimeAgo } from '@/lib/utils';
-import { LabelChip } from './chips';
+import { LabelChip, RoleChip } from './chips';
 
 interface Props {
   item: InboxItem;
@@ -85,6 +85,7 @@ export default function CandidatePane({ item, onClose, onReply, pending, error, 
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="truncate font-heading text-base font-semibold text-foreground">{name}</h2>
+            <RoleChip role={item.candidate?.role} />
             <LabelChip classification="NEUTRAL" />
           </div>
           <p className="truncate text-sm text-muted-foreground">{item.candidate?.email}</p>

@@ -22,6 +22,13 @@ describe('inbox API client (U0)', () => {
     expect(get).toHaveBeenCalledWith('/inbox', { params: { view: 'interested', mailboxId: 'mb', order: 'oldest', cursor: 'c1' } });
   });
 
+  it('fetchInbox sends role filters as a repeated ?role= param', async () => {
+    await client.fetchInbox({ view: 'needs_review', order: 'newest', role: ['Engineer, Platform', '__none__'] });
+    const [url, config] = get.mock.calls[0] as [string, { params: URLSearchParams }];
+    expect(url).toBe('/inbox');
+    expect(config.params.toString()).toBe('view=needs_review&order=newest&role=Engineer%2C+Platform&role=__none__');
+  });
+
   it('one-step send, undo, dismiss, snooze and unsnooze', async () => {
     await client.scheduleSendDraft('d1', { undoSeconds: 10, bodyText: 'Hi', override: true });
     expect(post).toHaveBeenLastCalledWith('/drafts/d1/send', { undoSeconds: 10, bodyText: 'Hi', override: true });

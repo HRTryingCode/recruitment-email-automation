@@ -19,6 +19,7 @@ export function useViewHref() {
     params.delete('draftId');
     params.delete('candidateId');
     params.delete('status');
+    params.delete('role'); // the role filter belongs to one view
     if (mailboxId !== undefined) {
       if (mailboxId) params.set('mailboxId', mailboxId);
       else params.delete('mailboxId');

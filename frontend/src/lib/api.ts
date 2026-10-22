@@ -546,6 +546,8 @@ export interface InboxItem {
 export interface InboxPage {
   items: InboxItem[];
   counts: Record<InboxView, number>;
+  /** Items per role in this view, ignoring the role filter; role null = unknown. */
+  roleCounts?: Array<{ role: string | null; count: number }>;
   nextCursor: string | null;
 }
 
@@ -555,8 +557,18 @@ export async function fetchInbox(params: {
   mailboxId?: string;
   order?: 'newest' | 'oldest';
   cursor?: string;
+  /** Repeated ?role= (titles can contain commas); '__none__' = role unknown. */
+  role?: string[];
 } = {}): Promise<SingleResponse<InboxPage>> {
-  const res = await api.get('/inbox', { params });
+  const { role, ...rest } = params;
+  if (!role?.length) {
+    const res = await api.get('/inbox', { params: rest });
+    return res.data as SingleResponse<InboxPage>;
+  }
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(rest)) if (v) qs.set(k, v);
+  for (const r of role) qs.append('role', r);
+  const res = await api.get('/inbox', { params: qs });
   return res.data as SingleResponse<InboxPage>;
 }
 
