@@ -60,7 +60,12 @@ function programRaw(items: Array<{ id: string; kind: string; sortAt: Date }>) {
           { view: 'interested', count: 4 },
           { view: 'needs_review', count: 2 },
         ]
-      : items
+      : sql.strings.join('?').includes('GROUP BY role')
+        ? [
+            { role: 'Engineer', count: 3 },
+            { role: null, count: 1 },
+          ]
+        : items
   );
 }
 
@@ -86,11 +91,15 @@ describe('GET /api/inbox', () => {
     ]);
     const res = await request(app).get('/api/inbox?view=interested').set('Authorization', AUTH);
     expect(res.status).toBe(200);
-    // Exactly two raw queries: one grouped counts query + one page query.
-    expect(mockPrisma.$queryRaw).toHaveBeenCalledTimes(2);
+    // Exactly three raw queries: grouped view counts, grouped role counts, one page.
+    expect(mockPrisma.$queryRaw).toHaveBeenCalledTimes(3);
     const texts = mockPrisma.$queryRaw.mock.calls.map(([sql]) => (sql as { strings: string[] }).strings.join('?'));
     expect(texts.filter((t) => t.includes('GROUP BY view'))).toHaveLength(1);
     expect(res.body.data.counts).toEqual({ needs_review: 2, interested: 4, not_interested: 0, snoozed: 0, sent_today: 0 });
+    expect(res.body.data.roleCounts).toEqual([
+      { role: 'Engineer', count: 3 },
+      { role: null, count: 1 },
+    ]);
     const [item] = res.body.data.items;
     expect(item).toMatchObject({
       kind: 'draft',
@@ -143,7 +152,36 @@ describe('GET /api/inbox', () => {
     expect(res.body.data.nextCursor).toBe(encodeCursor({ sortAt: rows[49].sortAt, kind: 'draft', id: 'draft-49' }));
   });
 
+  it('passes repeated ?role= (and __none__ for unknown) into the items and counts queries', async () => {
+    programRaw([]);
+    await request(app)
+      .get('/api/inbox?view=needs_review&role=Engineer%2C%20Platform&role=__none__&order=oldest')
+      .set('Authorization', AUTH)
+      .expect(200);
+    const calls = mockPrisma.$queryRaw.mock.calls.map(([sql]) => sql as { strings: string[]; values: unknown[] });
+    const items = calls.find((c) => !c.strings.join('?').includes('GROUP BY'))!;
+    const counts = calls.find((c) => c.strings.join('?').includes('GROUP BY view'))!;
+    const roleCounts = calls.find((c) => c.strings.join('?').includes('GROUP BY role'))!;
+    // A comma inside a role title is part of the title, not a separator.
+    expect(items.values).toContain('Engineer, Platform');
+    expect(items.strings.join('?')).toMatch(/role IS NULL/);
+    expect(items.strings.join('?')).toMatch(/ASC/);
+    expect(counts.values).toContain('Engineer, Platform');
+    // Role counts are for the whole view, so the filter list never hides options.
+    expect(roleCounts.values).not.toContain('Engineer, Platform');
+  });
+
+  it('no ?role= means no role filter', async () => {
+    programRaw([]);
+    await request(app).get('/api/inbox?view=needs_review').set('Authorization', AUTH).expect(200);
+    const items = mockPrisma.$queryRaw.mock.calls
+      .map(([sql]) => sql as { strings: string[] })
+      .find((c) => !c.strings.join('?').includes('GROUP BY'))!;
+    expect(items.strings.join('?')).not.toMatch(/role IS NULL/);
+  });
+
   it.each([
+    [`role=${'x'.repeat(201)}`, /role/],
     ['view=everything', /view/],
     ['mailboxId=not-a-cuid', /mailboxId/],
     ['cursor=@@@', /cursor/],

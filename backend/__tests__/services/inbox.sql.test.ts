@@ -8,7 +8,9 @@ import { migratedDb } from '../_setup/pglite';
 import {
   inboxCountsSql,
   inboxItemsSql,
+  inboxRoleCountsSql,
   etMidnight,
+  type InboxRoleFilter,
   type InboxView,
 } from '../../src/services/inbox.service';
 
@@ -99,12 +101,29 @@ describe('inbox SQL (U0)', () => {
   beforeAll(async () => {
     db = await migratedDb();
     await seed(db);
+    // Roles for the role-filter tests; a blank role counts as unknown.
+    await db.exec(`
+      UPDATE "Candidate" SET role = 'Engineer' WHERE id IN ('c_d_low', 'c_review', 'c_d_int');
+      UPDATE "Candidate" SET role = 'Designer' WHERE id = 'c_d_neutral';
+      UPDATE "Candidate" SET role = '   ' WHERE id = 'c_d_failed';
+    `);
   }, 60_000);
 
-  async function ids(view: InboxView, extra: { mailboxId?: string; order?: 'newest' | 'oldest' } = {}) {
+  async function ids(
+    view: InboxView,
+    extra: { mailboxId?: string; order?: 'newest' | 'oldest'; roleFilter?: InboxRoleFilter } = {}
+  ) {
     const rows = await run<{ id: string; kind: string }>(
       db,
-      inboxItemsSql({ view, now: NOW, limit: 100, order: extra.order ?? 'newest', mailboxId: extra.mailboxId, cursor: null })
+      inboxItemsSql({
+        view,
+        now: NOW,
+        limit: 100,
+        order: extra.order ?? 'newest',
+        mailboxId: extra.mailboxId,
+        cursor: null,
+        roleFilter: extra.roleFilter,
+      })
     );
     return rows.map((r) => `${r.kind === 'candidate' ? 'cand:' : ''}${r.id}`);
   }
@@ -176,5 +195,34 @@ describe('inbox SQL (U0)', () => {
       })
     );
     expect(page2.map((r) => r.id)).toEqual(['d_low', 'd_neutral', 'd_failed']);
+  });
+
+  it('filters by role; __none__ (unknown) matches null and blank roles', async () => {
+    expect(await ids('needs_review', { roleFilter: { roles: ['Engineer'], unknown: false } })).toEqual(['cand:c_review', 'd_low']);
+    expect(await ids('needs_review', { roleFilter: { roles: [], unknown: true } })).toEqual(['cand:c_review_mb2', 'd_failed']);
+    expect(await ids('needs_review', { roleFilter: { roles: ['Designer'], unknown: true } })).toEqual([
+      'cand:c_review_mb2',
+      'd_neutral',
+      'd_failed',
+    ]);
+    expect(await ids('needs_review', { roleFilter: { roles: ['Engineer'], unknown: false }, order: 'oldest' })).toEqual([
+      'd_low',
+      'cand:c_review',
+    ]);
+  });
+
+  it('role filter narrows only the current view\'s count', async () => {
+    const rows = await run<{ view: string; count: number }>(
+      db,
+      inboxCountsSql({ now: NOW, view: 'needs_review', roleFilter: { roles: ['Engineer'], unknown: false } })
+    );
+    const counts = Object.fromEntries(rows.map((r) => [r.view, Number(r.count)]));
+    expect(counts).toEqual({ needs_review: 2, interested: 3, not_interested: 2, snoozed: 1, sent_today: 2 });
+  });
+
+  it('role counts for a view in one grouped query, unknown as null', async () => {
+    const rows = await run<{ role: string | null; count: number }>(db, inboxRoleCountsSql({ now: NOW, view: 'needs_review' }));
+    const byRole = Object.fromEntries(rows.map((r) => [String(r.role), Number(r.count)]));
+    expect(byRole).toEqual({ Engineer: 2, Designer: 1, null: 2 });
   });
 });
