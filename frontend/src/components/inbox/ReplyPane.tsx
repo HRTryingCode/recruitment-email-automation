@@ -23,6 +23,7 @@ import { formatTimeAgo } from '@/lib/utils';
 import type { DraftEditorState } from '@/hooks/useDraftEditor';
 import { LabelChip, PresenceChip, RoleChip, firstName } from './chips';
 import DraftEditor from './DraftEditor';
+import DraftFlags from './DraftFlags';
 import EvidenceMessage from './EvidenceMessage';
 import LeverSection, { type LeverFields } from '@/components/lever/LeverSection';
 
@@ -229,6 +230,7 @@ export default function ReplyPane(props: Props) {
             <RoleChip role={role} />
             <LabelChip classification={draft.classification} confidenceLabel={draft.confidenceLabel} />
             <PresenceChip presence={presence} />
+            <DraftFlags flags={draft} />
           </div>
           <p className="truncate text-sm text-muted-foreground">
             {candidate?.email ?? item?.candidate?.email}

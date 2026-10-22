@@ -9,6 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import type { InboxItem, InboxView } from '@/lib/api';
 import { VIEWS, formatAge, itemKey, type RoleGroup } from '@/lib/inbox';
 import { LabelChip, MailboxChip, PresenceChip, RoleChip } from './chips';
+import DraftFlags from './DraftFlags';
 
 export { itemKey } from '@/lib/inbox';
 
@@ -87,6 +88,11 @@ function Row({
             <PresenceChip presence={item.presence} />
           </span>
           <span className="truncate text-xs font-normal text-muted-foreground">{preview}</span>
+          {item.draft && (
+            <span className="flex flex-wrap items-center gap-1 empty:hidden">
+              <DraftFlags flags={item.draft} />
+            </span>
+          )}
         </span>
       </Button>
     </li>
