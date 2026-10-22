@@ -463,6 +463,25 @@ export function pickHeadTail<T>(messagesAsc: T[], head: number, tail: number): T
  * Errors are swallowed (logged) so a bad message can't kill the rest of the
  * sync. The message itself is always already saved before this is called.
  */
+/**
+ * The draft that should stop classifyAndDraft from creating another one on
+ * this thread, if any. A live (PENDING/APPROVED) draft always blocks. On a
+ * hand-off inbox a SENT draft blocks too: once the candidate has been looped
+ * in to the CC recipient, their next reply-all must not produce a second
+ * "looping in Sofia" draft (M23).
+ */
+export async function findBlockingDraft(
+  threadId: string,
+  isHandoffInbox: boolean
+): Promise<{ id: string; status: string } | null> {
+  const statuses = isHandoffInbox ? ['PENDING', 'APPROVED', 'SENT'] : ['PENDING', 'APPROVED'];
+  return prisma.emailDraft.findFirst({
+    where: { threadId, status: { in: statuses } },
+    select: { id: true, status: true },
+    orderBy: { createdAt: 'desc' },
+  });
+}
+
 async function classifyAndDraft(opts: {
   mailbox: Mailbox;
   thread: EmailThread;
@@ -535,9 +554,9 @@ async function classifyAndDraft(opts: {
 
   // Existing draft check happens BEFORE we burn Claude tokens — if there is
   // already a PENDING/APPROVED draft on this thread, we just log + bail.
-  const existingDraft = await prisma.emailDraft.findFirst({
-    where: { threadId: thread.id, status: { in: ['PENDING', 'APPROVED'] } },
-  });
+  const isHandoffInbox =
+    mailbox.emailAddress.toLowerCase() !== config.draftCcEmail.toLowerCase();
+  const existingDraft = await findBlockingDraft(thread.id, isHandoffInbox);
 
   let classificationResult;
   try {
@@ -686,6 +705,7 @@ async function classifyAndDraft(opts: {
         candidateId: candidate.id,
         threadId: thread.id,
         existingDraftId: existingDraft.id,
+        existingStatus: existingDraft.status,
       },
       'INFO'
     );
@@ -736,8 +756,6 @@ async function classifyAndDraft(opts: {
   // 5. Only auto-draft for INTERESTED candidates.
   if (classification !== 'INTERESTED') return;
 
-  const ccEmail = config.draftCcEmail.toLowerCase();
-  const isHandoffInbox = mailbox.emailAddress.toLowerCase() !== ccEmail;
 
   // 6. For non-Sofia inboxes, use Claude to generate a tailored handoff reply
   //    that addresses anything specific the candidate said, then loops in Sofia.
