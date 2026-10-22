@@ -49,8 +49,21 @@ const paginationSchema = z.object({
 // is opaque and the SQL it generates is wasted work.
 const REPLY_STATUSES = ['NEW', 'AWAITING_REPLY', 'REPLIED'] as const;
 
-// Server-side sort columns (L16). Default (no sort) keeps latest-activity order.
-const SORT_COLUMNS = ['name', 'email', 'company', 'role', 'status', 'createdAt', 'updatedAt', 'lastInboundAt'] as const;
+// Server-side sort columns (L16, R3). Default (no sort) keeps latest-activity
+// order. `mailbox`, `lever` and `lastActivity` are the R3 table's columns.
+const SORT_COLUMNS = [
+  'name',
+  'email',
+  'company',
+  'role',
+  'status',
+  'createdAt',
+  'updatedAt',
+  'lastInboundAt',
+  'mailbox',
+  'lever',
+  'lastActivity',
+] as const;
 const NULLABLE_SORT_COLUMNS = new Set<string>(['company', 'role', 'lastInboundAt']);
 
 const candidateListFilterSchema = z.object({
@@ -211,14 +224,15 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const search = qs(req.query.search)?.trim() ?? '';
 
     const where: Prisma.CandidateWhereInput = {};
+    // Search narrows the current filters instead of replacing them (R3): the
+    // UI shows every active filter as a chip, so dropping them was invisible.
     if (search) {
-      // Search overrides status filter and includes all statuses (incl. ignored)
-      // so the user can find any candidate regardless of state.
       where.OR = [
         { name: { contains: search, mode: 'insensitive' } },
         { email: { contains: search, mode: 'insensitive' } },
       ];
-    } else if (status) {
+    }
+    if (status) {
       where.status = status;
     } else if (!includeIgnored) {
       // Default view hides ignored candidates so dismissed people don't clutter
@@ -228,7 +242,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     }
     if (mailboxId) where.mailboxId = mailboxId;
     if (lever) where.leverState = lever === 'IN' ? { in: ['ACTIVE', 'ARCHIVED', 'HIRED'] } : 'NOT_FOUND';
-    if (replyStatus && !search) {
+    if (replyStatus) {
       where.AND = [replyStatusWhere(replyStatus)];
       // Matches the dashboard's "awaiting reply" pill: active, role detected.
       if (replyStatus === 'AWAITING_REPLY') {
@@ -251,25 +265,63 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     // to keyset pagination — the practical workload is well under 500.
     const overFetchTake = sort ? limit : Math.min(limit * 3, 500);
     const sortDir = dir ?? 'asc';
+    const include = {
+      mailbox: {
+        select: { id: true, emailAddress: true, provider: true },
+      },
+      threads: {
+        orderBy: { lastMessageAt: 'desc' as const },
+        take: 1,
+        select: { id: true, subject: true, lastMessageAt: true },
+      },
+    };
+
+    if (sort === 'lastActivity') {
+      // Latest message either way (the table's "Last activity"). Prisma can't
+      // order by GREATEST(), so sort every match's timestamps here and load
+      // only the page — a true global order (the candidate table is small).
+      const [stamps, total] = await Promise.all([
+        prisma.candidate.findMany({
+          where,
+          select: { id: true, lastInboundAt: true, lastOutboundAt: true, updatedAt: true },
+        }),
+        prisma.candidate.count({ where }),
+      ]);
+      const at = (c: { lastInboundAt: Date | null; lastOutboundAt: Date | null; updatedAt: Date }) =>
+        Math.max(c.lastInboundAt?.getTime() ?? 0, c.lastOutboundAt?.getTime() ?? 0) || c.updatedAt.getTime();
+      const sign = sortDir === 'asc' ? 1 : -1;
+      const pageIds = stamps
+        .sort((a, b) => sign * (at(a) - at(b)) || a.id.localeCompare(b.id))
+        .slice(skip, skip + limit)
+        .map((c) => c.id);
+      const rows = await prisma.candidate.findMany({ where: { id: { in: pageIds } }, include });
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      const data = pageIds
+        .map((id) => byId.get(id))
+        .filter((r): r is (typeof rows)[number] => !!r)
+        .map((c) => ({ ...c, replyStatus: deriveReplyStatus(c) }));
+      return res.json({ success: true, data, meta: { total, page, limit } });
+    }
+
     // `nulls` is only accepted on nullable columns.
     const sortKey = sort && NULLABLE_SORT_COLUMNS.has(sort) ? { sort: sortDir, nulls: 'last' as const } : sortDir;
-    const orderBy: Prisma.CandidateOrderByWithRelationInput[] = sort
-      ? [{ [sort]: sortKey } as Prisma.CandidateOrderByWithRelationInput, { id: 'asc' }]
-      : [{ updatedAt: 'desc' }];
+    const orderBy: Prisma.CandidateOrderByWithRelationInput[] =
+      sort === 'mailbox'
+        ? [{ mailbox: { emailAddress: sortDir } }, { id: 'asc' }]
+        : sort === 'lever'
+          ? [
+              { leverPostingTitle: { sort: sortDir, nulls: 'last' } },
+              { leverState: { sort: sortDir, nulls: 'last' } },
+              { id: 'asc' },
+            ]
+          : sort
+            ? [{ [sort]: sortKey } as Prisma.CandidateOrderByWithRelationInput, { id: 'asc' }]
+            : [{ updatedAt: 'desc' }];
 
     const [candidates, total] = await Promise.all([
       prisma.candidate.findMany({
         where,
-        include: {
-          mailbox: {
-            select: { id: true, emailAddress: true, provider: true },
-          },
-          threads: {
-            orderBy: { lastMessageAt: 'desc' },
-            take: 1,
-            select: { id: true, subject: true, lastMessageAt: true },
-          },
-        },
+        include,
         orderBy,
         skip,
         take: overFetchTake,
@@ -298,6 +350,46 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       .slice(0, limit);
 
     res.json({ success: true, data: enriched, meta: { total, page, limit } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/candidates/bulk  { ids, status }
+// R3 bulk actions. IGNORED discards live drafts in the same transaction, as
+// the single ignore does (M20).
+const bulkSchema = z.object({
+  ids: z.array(cuidSchema).min(1, 'ids is required').max(200, 'at most 200 candidates at once'),
+  status: z.enum(CANDIDATE_STATUSES),
+});
+
+router.post('/bulk', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const parsed = bulkSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return next(createError(parsed.error.errors[0]?.message ?? 'Invalid body', 400));
+    const ids = [...new Set(parsed.data.ids)];
+    const { status } = parsed.data;
+
+    if (status !== 'IGNORED') {
+      const result = await prisma.candidate.updateMany({ where: { id: { in: ids } }, data: { status } });
+      await logEvent('CANDIDATES_BULK_STATUS', { actorUserId: req.userId, count: result.count, status }, 'INFO');
+      return res.json({ success: true, data: { updated: result.count, draftsDiscarded: 0 } });
+    }
+
+    const threads = await prisma.emailThread.findMany({ where: { candidateId: { in: ids } }, select: { id: true } });
+    const [updated, discarded] = await prisma.$transaction([
+      prisma.candidate.updateMany({ where: { id: { in: ids } }, data: { status: 'IGNORED' } }),
+      prisma.emailDraft.updateMany({
+        where: { threadId: { in: threads.map((t) => t.id) }, status: { in: CANCELABLE_DRAFT_STATUSES } },
+        data: { status: 'DISCARDED' },
+      }),
+    ]);
+    await logEvent(
+      'CANDIDATE_IGNORED',
+      { actorUserId: req.userId, count: updated.count, draftsDiscarded: discarded.count, via: 'bulk' },
+      'INFO'
+    );
+    res.json({ success: true, data: { updated: updated.count, draftsDiscarded: discarded.count } });
   } catch (err) {
     next(err);
   }

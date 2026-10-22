@@ -179,6 +179,14 @@ router.post(
       }
 
       const { candidate, mailbox } = thread;
+      // IGNORED is sticky (B7): a triage decision must not revive the candidate.
+      if (triageClassification && candidate.status === 'IGNORED') {
+        return next(createError('Candidate is ignored; restore them before triaging', 409));
+      }
+      // Triage is the recruiter's own call, so it sets the interest status
+      // directly; NEUTRAL ("reply, still unsure") leaves it as it was.
+      const triagedStatus =
+        triageClassification === 'INTERESTED' || triageClassification === 'NOT_INTERESTED' ? triageClassification : null;
       const mailboxAddr = mailbox.emailAddress.toLowerCase();
       const ccEmail = config.draftCcEmail.toLowerCase();
       const isHandoffInbox = mailboxAddr !== ccEmail;
@@ -270,7 +278,7 @@ router.post(
         meta = draftReply.meta;
       }
 
-      const draft = await prisma.emailDraft.create({
+      const draftCreate = prisma.emailDraft.create({
         data: {
           threadId,
           inReplyToMessageId,
@@ -288,6 +296,23 @@ router.post(
           ...draftMetaColumns(meta),
         },
       });
+      // The draft and the triage status land together or not at all.
+      const draft = triagedStatus
+        ? (
+            await prisma.$transaction([
+              draftCreate,
+              prisma.candidate.update({ where: { id: candidate.id }, data: { status: triagedStatus } }),
+            ])
+          )[0]
+        : await draftCreate;
+
+      if (triagedStatus) {
+        await logEvent(
+          'CANDIDATE_TRIAGED',
+          { actorUserId: req.userId, candidateId: candidate.id, classification: triagedStatus },
+          'INFO'
+        );
+      }
 
       await logEvent(
         'DRAFT_CREATED',

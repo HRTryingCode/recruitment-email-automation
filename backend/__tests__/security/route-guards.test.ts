@@ -57,6 +57,8 @@ const MANIFEST: Record<string, Guard> = {
   'GET /api/candidates/counts': 'auth',
   'GET /api/candidates/:id': 'auth',
   'PATCH /api/candidates/:id': 'auth',
+  // R3 bulk status / ignore from the Candidates table.
+  'POST /api/candidates/bulk': 'auth',
   'POST /api/candidates/:id/ignore': 'auth',
   'POST /api/candidates/:id/unignore': 'auth',
   'POST /api/candidates/backfill-roles': 'admin',
