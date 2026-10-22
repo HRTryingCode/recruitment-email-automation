@@ -9,6 +9,7 @@ import { logEvent } from '../services/monitoring.service';
 import { serializeEmailMessages } from '../lib/emailMessageSerializer';
 import { requireAdmin } from '../middleware/requireAdmin';
 import { z } from 'zod';
+import { composeDraftHtml, stripHeaderBreaks } from '../lib/draftBody';
 
 const router = Router();
 
@@ -18,11 +19,23 @@ function qs(val: unknown): string | undefined {
   return undefined;
 }
 
+// bodyHtml is intentionally not accepted: the HTML part is always rendered
+// server-side from bodyText (C1/M10), so a client can't desync the two or
+// inject markup. Unknown keys are stripped by zod.
 const updateDraftSchema = z.object({
   bodyText: z.string().optional(),
-  bodyHtml: z.string().nullable().optional(),
-  subject: z.string().optional(),
+  subject: z.string().transform(stripHeaderBreaks).optional(),
 });
+
+/** The mailbox's HTML signature and its plain-text rendering, or nulls if unavailable. */
+async function loadSignature(mailboxId: string): Promise<{ html: string | null; plain: string | null }> {
+  try {
+    const html = await fetchMailboxSignature(mailboxId);
+    return html ? { html, plain: htmlSignatureToPlainText(html) } : { html: null, plain: null };
+  } catch {
+    return { html: null, plain: null };
+  }
+}
 
 const paginationSchema = z.object({
   page: z.coerce.number().int().min(1).max(10000).default(1),
@@ -276,41 +289,13 @@ router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => 
       return next(createError('Can only edit pending drafts', 400));
     }
 
-    // When the caller only sends bodyText (no explicit bodyHtml), reconstruct
-    // bodyHtml from the edited text so the iframe preview stays styled and
-    // the sent email retains the mailbox's HTML signature.
-    let updateData: typeof parsed.data = parsed.data;
-    if (parsed.data.bodyText !== undefined && parsed.data.bodyHtml === undefined) {
-      let coreBodyText = parsed.data.bodyText;
-      let sigHtml: string | null = null;
-
-      try {
-        sigHtml = await fetchMailboxSignature(draft.thread.mailbox.id);
-        if (sigHtml) {
-          const sigPlainText = htmlSignatureToPlainText(sigHtml);
-          const sigSuffix = '\n' + sigPlainText;
-          if (coreBodyText.endsWith(sigSuffix)) {
-            // Strip the plain-text signature so we can re-append the HTML version.
-            coreBodyText = coreBodyText.slice(0, coreBodyText.length - sigSuffix.length);
-          } else {
-            // User modified the signature area — don't re-append HTML version
-            // (would duplicate or conflict with what's in the edited text).
-            sigHtml = null;
-          }
-        }
-      } catch {
-        // Signature fetch failed — proceed with plain-text-only HTML.
-      }
-
-      const esc = (s: string) =>
-        s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>\n');
-
-      const coreHtml = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13.5px;line-height:1.6;color:#1a1a1a;margin:0;">${esc(coreBodyText)}</div>`;
-
-      updateData = {
-        ...parsed.data,
-        bodyHtml: sigHtml ? `${coreHtml}${sigHtml}` : coreHtml,
-      };
+    // Re-render bodyHtml from the edited text so the preview and the email we
+    // hand to Gmail carry exactly what the recruiter typed, with the mailbox's
+    // HTML signature swapped back in for its plain-text rendering (C1).
+    const updateData: { bodyText?: string; subject?: string; bodyHtml?: string } = { ...parsed.data };
+    if (parsed.data.bodyText !== undefined) {
+      const sig = await loadSignature(draft.thread.mailbox.id);
+      updateData.bodyHtml = composeDraftHtml(parsed.data.bodyText, sig.html, sig.plain);
     }
 
     const updated = await prisma.emailDraft.update({
@@ -646,18 +631,26 @@ router.post('/:id/dictate', async (req: Request, res: Response, next: NextFuncti
     const { thread } = draft;
     const { candidate, mailbox } = thread;
 
+    // Send Claude only the core body: the signature is re-attached afterwards
+    // so the rewrite can't drop or mangle the mailbox's HTML signature.
+    const sig = await loadSignature(mailbox.id);
+    const sigSuffix = sig.plain ? '\n' + sig.plain : null;
+    const hasSig = sigSuffix !== null && draft.bodyText.endsWith(sigSuffix);
+    const coreBody = hasSig ? draft.bodyText.slice(0, draft.bodyText.length - sigSuffix.length) : draft.bodyText;
+
     const rewritten = await rewriteDraftWithNotes(
-      draft.bodyText,
+      coreBody,
       notes,
       candidate?.name ?? 'Candidate',
       { email: mailbox.emailAddress, displayName: mailbox.displayName }
     );
+    const newBodyText = hasSig ? `${rewritten.bodyText}${sigSuffix}` : rewritten.bodyText;
 
     const updated = await prisma.emailDraft.update({
       where: { id },
       data: {
-        bodyText: rewritten.bodyText,
-        bodyHtml: rewritten.bodyHtml ?? null,
+        bodyText: newBodyText,
+        bodyHtml: composeDraftHtml(newBodyText, sig.html, sig.plain),
       },
       include: draftWithThreadInclude,
     });

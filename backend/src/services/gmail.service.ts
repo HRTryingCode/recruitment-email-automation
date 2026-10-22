@@ -15,6 +15,7 @@ import {
 } from '../lib/senderIdentity';
 import { COMPANY_DOMAIN, isCompanyEmail } from '../lib/accessPolicy';
 import { createError } from '../middleware/error';
+import { encodeHeaderValue, isRfcMessageId, sanitizeReferences, stripHeaderBreaks } from '../lib/draftBody';
 import type { Mailbox, EmailThread } from '@prisma/client';
 
 /**
@@ -1744,7 +1745,9 @@ export async function createDraft(
   const gmail = await getGmailClient(mailbox);
 
   // Build RFC 2822 email with proper threading headers
-  const headers: string[] = [`To: ${draft.toAddress}`];
+  // Every header value is CR/LF-stripped (and Subject RFC 2047-encoded) so
+  // model- or user-supplied text can never inject extra headers (M10).
+  const headers: string[] = [`To: ${stripHeaderBreaks(draft.toAddress)}`];
 
   // CC the configured address on every AI-drafted email (e.g. sofia@archive.com)
   // so she stays in the loop on outbound recruiting traffic. Skip if the CC
@@ -1758,18 +1761,22 @@ export async function createDraft(
       'INFO'
     );
   } else if (ccAddress) {
-    headers.push(`Cc: ${ccAddress}`);
+    headers.push(`Cc: ${stripHeaderBreaks(ccAddress)}`);
   }
 
-  headers.push(`Subject: ${draft.subject}`);
+  headers.push(`Subject: ${encodeHeaderValue(draft.subject)}`);
   headers.push('MIME-Version: 1.0');
 
   // CRITICAL: Set In-Reply-To and References for Superhuman threading
-  if (draft.inReplyToMessageId) {
-    headers.push(`In-Reply-To: ${draft.inReplyToMessageId}`);
+  // Only RFC Message-IDs (<id@host>) are valid here. Older manual drafts
+  // stored the Gmail API message id, which mail clients can't thread on (M13);
+  // Gmail still threads those via threadId below.
+  if (isRfcMessageId(draft.inReplyToMessageId)) {
+    headers.push(`In-Reply-To: ${draft.inReplyToMessageId.trim()}`);
   }
-  if (draft.referencesHeader) {
-    headers.push(`References: ${draft.referencesHeader}`);
+  const references = sanitizeReferences(draft.referencesHeader);
+  if (references) {
+    headers.push(`References: ${references}`);
   }
 
   let rawEmail: string;

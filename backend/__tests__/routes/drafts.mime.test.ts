@@ -8,11 +8,18 @@ import request from 'supertest';
 import { buildPrismaMock, resetPrismaMock, type MockPrisma } from '../_setup/mockPrisma';
 import { loadApp, bearer } from '../_setup/testApp';
 
-const { draftsCreate, draftsSend, draftsDelete, sendAsList } = vi.hoisted(() => ({
+const { draftsCreate, draftsSend, draftsDelete, sendAsList, anthropicCreate } = vi.hoisted(() => ({
   draftsCreate: vi.fn(),
   draftsSend: vi.fn(),
   draftsDelete: vi.fn(),
   sendAsList: vi.fn(),
+  anthropicCreate: vi.fn(),
+}));
+
+vi.mock('@anthropic-ai/sdk', () => ({
+  default: class FakeAnthropic {
+    messages = { create: anthropicCreate };
+  },
 }));
 
 vi.mock('googleapis', async () => {
@@ -136,6 +143,63 @@ describe('draft edit → approve reaches Gmail (C1)', () => {
     expect(mime.split('Aaron Rampersad').length - 1).toBe(1);
   });
 
+  it('ignores client-supplied bodyHtml and strips CR/LF from an edited subject', async () => {
+    const store = installDraftStore({
+      id: 'draft-1',
+      status: 'PENDING',
+      subject: 'Re: opportunity',
+      bodyText: `Hi\n${SIGNATURE_PLAIN}`,
+      bodyHtml: `<div>Hi</div>${SIGNATURE_HTML}`,
+      createdAt: new Date(),
+    });
+    await request(app)
+      .patch('/api/drafts/draft-1')
+      .set('Authorization', AUTH)
+      .send({
+        bodyText: `Edited\n${SIGNATURE_PLAIN}`,
+        bodyHtml: '<img src=x onerror=alert(1)>',
+        subject: 'Re: opportunity\r\nBcc: evil@x.com',
+      })
+      .expect(200);
+    expect(store.get().bodyHtml).not.toContain('onerror');
+    expect(store.get().bodyHtml).toContain('Edited');
+    expect(store.get().bodyHtml).toContain(SIGNATURE_HTML);
+    expect(store.get().subject).toBe('Re: opportunity Bcc: evil@x.com');
+  });
+
+  it('dictate rewrite keeps the HTML signature and sends only the core body to Claude', async () => {
+    const store = installDraftStore({
+      id: 'draft-1',
+      status: 'PENDING',
+      subject: 'Re: opportunity',
+      bodyText: `Hi Jane,\n\nOriginal.\n\nBest,\n${SIGNATURE_PLAIN}`,
+      bodyHtml: `<div>Original.</div>${SIGNATURE_HTML}`,
+      externalDraftId: null,
+      inReplyToMessageId: null,
+      referencesHeader: null,
+      createdAt: new Date(),
+    });
+    anthropicCreate.mockResolvedValueOnce({
+      content: [{ type: 'text', text: JSON.stringify({ subject: 'x', bodyText: 'Hi Jane,\n\nShorter.\n\nBest,' }) }],
+    });
+
+    await request(app)
+      .post('/api/drafts/draft-1/dictate')
+      .set('Authorization', AUTH)
+      .send({ notes: 'make it shorter' })
+      .expect(200);
+
+    const prompt = anthropicCreate.mock.calls.at(-1)![0].messages[0].content as string;
+    expect(prompt).not.toContain('Aaron Rampersad\nArchive');
+    expect(store.get().bodyText).toBe(`Hi Jane,\n\nShorter.\n\nBest,\n${SIGNATURE_PLAIN}`);
+    expect(store.get().bodyHtml).toContain(SIGNATURE_HTML);
+
+    await request(app).post('/api/drafts/draft-1/approve').set('Authorization', AUTH).expect(200);
+    const mime = lastRawMime();
+    expect(mime).toContain('Shorter.');
+    expect(mime).toContain(SIGNATURE_HTML);
+  });
+
   it('keeps the edited signature text when the recruiter changed the signature area', async () => {
     installDraftStore({
       id: 'draft-1',
@@ -160,5 +224,72 @@ describe('draft edit → approve reaches Gmail (C1)', () => {
     expect(mime).toContain('Edited.');
     expect(mime).toContain('Aaron (mobile)');
     expect(mime).not.toContain('Original.');
+  });
+});
+
+describe('createDraft MIME headers (M10 / M13)', () => {
+  let app: Awaited<ReturnType<typeof loadApp>>;
+
+  beforeEach(async () => {
+    resetPrismaMock(mockPrisma);
+    draftsCreate.mockReset().mockResolvedValue({ data: { id: 'gmail-draft-1' } });
+    sendAsList.mockReset().mockResolvedValue({ data: { sendAs: [] } });
+    mockPrisma.mailbox.findUnique.mockResolvedValue(mailbox);
+    app = await loadApp();
+  });
+
+  function headerBlock(mime: string): string[] {
+    return mime.split('\r\n\r\n')[0]!.split('\r\n');
+  }
+
+  async function approveWith(overrides: Record<string, unknown>) {
+    installDraftStore({
+      id: 'draft-1',
+      status: 'PENDING',
+      subject: 'Re: opportunity',
+      bodyText: 'Hi',
+      bodyHtml: null,
+      externalDraftId: null,
+      inReplyToMessageId: null,
+      referencesHeader: null,
+      createdAt: new Date(),
+      ...overrides,
+    });
+    await request(app).post('/api/drafts/draft-1/approve').set('Authorization', AUTH).expect(200);
+    return lastRawMime();
+  }
+
+  it('strips CR/LF from the subject so it cannot inject headers', async () => {
+    const mime = await approveWith({ subject: 'Re: hi\r\nBcc: evil@x.com' });
+    const headers = headerBlock(mime);
+    expect(headers.some((h) => /^Bcc:/i.test(h))).toBe(false);
+    expect(headers).toContain('Subject: Re: hi Bcc: evil@x.com');
+  });
+
+  it('RFC 2047-encodes a non-ASCII subject', async () => {
+    const mime = await approveWith({ subject: 'Re: Café opportunity — next steps' });
+    const subjectLine = mime.split('\r\n').find((l) => l.startsWith('Subject: '))!;
+    expect(subjectLine).toMatch(/^Subject: =\?UTF-8\?B\?[A-Za-z0-9+/=]+\?=/);
+    const words = [...mime.matchAll(/=\?UTF-8\?B\?([A-Za-z0-9+/=]+)\?=/g)].map((m) =>
+      Buffer.from(m[1]!, 'base64').toString('utf8')
+    );
+    expect(words.join('')).toBe('Re: Café opportunity — next steps');
+  });
+
+  it('emits In-Reply-To/References only for RFC Message-IDs, not Gmail API ids', async () => {
+    const gmailIdMime = await approveWith({
+      inReplyToMessageId: '18c2f0a9b1d2e3f4',
+      referencesHeader: '18c2f0a9b1d2e3f4',
+    });
+    expect(gmailIdMime).not.toMatch(/^In-Reply-To:/m);
+    expect(gmailIdMime).not.toMatch(/^References:/m);
+
+    const rfcMime = await approveWith({
+      inReplyToMessageId: '<CAB123@mail.gmail.com>',
+      referencesHeader: '<root@mail.gmail.com> <CAB123@mail.gmail.com>\r\nBcc: x@y.z',
+    });
+    expect(rfcMime).toMatch(/^In-Reply-To: <CAB123@mail\.gmail\.com>\r$/m);
+    expect(rfcMime).toMatch(/^References: <root@mail\.gmail\.com> <CAB123@mail\.gmail\.com>\r$/m);
+    expect(rfcMime).not.toMatch(/^Bcc:/m);
   });
 });
