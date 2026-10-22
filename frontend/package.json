@@ -8,7 +8,9 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "lint:ds": "eslint src",
+    "audit:ds": "node scripts/design-system-audit.mjs"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",
@@ -22,12 +24,14 @@
     "axios": "^1.7.7",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "cmdk": "1.1.1",
     "lucide-react": "^0.460.0",
     "next-themes": "^0.4.6",
     "radix-ui": "^1.4.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.27.0",
+    "recharts": "3.8.0",
     "sonner": "^2.0.7",
     "tailwind-merge": "^2.6.1",
     "tailwindcss-animate": "^1.0.7"
@@ -41,12 +45,15 @@
     "@vitejs/plugin-react": "^6.0.2",
     "@vitest/coverage-v8": "^4.1.7",
     "autoprefixer": "^10.4.20",
+    "eslint": "9.39.5",
+    "eslint-plugin-react-hooks": "7.1.1",
     "jsdom": "^25.0.1",
     "msw": "^2.7.0",
     "postcss": "^8.4.47",
     "shadcn": "^4.8.0",
     "tailwindcss": "^3.4.14",
     "typescript": "^5.6.3",
+    "typescript-eslint": "8.72.0",
     "vite": "^8.0.14",
     "vitest": "^4.1.7"
   }
