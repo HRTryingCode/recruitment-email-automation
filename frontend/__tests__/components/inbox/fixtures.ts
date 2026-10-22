@@ -227,6 +227,12 @@ export function installInbox(
       remove(String(params.id));
       return ok({ id: params.id as string, status: 'DISCARDED' });
     }),
+    http.post('*/api/drafts/:id/undismiss', async ({ request, params }) => {
+      await log(request);
+      const it = initial.find((i) => i.id === params.id);
+      if (it && !store.items.some((i) => i.id === it.id)) store.items.push(it);
+      return ok({ id: params.id as string, status: 'PENDING' });
+    }),
     http.post('*/api/drafts/:id/snooze', async ({ request, params }) => {
       const call = await log(request);
       remove(String(params.id));

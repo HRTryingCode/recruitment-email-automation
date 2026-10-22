@@ -127,6 +127,37 @@ describe('dismiss', () => {
     expect(await openPane('Ben Sample')).toBeInTheDocument();
   });
 
+  it('Undo on the dismiss toast restores the reply and reopens it', async () => {
+    const store = installInbox(ITEMS);
+    const user = userEvent.setup();
+    renderInbox('/inbox?view=interested&item=d1');
+    await user.click(within(await openPane()).getByRole('button', { name: /Dismiss/ }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Spam' }));
+    expect(await openPane('Ben Sample')).toBeInTheDocument();
+    const toast = (await screen.findByText('Dismissed')).closest('[data-sonner-toast]') as HTMLElement;
+    await user.click(within(toast).getByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(posts(store, '/d1/undismiss')).toHaveLength(1));
+    expect(await screen.findByText('Back in the inbox')).toBeInTheDocument();
+    expect(await openPane('Ada Example')).toBeInTheDocument();
+    expect(search().get('item')).toBe('d1');
+  });
+
+  it('a failed undismiss says why', async () => {
+    installInbox(ITEMS);
+    server.use(
+      http.post('*/api/drafts/d1/undismiss', () =>
+        HttpResponse.json({ success: false, error: 'This thread already has a newer reply' }, { status: 409 })
+      )
+    );
+    const user = userEvent.setup();
+    renderInbox('/inbox?view=interested&item=d1');
+    await user.click(within(await openPane()).getByRole('button', { name: /Dismiss/ }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Spam' }));
+    const toast = (await screen.findByText('Dismissed')).closest('[data-sonner-toast]') as HTMLElement;
+    await user.click(within(toast).getByRole('button', { name: 'Undo' }));
+    expect(await screen.findByText('This thread already has a newer reply')).toBeInTheDocument();
+  });
+
   it('D opens the dismiss menu', async () => {
     installInbox(ITEMS);
     renderInbox('/inbox?view=interested&item=d1');

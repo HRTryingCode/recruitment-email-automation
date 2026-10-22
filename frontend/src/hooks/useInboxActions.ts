@@ -7,6 +7,7 @@ import {
   dismissDraft,
   regenerateDraft,
   scheduleSendDraft,
+  undismissDraft,
   snoozeDraft,
   undoSendDraft,
   unsnoozeDraft,
@@ -128,16 +129,32 @@ export function useInboxActions({ keys, setItem }: Options) {
     if (last && Date.now() < last.until) void undo(last.id);
   }, [undo]);
 
+  /** Undo for Dismiss: back to PENDING and reopened. */
+  const undismiss = useCallback(
+    async (draftId: string) => {
+      try {
+        await undismissDraft(draftId);
+        toastSuccess('Back in the inbox');
+        await refreshInbox();
+        void qc.invalidateQueries({ queryKey: ['draft', draftId] });
+        setItem(draftId);
+      } catch (err) {
+        toastError('Could not restore the reply', extractApiErrorMessage(err, 'Please try again.'));
+      }
+    },
+    [qc, refreshInbox, setItem]
+  );
+
   const dismiss = useCallback(
     (key: string, draftId: string, reason: DismissReason) => {
       void guarded('Dismiss anyway', 'Could not dismiss', async (override) => {
         await dismissDraft(draftId, { reason, ...(override ? { override: true } : {}) });
-        toastSuccess('Dismissed', 'No reply will be sent.');
+        toastSuccess('Dismissed', 'No reply will be sent.', { label: 'Undo', onClick: () => void undismiss(draftId) });
         advanceFrom(key);
         void refreshInbox();
       });
     },
-    [guarded, advanceFrom, refreshInbox]
+    [guarded, advanceFrom, refreshInbox, undismiss]
   );
 
   const unsnooze = useCallback(
@@ -279,6 +296,7 @@ export function useInboxActions({ keys, setItem }: Options) {
     undo,
     undoLast,
     dismiss,
+    undismiss,
     snooze,
     unsnooze,
     rewrite,
