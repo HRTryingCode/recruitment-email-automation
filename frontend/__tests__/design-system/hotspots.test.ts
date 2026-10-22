@@ -9,11 +9,10 @@ import { audit, summarize, AREAS } from '../../scripts/design-system-audit.mjs';
  *
  * Prints the per-batch baseline on every run (CI included). Each refactor
  * batch drove its area to zero and added it here, which makes the area fail
- * on any regression. R4 (the last batch) flipped the ESLint rules in
- * eslint.config.mjs to "error"; R3 is pending its own merge.
+ * on any regression. Every area is strict now; R4 flipped the ESLint rules
+ * in eslint.config.mjs to "error" and R3 removed its warn-only override.
  */
-// TODO(orchestrator): add 'R3' once R3 (Candidates) merges at zero findings.
-const STRICT_AREAS: string[] = ['R1', 'R2', 'R4'];
+const STRICT_AREAS: string[] = ['R1', 'R2', 'R3', 'R4'];
 
 type Finding = { file: string; line: number; rule: string; match: string; area: string };
 

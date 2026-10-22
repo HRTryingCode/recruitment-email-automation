@@ -191,6 +191,10 @@ screens; the last batch deletes the legacy mappings from `tailwind.config.ts`.
 | `textarea` | **new** | draft body editor, dictation notes (R4) |
 | `toggle`, `toggle-group` | **new** | segmented filters (draft status, reply status) |
 
+Added in R3: **`combobox`** (`ComboboxTrigger` / `ComboboxContent`) — the
+trigger + popover shell for searchable pickers (Popover + Command), styled
+like `SelectTrigger`; used by the Add to Lever job picker.
+
 Added in R1: **`sidebar`** (+ `hooks/use-mobile.ts`) for the app shell —
 collapsible to icons on desktop, a Sheet on mobile, ⌘B toggles it. `badge`
 gained `success` / `warning` / `info` variants and `alert` a `warning`
@@ -208,6 +212,19 @@ variant. `navigation-menu` is still not needed.
 | Status banner | `components/shell/StatusBanner.tsx` | reconnect-needed mailboxes, dismiss per session |
 | URL state | `lib/urlState.ts`, `lib/legacyRedirect.ts` | `?mailboxId=` is global; view params reset on view switch; `/?tab=` redirects |
 | Settings | `pages/settings/*`, `components/settings/*` | Mailboxes, Integrations, Team |
+
+### Candidates (R3)
+
+| Piece | File | Notes |
+|---|---|---|
+| Page | `components/CandidateTable.tsx` | saved views → filter bar → table → side panel |
+| Row | `components/candidates/CandidateRow.tsx` | ~40px; Candidate (sticky) · Reply · Lever · Role · Mailbox · Last activity; ≤2 chips; actions on hover/focus/cursor |
+| Reply label | `lib/candidates.ts` `replyLabel` | one chip: Interested / Unsure / Not interested / No reply / Ignored |
+| Side panel | `components/candidates/CandidateSheet.tsx` | `Sheet`; every thread, Lever, past outreach, Open in Inbox |
+| Lever section | `components/lever/LeverSection.tsx` | shared with the Inbox reply pane header |
+| Saved views | `components/candidates/SavedViewsBar.tsx` | 4 defaults + `/api/views?scope=candidates` |
+| URL state | `hooks/useCandidateUrlState.ts` | `status reply lever q sort dir page view candidate` |
+| Keyboard | `hooks/useCandidateShortcuts.ts` | ↑ ↓ ↵ Esc x only |
 
 ## 5. Rules for R1–R4
 
@@ -248,8 +265,8 @@ variant. `navigation-menu` is still not needed.
 |---|---|---|---|
 | ui/ compiles under Tailwind 3 | `__tests__/design-system/tw3-classes.test.ts` | **strict** | — |
 | No purple (full taupe) | `__tests__/design-system/theme-tokens.test.ts` | **strict** | — |
-| Hand-rolled UI per batch | `__tests__/design-system/hotspots.test.ts` + `scripts/design-system-audit.mjs` | **R1, R2, R4 strict**; R3 report-only until it merges | orchestrator adds `R3` to `STRICT_AREAS` after R3 merges |
-| ESLint `no-restricted-syntax` / `no-restricted-imports` | `frontend/eslint.config.mjs`, `npm run lint:ds`, pinned by `__tests__/design-system/eslint-guard.test.ts` | **`error` app-wide** (flipped by R4); R3's files `warn` via the `R3_FILES` override | orchestrator deletes `R3_FILES` after R3 merges |
+| Hand-rolled UI per batch | `__tests__/design-system/hotspots.test.ts` + `scripts/design-system-audit.mjs` | **strict for R1–R4** | — |
+| ESLint `no-restricted-syntax` / `no-restricted-imports` | `frontend/eslint.config.mjs`, `npm run lint:ds`, pinned by `__tests__/design-system/eslint-guard.test.ts` | **`error` app-wide** (R4 flipped it; R3 removed the Candidates warn override) | — |
 | CI | `.github/workflows/test.yml` → "Design-system guard" | prints `audit:ds`; fails on any ESLint design-system error | — |
 
 The audit rules (ids used in §7): `raw-button`, `raw-input`, `raw-select`,
@@ -268,8 +285,10 @@ components, `lib/`, other hooks, and any **new** file) · `R2` = the Inbox
 (`pages/InboxPage`, `components/inbox/*`, `useInbox*`/`useDraftEditor`/
 `useDraftPresence`, `DraftCcSelect`, `lib/inbox`) — the old EmailDrafts,
 DraftReviewPane and useDraftKeyboardShortcuts were deleted when the Inbox
-was mounted · `R3` = CandidateTable, LookupBar, LookupIntegrations,
-LeverBadge, AddToLeverButton, AddToLeverDialog, JobCombobox, GemConnect,
+was mounted · `R3` = CandidateTable, `components/candidates/*`,
+`components/lever/*` (the shared LeverSection), `hooks/useCandidate*`,
+`lib/candidates`, LookupBar, LookupIntegrations, LeverBadge,
+AddToLeverButton, AddToLeverDialog, JobCombobox, GemConnect,
 GemReturnToast · `R4` = the Today page: TodayPage, components/today/*, UnmonitoredSenders. New
 feature files default to R1. If one belongs elsewhere, add it to
 `AREA_BY_FILE`.
@@ -285,9 +304,9 @@ regenerated it.
 |---|---|---:|
 | R1 | Shell — App, main, pages (Login, NotFound, route pages, settings), components/shell + settings, ThemeToggle, MailboxFilter, ProtectedRoute, lib, hooks | 0 |
 | R2 | Inbox — InboxPage, components/inbox/*, inbox hooks, DraftCcSelect, lib/inbox | 0 |
-| R3 | Candidates — CandidateTable, LookupBar, LookupIntegrations, LeverBadge, AddToLever*, JobCombobox, Gem* | 282 |
+| R3 | Candidates — CandidateTable, components/candidates/*, components/lever/*, candidate hooks, lib/candidates, LookupBar, LookupIntegrations, LeverBadge, AddToLever*, JobCombobox, Gem* | 0 |
 | R4 | Today — TodayPage, components/today/*, UnmonitoredSenders | 0 |
-| **Total** | | **282** |
+| **Total** | | **0** |
 
 ### R1 — Shell (0)
 
@@ -297,82 +316,9 @@ _none_
 
 _none_
 
-### R3 — Candidates (282)
+### R3 — Candidates (0)
 
-`legacy-token` 120 · `arbitrary-value` 45 · `palette-colour` 35 · `ad-hoc-radius` 24 · `raw-table` 19 · `raw-button` 13 · `custom-spinner` 5 · `input-adornment` 5 · `custom-skeleton` 3 · `raw-select` 3 · `native-tooltip` 3 · `ad-hoc-shadow` 2 · `css-colour-fn` 2 · `raw-input` 1 · `custom-combobox` 1 · `custom-disclosure` 1
-
-**`src/components/AddToLeverButton.tsx`** (7)
-
-| Rule | Lines | Examples |
-|---|---|---|
-| `raw-button` (1) | 47 | `<button` |
-| `legacy-token` (4) | 57 | `text-accent-700` `ring-accent-500/20` `hover:bg-accent-500/10` `dark:text-accent-300` |
-| `ad-hoc-radius` (1) | 57 | `rounded-md` |
-| `arbitrary-value` (1) | 57 | `text-[11.5px]` |
-
-**`src/components/AddToLeverDialog.tsx`** (15)
-
-| Rule | Lines | Examples |
-|---|---|---|
-| `custom-spinner` (5) | 69, 117, 284, 375, 415 | `animate-spin` |
-| `custom-skeleton` (2) | 68, 374 | `animate-pulse` |
-| `palette-colour` (4) | 255 | `bg-amber-500/10` `text-amber-800` `ring-amber-500/20` `dark:text-amber-200` |
-| `ad-hoc-radius` (2) | 255, 394 | `rounded-lg` `rounded-2xl` |
-| `arbitrary-value` (2) | 90, 255 | `max-h-[90vh]` `text-[12.5px]` |
-
-**`src/components/CandidateTable.tsx`** (217)
-
-| Rule | Lines | Examples |
-|---|---|---|
-| `raw-button` (10) | 168, 238, 498, 662, 670, 782, 829, 839, 856, 899 | `<button` |
-| `raw-input` (1) | 490 | `<input` |
-| `raw-select` (3) | 455, 475, 809 | `<select` |
-| `raw-table` (19) | 232, 518, 519, 520, 531, 542, 547, 550, 552, 712, 716, 757, 763, 773, 776, 795, 802, 872, 873 | `<th` `<table` `<thead` `<tr` |
-| `input-adornment` (5) | 472, 486, 489, 503, 825 | `pointer-events-none absolute` `absolute right-2.5 top-1/2 -translate-y-1/2` |
-| `custom-skeleton` (1) | 173 | `animate-pulse` |
-| `native-tooltip` (3) | 740, 834, 859 | ` title="` |
-| `css-colour-fn` (2) | 804 | `rgb(` |
-| `palette-colour` (21) | 71, 73, 118, 176, 425, 784, 835, 902 | `bg-emerald-500/10` `text-emerald-700` `ring-emerald-500/20` `dark:text-emerald-300` |
-| `legacy-token` (96) | 74, 144, 149, 152, 155, 159, 171, 243, 424, 443, 446, 459, 472, 480, 486, 489, 495, 503, 509, 516, 520, 531, 542, 547, 603, 606, 609, 656, 666, 674, 713, 719, 721, 724, 731, 739, 758, 759, 765, 766, 770, 784, 796, 804, 814, 825, 843, 861, 875, 902 | `bg-fg-strong/[0.04]` `text-fg-muted` `ring-fg-strong/[0.06]` `text-fg-subtle` |
-| `ad-hoc-shadow` (2) | 542, 804 | `shadow-[-1px_0_0_rgb(var(--fg-strong)/0.06)]` |
-| `ad-hoc-radius` (18) | 111, 149, 171, 424, 459, 480, 495, 514, 516, 666, 674, 731, 739, 814, 835, 843, 861, 902 | `rounded-lg` `rounded-xl` `rounded` `rounded-md` |
-| `arbitrary-value` (36) | 86, 118, 144, 152, 155, 159, 171, 176, 242, 443, 446, 459, 480, 488, 495, 509, 531, 542, 606, 609, 656, 666, 674, 724, 731, 739, 758, 765, 770, 796, 814, 835, 843 | `text-[11px]` `text-[13px]` `text-[12.5px]` `text-[12px]` |
-
-**`src/components/GemConnect.tsx`** (12)
-
-| Rule | Lines | Examples |
-|---|---|---|
-| `raw-button` (1) | 51 | `<button` |
-| `palette-colour` (2) | 48 | `text-amber-700` `dark:text-amber-300` |
-| `legacy-token` (6) | 48, 55 | `text-fg-default` `text-fg-muted` `text-accent-700` `ring-accent-500/20` |
-| `ad-hoc-radius` (1) | 55 | `rounded-md` |
-| `arbitrary-value` (2) | 47, 55 | `text-[13px]` `text-[12px]` |
-
-**`src/components/JobCombobox.tsx`** (5)
-
-| Rule | Lines | Examples |
-|---|---|---|
-| `raw-button` (1) | 68 | `<button` |
-| `custom-combobox` (1) | 70 | `role="combobox"` |
-| `custom-disclosure` (1) | 72 | `aria-expanded={` |
-| `ad-hoc-radius` (1) | 76 | `rounded-3xl` |
-| `arbitrary-value` (1) | 88 | `w-[--radix-popover-trigger-width]` |
-
-**`src/components/LeverBadge.tsx`** (24)
-
-| Rule | Lines | Examples |
-|---|---|---|
-| `palette-colour` (8) | 13, 14 | `bg-violet-500/10` `text-violet-700` `ring-violet-500/20` `dark:text-violet-300` |
-| `legacy-token` (13) | 15, 16, 17, 18, 155 | `bg-fg-strong/[0.05]` `text-fg-default` `ring-fg-strong/[0.08]` `bg-fg-strong/[0.03]` |
-| `ad-hoc-radius` (1) | 10 | `rounded-md` |
-| `arbitrary-value` (2) | 10, 155 | `text-[11.5px]` `text-[12px]` |
-
-**`src/components/LookupIntegrations.tsx`** (2)
-
-| Rule | Lines | Examples |
-|---|---|---|
-| `legacy-token` (1) | 28 | `text-fg-muted` |
-| `arbitrary-value` (1) | 24 | `text-[13px]` |
+_none_
 
 ### R4 — Today (0)
 
