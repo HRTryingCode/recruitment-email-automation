@@ -248,6 +248,20 @@ describe('/api/drafts', () => {
       expect(res.body.data[0].expiresAt).toBe(new Date(created.getTime() + 21 * DAY).toISOString());
     });
 
+    it('serves the CC address each draft will carry (none when the mailbox is the CC inbox)', async () => {
+      const created = new Date();
+      const ccRow = listRow('draft-2', created);
+      ccRow.thread.mailbox = { ...baseMailbox, emailAddress: 'sofia@archive.com' };
+      mockPrisma.$queryRaw.mockResolvedValueOnce([]);
+      mockPrisma.emailDraft.findMany.mockResolvedValueOnce([listRow('draft-1', created), ccRow]);
+      mockPrisma.emailDraft.count.mockResolvedValueOnce(2);
+      mockPrisma.emailMessage.findMany.mockResolvedValueOnce([]);
+
+      const res = await request(app).get('/api/drafts?status=PENDING').set('Authorization', AUTH).expect(200);
+      expect(res.body.data[0].ccAddress).toBe('sofia@archive.com');
+      expect(res.body.data[1].ccAddress).toBeNull();
+    });
+
     it('does not bulk-load message bodies; fetches the body of the reply target only', async () => {
       const created = new Date();
       mockPrisma.$queryRaw.mockResolvedValueOnce([]);

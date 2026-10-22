@@ -1715,6 +1715,17 @@ export async function createServiceAccountClient(emailToImpersonate: string) {
   return google.gmail({ version: 'v1', auth: authClient as Parameters<typeof google.gmail>[0]['auth'] });
 }
 
+/**
+ * The address createDraft CCs on a draft sent from `ownerEmail`, or null when
+ * there is none (no CC configured, or the owner *is* the CC inbox). Exposed so
+ * the UI shows the real CC instead of a hardcoded address (L17).
+ */
+export function draftCcAddressFor(ownerEmail: string): string | null {
+  const ccAddress = config.draftCcEmail.trim();
+  if (!ccAddress) return null;
+  return ccAddress.toLowerCase() === ownerEmail.trim().toLowerCase() ? null : ccAddress;
+}
+
 export async function createDraft(
   mailboxId: string,
   draft: {

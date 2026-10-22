@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db/client';
 import { createError } from '../middleware/error';
-import { createDraft, sendDraft as gmailSendDraft, deleteDraft as gmailDeleteDraft, fetchExamplesForMailbox, composeHandoffDraftContent, fetchMailboxSignature, htmlSignatureToPlainText } from '../services/gmail.service';
+import { createDraft, sendDraft as gmailSendDraft, deleteDraft as gmailDeleteDraft, fetchExamplesForMailbox, composeHandoffDraftContent, draftCcAddressFor, fetchMailboxSignature, htmlSignatureToPlainText } from '../services/gmail.service';
 import { classifyReply, generateDraftReply, rewriteDraftWithNotes } from '../services/claude.service';
 import { config } from '../config';
 import { logEvent } from '../services/monitoring.service';
@@ -293,7 +293,8 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       // only needs the resolved originalMessage.
       const { messages: _messages, ...threadRest } = draft.thread;
       const expiresAt = new Date(new Date(draft.createdAt).getTime() + DRAFT_EXPIRY_MS);
-      return { ...draft, thread: threadRest, originalMessage, expiresAt };
+      const ccAddress = draftCcAddressFor(draft.thread.mailbox.emailAddress);
+      return { ...draft, thread: threadRest, originalMessage, expiresAt, ccAddress };
     });
 
     res.json({ success: true, data, meta: { total, page, limit } });
@@ -336,6 +337,7 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
         messages: serializeEmailMessages(draft.thread.messages),
       },
       originalMessage,
+      ccAddress: draftCcAddressFor(draft.thread.mailbox.emailAddress),
     };
     res.json({ success: true, data });
   } catch (err) {
