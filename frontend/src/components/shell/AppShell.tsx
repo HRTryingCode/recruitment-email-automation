@@ -66,7 +66,7 @@ export default function AppShell() {
             fullBleed ? 'flex min-h-0 flex-col' : 'mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8'
           )}
         >
-          {needsMailbox ? <ConnectMailboxCard className="m-auto max-w-md" /> : <Outlet />}
+          {needsMailbox ? <ConnectMailboxCard context={onInbox ? 'inbox' : 'today'} className="m-auto max-w-md" /> : <Outlet />}
         </div>
       </SidebarInset>
       <ShortcutsDialog />

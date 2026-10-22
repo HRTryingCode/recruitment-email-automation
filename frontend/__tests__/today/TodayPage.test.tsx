@@ -4,7 +4,6 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import TodayPage from '../../src/pages/TodayPage';
-import { formatWaitingAge } from '../../src/components/today/TodayStrip';
 import type { MailboxSyncHealth, TodaySummary } from '../../src/lib/api';
 import * as api from '../../src/lib/api';
 
@@ -94,7 +93,17 @@ describe('Today page', () => {
     const strip = await screen.findByRole('region', { name: 'Today' });
     expect(within(strip).getByText('2d 4h')).toBeInTheDocument();
     expect(within(strip).getByText(/over 2 days/i)).toBeInTheDocument();
-    expect(within(strip).getByText(/expiring in 24h/i).closest('a')).toHaveAttribute('href', '/inbox');
+    // U2a: never the default view — a real view, oldest first.
+    expect(within(strip).getByText(/expiring in 24h/i).closest('a')).toHaveAttribute('href', '/inbox?view=needs_review&sort=oldest');
+    expect(within(strip).getByText('2d 4h').closest('a')).toHaveAttribute('href', '/inbox?view=needs_review&sort=oldest');
+  });
+
+  it('Oldest waiting / Expiring soon open the first view that has anything waiting', async () => {
+    vi.mocked(api.fetchToday).mockResolvedValue({ success: true, data: { ...SUMMARY, views: { needs_review: 0, interested: 5, not_interested: 2 } } });
+    renderPage('/today?mailboxId=mb1');
+    const strip = await screen.findByRole('region', { name: 'Today' });
+    expect(within(strip).getByText('2d 4h').closest('a')).toHaveAttribute('href', '/inbox?mailboxId=mb1&view=interested&sort=oldest');
+    expect(within(strip).getByText(/expiring in 24h/i).closest('a')).toHaveAttribute('href', '/inbox?mailboxId=mb1&view=interested&sort=oldest');
   });
 
   it('per-mailbox table: waiting, sent today, last received, health dot linking to Settings only when unhealthy', async () => {
@@ -136,8 +145,8 @@ describe('Today page', () => {
     vi.mocked(api.fetchSyncHealth).mockResolvedValue({ success: true, data: [] });
     renderPage();
     expect(await screen.findByText(/nothing waiting/i)).toBeInTheDocument();
-    expect(screen.getByText('No mailboxes connected')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /connect a mailbox/i })).toHaveAttribute('href', '/settings/mailboxes');
+    // No-mailbox onboarding is AppShell's ConnectMailboxCard; Today has no second empty state (U2a).
+    expect(screen.queryByText('No mailboxes connected')).not.toBeInTheDocument();
     expect(screen.getByText(/no activity in the last 14 days/i)).toBeInTheDocument();
   });
 
@@ -157,14 +166,3 @@ describe('Today page', () => {
   });
 });
 
-describe('formatWaitingAge', () => {
-  it.each([
-    [45 * 60_000, '45m'],
-    [5 * 3600_000, '5h'],
-    [2 * DAY + 4 * 3600_000, '2d 4h'],
-    [3 * DAY, '3d'],
-    [10_000, '< 1m'],
-  ])('%d ms → %s', (ms, label) => {
-    expect(formatWaitingAge(ms)).toBe(label);
-  });
-});

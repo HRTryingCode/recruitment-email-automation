@@ -5,12 +5,14 @@ import type { Candidate, CandidateSortColumn, fetchCandidates } from './api';
 /** Draft statuses that are a reply waiting in the Inbox (Inbox, side panel, ⌘K). */
 export const LIVE_DRAFT_STATUSES: ReadonlySet<string> = new Set(['PENDING', 'APPROVED', 'SCHEDULED', 'SENDING', 'FAILED']);
 
-export type ReplyLabelText = 'Interested' | 'Unsure' | 'Not interested' | 'No reply' | 'Ignored';
+export type ReplyLabelText = 'Interested' | 'Unsure' | 'Needs review' | 'Not interested' | 'No reply' | 'Ignored';
 export type ReplyLabelTone = 'success' | 'warning' | 'destructive' | 'info' | 'secondary';
 
 /**
- * Interest status and reply state as one chip, in words (same words as the
- * Inbox). PENDING means "not classified yet": "No reply" until they write.
+ * Interest status and reply state as one chip, in words — the same words as
+ * the status filter, row/bulk menu and side panel (docs/DESIGN-SYSTEM.md
+ * "Status vocabulary"). PENDING means "not classified yet": "No reply" until
+ * they write, then "Needs review" (like NEEDS_REVIEW and legacy REPLIED).
  */
 export function replyLabel(c: Pick<Candidate, 'status' | 'lastInboundAt' | 'repliedAt'>): {
   text: ReplyLabelText;
@@ -23,10 +25,12 @@ export function replyLabel(c: Pick<Candidate, 'status' | 'lastInboundAt' | 'repl
       return { text: 'Not interested', tone: 'destructive' };
     case 'IGNORED':
       return { text: 'Ignored', tone: 'secondary' };
-    case 'PENDING':
-      return c.lastInboundAt || c.repliedAt ? { text: 'Unsure', tone: 'warning' } : { text: 'No reply', tone: 'info' };
-    default:
+    case 'NEUTRAL':
       return { text: 'Unsure', tone: 'warning' };
+    case 'PENDING':
+      return c.lastInboundAt || c.repliedAt ? { text: 'Needs review', tone: 'warning' } : { text: 'No reply', tone: 'info' };
+    default:
+      return { text: 'Needs review', tone: 'warning' };
   }
 }
 
@@ -60,7 +64,7 @@ export const STATUS_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'NEUTRAL', label: 'Unsure' },
   { value: 'NEEDS_REVIEW', label: 'Needs review' },
   { value: 'NOT_INTERESTED', label: 'Not interested' },
-  { value: 'PENDING', label: 'Pending' },
+  { value: 'PENDING', label: 'No reply' },
   { value: 'IGNORED', label: 'Ignored' },
   { value: 'ALL', label: 'All, incl. ignored' },
 ];
@@ -71,7 +75,7 @@ export const SETTABLE_STATUSES: Array<{ value: Candidate['status']; label: strin
   { value: 'NEUTRAL', label: 'Unsure' },
   { value: 'NOT_INTERESTED', label: 'Not interested' },
   { value: 'NEEDS_REVIEW', label: 'Needs review' },
-  { value: 'PENDING', label: 'Pending' },
+  { value: 'PENDING', label: 'No reply' },
 ];
 
 const STATUSES = new Set([...STATUS_OPTIONS.map((o) => o.value), 'REPLIED']);

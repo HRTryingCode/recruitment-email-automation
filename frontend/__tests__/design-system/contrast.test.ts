@@ -56,6 +56,8 @@ function contrast(a: RGB, b: RGB): number {
 }
 
 const AA = 4.5;
+/** WCAG 1.4.11 non-text contrast (focus rings, UI component borders). */
+const NON_TEXT = 3;
 
 describe.each([
   ['light', block(':root')],
@@ -76,6 +78,16 @@ describe.each([
     ['warning', 'background'],
   ])('%s on %s', (fg, bg) => {
     expect(contrast(c(fg), c(bg))).toBeGreaterThanOrEqual(AA);
+  });
+
+  // U2a: the focus ring must be visible on every surface it sits on.
+  it.each([
+    ['ring', 'background'],
+    ['ring', 'card'],
+    ['ring', 'popover'],
+    ['sidebar-ring', 'sidebar'],
+  ])('focus ring %s on %s is at least 3:1', (fg, bg) => {
+    expect(contrast(c(fg), c(bg))).toBeGreaterThanOrEqual(NON_TEXT);
   });
 
   // Status badges: text-{tone} on bg-{tone}/10 over a card.

@@ -1,6 +1,7 @@
 import { Link, Outlet, useLocation, useSearchParams } from 'react-router-dom';
 import { Mail, Plug, Users } from 'lucide-react';
 import { viewHref } from '../../lib/urlState';
+import PageHeader from '../../components/shell/PageHeader';
 import { Button } from '../../components/ui/button';
 
 const SECTIONS = [
@@ -14,10 +15,7 @@ export default function SettingsLayout() {
   const [params] = useSearchParams();
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
-        <p className="text-sm text-muted-foreground">Mailboxes and notifications, integrations and the team.</p>
-      </div>
+      <PageHeader heading="Settings" description="Mailboxes and notifications, integrations and the team." />
       <nav aria-label="Settings sections" className="flex flex-wrap gap-1">
         {SECTIONS.map(({ path, label, icon: Icon }) => {
           const active = pathname.startsWith(path);

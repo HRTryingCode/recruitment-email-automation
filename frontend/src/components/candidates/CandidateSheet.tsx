@@ -1,9 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useSearchParams } from 'react-router-dom';
-import { AlertCircle, Copy, Inbox, Mail, Sparkles } from 'lucide-react';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Copy, Inbox, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
@@ -11,14 +9,15 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '
 import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
 import LeverSection from '@/components/lever/LeverSection';
+import QueryError from '@/components/shell/QueryError';
 import { fetchCandidate, generateDraftForThread, type Candidate, type EmailMessage, type EmailThread } from '@/lib/api';
 import { LIVE_DRAFT_STATUSES as LIVE_DRAFT } from '@/lib/candidates';
 import { messagePlainText } from '@/lib/inbox';
-import { extractApiErrorMessage, toastError } from '@/lib/toast';
+import { extractApiErrorMessage, toastError, toastSuccess } from '@/lib/toast';
 import { viewHref } from '@/lib/urlState';
 import { formatDate, formatTimeAgo } from '@/lib/utils';
 import CandidateMenu, { type CandidateMenuHandlers } from './CandidateMenu';
-import { ReplyLabelChip, RoleChip } from './chips';
+import { CandidateMailboxChip, ReplyLabelChip, RoleChip } from './chips';
 
 
 export function candidateQueryOptions(id: string) {
@@ -88,12 +87,7 @@ function SheetBody({
         <div className="flex flex-wrap items-center gap-1.5">
           <ReplyLabelChip candidate={c} />
           <RoleChip role={c.role} />
-          {c.mailbox && (
-            <Badge variant="secondary">
-              <Mail data-icon="inline-start" />
-              {c.mailbox.emailAddress}
-            </Badge>
-          )}
+          {c.mailbox && <CandidateMailboxChip email={c.mailbox.emailAddress} />}
         </div>
         <div className="flex flex-wrap items-center gap-2 pt-1">
           {liveDraft && (
@@ -123,15 +117,7 @@ function SheetBody({
         <Separator />
 
         {detailError ? (
-          <Alert variant="destructive">
-            <AlertCircle />
-            <AlertTitle>Couldn't load the conversation</AlertTitle>
-            <AlertDescription>
-              <Button size="sm" variant="outline" onClick={onRetry}>
-                Retry
-              </Button>
-            </AlertDescription>
-          </Alert>
+          <QueryError thing="the conversation" onRetry={onRetry} />
         ) : !detailLoaded ? (
           <Skeleton className="h-40 w-full" />
         ) : (
@@ -175,6 +161,8 @@ function SheetBody({
 
 function ThreadCard({ thread, candidate }: { thread: EmailThread; candidate: Candidate }) {
   const qc = useQueryClient();
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
   const [generating, setGenerating] = useState(false);
   const messages = thread.messages ?? [];
   const hasLiveDraft = (thread.drafts ?? []).some((d) => LIVE_DRAFT.has(d.status));
@@ -182,11 +170,19 @@ function ThreadCard({ thread, candidate }: { thread: EmailThread; candidate: Can
   const generate = async () => {
     setGenerating(true);
     try {
-      await generateDraftForThread(thread.id);
+      const res = await generateDraftForThread(thread.id);
       void qc.invalidateQueries({ queryKey: ['candidate', candidate.id] });
       void qc.invalidateQueries({ queryKey: ['inbox'] });
+      const draftId = res.data?.id;
+      toastSuccess('Draft ready', `Reply to ${candidate.name} is waiting in the Inbox.`, {
+        label: 'Review in Inbox',
+        onClick: () => navigate(viewHref('/inbox', params, { item: draftId })),
+      });
     } catch (err) {
-      toastError('Could not generate a draft', extractApiErrorMessage(err, 'Please try again.'));
+      toastError("Couldn't generate a draft", extractApiErrorMessage(err, 'Please try again.'), {
+        label: 'Retry',
+        onClick: () => void generate(),
+      });
     } finally {
       setGenerating(false);
     }

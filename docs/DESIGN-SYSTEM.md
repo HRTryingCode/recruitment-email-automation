@@ -146,8 +146,8 @@ Each has a `-foreground` pair, light + dark values in `index.css`.
   onto the same ramp (e.g. LeverBadge's `bg-violet-500/10`).
 - Legacy `fg-*`, `surface-*`, `line`, `ink-*` classes resolve to the shadcn
   tokens; `shadow-glow` / `shadow-card-hover` are neutral; the body glow
-  gradients, `.card`, `.hairline` and `.grid-bg` are gone (`.card-hover` and
-  `.skeleton` stay until their last R2–R4 user is refactored).
+  gradients, `.card`, `.hairline` and `.grid-bg` are gone; U2a deleted the
+  last legacy classes (`.card-hover`, `.skeleton`) and `--fg-strong`.
 - `__tests__/design-system/theme-tokens.test.ts` compiles the real app CSS
   and fails on any purple colour literal (hex, rgb triplet or oklch hue).
 
@@ -171,10 +171,8 @@ screens; the last batch deletes the legacy mappings from `tailwind.config.ts`.
 | `separator` | refreshed (unchanged) | dividers |
 | `skeleton` | refreshed (unchanged) | loading placeholders |
 | `table` | refreshed (unchanged) | candidate table, mailbox health |
-| `tabs` | refreshed (unchanged) | main nav, draft status tabs |
 | `tooltip` | **refreshed** — `Kbd` slot support | icon-button hints, replaces `title=` |
 | `sonner` | kept local (our theme sync, not `next-themes`) | toasts via `lib/toast.ts` |
-| `StatusBadge` | kept local (app-specific status → colour map) | candidate/draft status pills — still uses palette colours; move them onto the R1 `success`/`warning`/`info` tokens |
 | `avatar` | **new** | user/candidate initials (replaces `Avatar` in `Index.tsx`, list avatars) |
 | `chart` | **new** (+ `recharts` 3.8.0) | Today 14-day activity chart (R4) |
 | `checkbox` | **new** | bulk-select / toggles in tables |
@@ -183,13 +181,15 @@ screens; the last batch deletes the legacy mappings from `tailwind.config.ts`.
 | `dropdown-menu` | **new** | account menu (R1), row actions |
 | `input-group` | **new** (dep of command) | search fields with icons (replaces absolute-positioned icons) |
 | `kbd` | **new** | ⌘K / `?` shortcut hints |
-| `pagination` | **new** | candidate/draft lists |
 | `popover` | **new** | filter popovers, combobox shell |
-| `scroll-area` | **new** | draft list / review pane scrolling |
 | `sheet` | **new** | DraftReviewPane side panel (R4) |
 | `spinner` | **new** | replaces `Loader2 animate-spin` |
 | `textarea` | **new** | draft body editor, dictation notes (R4) |
 | `toggle`, `toggle-group` | **new** | segmented filters (draft status, reply status) |
+
+Removed in U2a (unused): `tabs`, `pagination`, `scroll-area` and the local
+`StatusBadge` (replaced by `ReplyLabelChip` / `leverChip`). Re-add with the §2
+checklist if a screen needs one.
 
 Added in R3: **`combobox`** (`ComboboxTrigger` / `ComboboxContent`) — the
 trigger + popover shell for searchable pickers (Popover + Command), styled
@@ -218,13 +218,43 @@ variant. `navigation-menu` is still not needed.
 | Piece | File | Notes |
 |---|---|---|
 | Page | `components/CandidateTable.tsx` | saved views → filter bar → table → side panel |
-| Row | `components/candidates/CandidateRow.tsx` | ~40px; Candidate (sticky) · Reply · Lever · Role · Mailbox · Last activity; ≤2 chips; actions on hover/focus/cursor |
-| Reply label | `lib/candidates.ts` `replyLabel` | one chip: Interested / Unsure / Not interested / No reply / Ignored |
+| Row | `components/candidates/CandidateRow.tsx` | ~40px; Candidate (sticky) · Reply · Lever · Role · Mailbox · Last activity; ≤2 status chips (Role/Mailbox use the Inbox `RoleChip`/`MailboxChip`); actions on hover/focus/cursor |
+| Reply label | `lib/candidates.ts` `replyLabel` | one chip: Interested / Unsure / Needs review / Not interested / No reply / Ignored (see Status vocabulary) |
 | Side panel | `components/candidates/CandidateSheet.tsx` | `Sheet`; every thread, Lever, past outreach, Open in Inbox |
 | Lever section | `components/lever/LeverSection.tsx` | shared with the Inbox reply pane header |
 | Saved views | `components/candidates/SavedViewsBar.tsx` | 4 defaults + `/api/views?scope=candidates` |
 | URL state | `hooks/useCandidateUrlState.ts` | `status reply lever q sort dir page view candidate` |
 | Keyboard | `hooks/useCandidateShortcuts.ts` | ↑ ↓ ↵ Esc x only |
+
+### Status vocabulary (U2a)
+
+One word per candidate state, used identically by the row chip, the side
+panel chip, the status filter, the row menu and the bulk bar. The source of
+truth is `lib/candidates.ts` (`replyLabel`, `STATUS_OPTIONS`,
+`SETTABLE_STATUSES`); `__tests__/lib/candidates.test.ts` fails if they drift.
+
+| `Candidate.status` | Word | Tone | Meaning |
+|---|---|---|---|
+| `INTERESTED` | Interested | success | wants to talk |
+| `NEUTRAL` | Unsure | warning | replied, but Claude classified it as neither yes nor no |
+| `NEEDS_REVIEW` | Needs review | warning | a human has to read it |
+| `PENDING` + a reply exists (or legacy `REPLIED`) | Needs review | warning | replied, not classified yet |
+| `PENDING`, nothing from them | No reply | info | contacted, hasn't written back |
+| `NOT_INTERESTED` | Not interested | destructive | declined |
+| `IGNORED` | Ignored | secondary | hidden from active lists |
+
+Never show the raw enum ("Pending", "Neutral") to a recruiter. The Inbox's
+classification chip (`lib/inbox.ts` `labelFor`) uses the same words.
+
+### Shared page pieces (U2a)
+
+| Piece | File | Use |
+|---|---|---|
+| Page header | `components/shell/PageHeader.tsx` | `heading`, `description`, `actions`; the page's one `<h1>` (Candidates, Today, Settings; `srOnly` for Inbox) |
+| Query error | `components/shell/QueryError.tsx` | "Couldn't load <thing>" + description + Retry, for every failed `useQuery` |
+| Lever chip | `lib/leverChip.ts` `leverChip()` | label + badge variant per Lever state; table badge and side-panel section |
+| Connect card | `components/shell/ConnectMailboxCard.tsx` | `context="inbox" \| "today" \| "settings"`; button label is always "Connect Gmail mailbox" |
+| Age / initials | `lib/utils.ts` `formatAge`, `initials` | compact ages ("5m", "2d 4h") and avatar fallbacks |
 
 ## 5. Rules for R1–R4
 

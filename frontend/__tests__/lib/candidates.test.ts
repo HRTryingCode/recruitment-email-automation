@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_VIEWS,
+  SETTABLE_STATUSES,
+  STATUS_OPTIONS,
   activeFilterChips,
   filtersFromParams,
   filtersToApi,
@@ -27,19 +29,44 @@ describe('replyLabel — one chip for interest + reply state', () => {
     ['INTERESTED', 'Interested', 'success'],
     ['NOT_INTERESTED', 'Not interested', 'destructive'],
     ['NEUTRAL', 'Unsure', 'warning'],
-    ['NEEDS_REVIEW', 'Unsure', 'warning'],
-    ['REPLIED', 'Unsure', 'warning'],
+    ['NEEDS_REVIEW', 'Needs review', 'warning'],
+    ['REPLIED', 'Needs review', 'warning'],
     ['IGNORED', 'Ignored', 'secondary'],
   ] as const)('%s reads "%s" (%s)', (status, text, tone) => {
     expect(replyLabel(c({ status }))).toEqual({ text, tone });
   });
 
-  it('PENDING with nothing from them reads "No reply"; once they wrote it is "Unsure"', () => {
+  it('PENDING with nothing from them reads "No reply"; once they wrote it is "Needs review"', () => {
     expect(replyLabel(c({ status: 'PENDING' }))).toEqual({ text: 'No reply', tone: 'info' });
     expect(replyLabel(c({ status: 'PENDING', lastInboundAt: '2026-10-03T00:00:00.000Z' }))).toEqual({
-      text: 'Unsure',
+      text: 'Needs review',
       tone: 'warning',
     });
+  });
+});
+
+describe('status vocabulary (U2a) — chip, filter and bulk menu use the same words', () => {
+  const label = (opts: Array<{ value: string; label: string }>, v: string) => opts.find((o) => o.value === v)?.label;
+
+  it.each([
+    ['INTERESTED', 'Interested'],
+    ['NEUTRAL', 'Unsure'],
+    ['NEEDS_REVIEW', 'Needs review'],
+    ['NOT_INTERESTED', 'Not interested'],
+    ['PENDING', 'No reply'],
+  ])('%s is "%s" in the filter and the bulk/row menu', (value, text) => {
+    expect(label(STATUS_OPTIONS, value)).toBe(text);
+    expect(label(SETTABLE_STATUSES, value)).toBe(text);
+  });
+
+  it('the chip says the same word as the filter for every settable status', () => {
+    for (const { value, label: text } of SETTABLE_STATUSES) {
+      expect(replyLabel(c({ status: value })).text).toBe(text);
+    }
+  });
+
+  it('never says "Pending" to a recruiter', () => {
+    expect([...STATUS_OPTIONS, ...SETTABLE_STATUSES].map((o) => o.label)).not.toContain('Pending');
   });
 });
 

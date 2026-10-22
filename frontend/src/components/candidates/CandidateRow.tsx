@@ -9,7 +9,7 @@ import type { Candidate } from '@/lib/api';
 import { lastActivity } from '@/lib/candidates';
 import { cn, formatTimeAgo } from '@/lib/utils';
 import CandidateMenu, { type CandidateMenuHandlers } from './CandidateMenu';
-import { ReplyLabelChip } from './chips';
+import { CandidateMailboxChip, ReplyLabelChip, RoleChip } from './chips';
 
 interface Props extends CandidateMenuHandlers {
   candidate: Candidate;
@@ -28,7 +28,8 @@ const INTERACTIVE = 'button,a,input,[role=checkbox],[role=menuitem],[role=menu]'
 
 /**
  * One ~40px row: checkbox · candidate (sticky) · reply label · Lever · role
- * · mailbox · last activity · actions (on hover/focus/cursor). Two chips max.
+ * · mailbox · last activity · actions (on hover/focus/cursor). Two status
+ * chips max (reply, Lever); role and mailbox use the Inbox's identity chips.
  */
 export default function CandidateRow({ candidate: c, active, selected, busy, onSelect, onOpen, onCopy, onHover, ...menu }: Props) {
   const activity = lastActivity(c);
@@ -69,11 +70,11 @@ export default function CandidateRow({ candidate: c, active, selected, busy, onS
       <TableCell className="hidden max-w-56 py-0.5 md:table-cell">
         <CandidateLeverBadge candidate={c} />
       </TableCell>
-      <TableCell className="hidden max-w-40 truncate py-0.5 text-muted-foreground xl:table-cell">
-        {c.role ?? '—'}
+      <TableCell className="hidden max-w-48 py-0.5 xl:table-cell">
+        <RoleChip role={c.role} />
       </TableCell>
-      <TableCell className="hidden max-w-40 truncate py-0.5 text-muted-foreground xl:table-cell">
-        {c.mailbox?.emailAddress ?? '—'}
+      <TableCell className="hidden max-w-40 py-0.5 text-muted-foreground xl:table-cell">
+        {c.mailbox ? <CandidateMailboxChip email={c.mailbox.emailAddress} /> : '—'}
       </TableCell>
       <TableCell className="hidden py-0.5 text-muted-foreground tabular-nums sm:table-cell">
         <span>{formatTimeAgo(activity.at)}</span>

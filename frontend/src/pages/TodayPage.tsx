@@ -1,14 +1,13 @@
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import { RefreshCw } from 'lucide-react';
 import { fetchMailboxes, fetchSyncHealth, fetchToday } from '../lib/api';
 import { useMailboxFilter } from '../lib/urlState';
 import ActivityChart from '../components/today/ActivityChart';
 import LeverSnapshot from '../components/today/LeverSnapshot';
 import MailboxTable from '../components/today/MailboxTable';
 import TodayStrip from '../components/today/TodayStrip';
-import { Alert, AlertAction, AlertDescription, AlertTitle } from '../components/ui/alert';
-import { Button } from '../components/ui/button';
+import PageHeader from '../components/shell/PageHeader';
+import QueryError from '../components/shell/QueryError';
 
 /**
  * R4: a glanceable summary, not a console. Triage lives in the Inbox,
@@ -32,22 +31,15 @@ export default function TodayPage() {
 
   return (
     <div className="flex min-w-0 flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Today</h1>
-        <p className="text-sm text-muted-foreground">Replies waiting, what went out, and what's next for Lever.</p>
-      </div>
+      <PageHeader heading="Today" description="Replies waiting, what went out, and what's next for Lever." />
 
       {today.isError ? (
-        <Alert variant="destructive">
-          <AlertTitle>Couldn't load today's summary</AlertTitle>
-          <AlertDescription>The server returned an error. Try again in a moment.</AlertDescription>
-          <AlertAction>
-            <Button size="sm" variant="outline" onClick={() => void today.refetch()} disabled={today.isFetching}>
-              <RefreshCw data-icon="inline-start" />
-              Retry
-            </Button>
-          </AlertAction>
-        </Alert>
+        <QueryError
+          thing="today's summary"
+          description="The server returned an error. Try again in a moment."
+          onRetry={() => void today.refetch()}
+          retrying={today.isFetching}
+        />
       ) : (
         <>
           <TodayStrip summary={summary} params={params} />

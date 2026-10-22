@@ -1,3 +1,4 @@
+import { useLocation } from 'react-router-dom';
 import type { Mailbox } from '../../lib/api';
 import LookupBar from '../LookupBar';
 import MailboxFilter from '../MailboxFilter';
@@ -13,13 +14,19 @@ interface Props {
 }
 
 export default function AppHeader({ mailboxes, mailboxId, onMailboxChange }: Props) {
+  // Settings aren't per-mailbox; phones use ⌘K "Filter by mailbox" instead.
+  const showFilter = !useLocation().pathname.startsWith('/settings');
   return (
     <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-4">
       <SidebarTrigger className="-ml-1" />
       <Separator orientation="vertical" className="mr-1 h-4" />
       <LookupBar />
       <div className="ml-auto flex items-center gap-1 sm:gap-2">
-        <MailboxFilter mailboxes={mailboxes} selectedId={mailboxId} onChange={onMailboxChange} />
+        {showFilter && (
+          <div data-slot="mailbox-filter" className="hidden sm:flex">
+            <MailboxFilter mailboxes={mailboxes} selectedId={mailboxId} onChange={onMailboxChange} />
+          </div>
+        )}
         <ThemeToggle />
         <AccountMenu />
       </div>

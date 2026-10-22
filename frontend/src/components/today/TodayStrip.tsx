@@ -2,24 +2,13 @@ import { Link } from 'react-router-dom';
 import { CheckCircle2 } from 'lucide-react';
 import type { TodaySummary } from '../../lib/api';
 import { viewHref } from '../../lib/urlState';
+import { formatAge } from '../../lib/utils';
 import { Badge } from '../ui/badge';
 import { Card, CardDescription, CardHeader, CardTitle } from '../ui/card';
 import { Skeleton } from '../ui/skeleton';
 
-/** Matches the Inbox's overdue flag: a reply waiting more than 2 days. */
+/** Reply-time target shown on the Oldest waiting tile: answer within 2 days. */
 const SLA_MS = 2 * 24 * 3600_000;
-
-/** Compact age: "< 1m", "45m", "5h", "2d 4h", "3d". */
-export function formatWaitingAge(ms: number): string {
-  const minutes = Math.floor(ms / 60_000);
-  if (minutes < 1) return '< 1m';
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.floor(hours / 24);
-  const rest = hours % 24;
-  return rest ? `${days}d ${rest}h` : `${days}d`;
-}
 
 function Tile({ to, label, value, hint }: { to: string; label: string; value: React.ReactNode; hint?: React.ReactNode }) {
   return (
@@ -61,6 +50,10 @@ export default function TodayStrip({
 
   const { views } = summary;
   const waiting = views.needs_review + views.interested + views.not_interested;
+  // Oldest waiting / Expiring soon: the first waiting view with anything in
+  // it, oldest first — never the plain default view.
+  const oldestView = (['needs_review', 'interested', 'not_interested'] as const).find((v) => views[v] > 0) ?? 'needs_review';
+  const oldestFirst = viewHref('/inbox', params, { view: oldestView, sort: 'oldest' });
   const age = summary.oldestWaitingAt ? now - new Date(summary.oldestWaitingAt).getTime() : null;
 
   return (
@@ -71,12 +64,12 @@ export default function TodayStrip({
         <Tile to={inbox('not_interested')} label="Not interested" value={views.not_interested} />
         <Tile to={inbox('sent_today')} label="Sent today" value={summary.sentToday} />
         <Tile
-          to={inbox()}
+          to={oldestFirst}
           label="Oldest waiting"
-          value={age === null ? '—' : formatWaitingAge(age)}
+          value={age === null ? '—' : formatAge(age, { withHours: true })}
           hint={age !== null && age > SLA_MS ? <Badge variant="warning">Over 2 days</Badge> : 'Reply within 2 days'}
         />
-        <Tile to={inbox()} label="Expiring soon" value={summary.draftsExpiringSoon} hint="Drafts expiring in 24h" />
+        <Tile to={oldestFirst} label="Expiring soon" value={summary.draftsExpiringSoon} hint="Drafts expiring in 24h" />
       </div>
       {waiting === 0 && (
         <p className="flex items-center gap-2 text-sm text-muted-foreground">

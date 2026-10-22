@@ -6,24 +6,16 @@ import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import AddToLeverButton from '@/components/AddToLeverButton';
-import { refreshCandidateLever, type LeverCandidateFields, type LeverState } from '@/lib/api';
+import { refreshCandidateLever, type LeverCandidateFields } from '@/lib/api';
+import { leverChip } from '@/lib/leverChip';
 import type { CreateLeverResult } from '@/lib/leverApi';
-import { formatAge } from '@/lib/inbox';
 import { extractApiErrorMessage, toastError } from '@/lib/toast';
+import { formatAge } from '@/lib/utils';
 
 export type LeverFields = Pick<
   LeverCandidateFields,
   'leverState' | 'leverOpportunityId' | 'leverPostingTitle' | 'leverStage' | 'leverArchivedReason' | 'leverCheckedAt' | 'leverError'
 >;
-
-const CHIP: Record<LeverState | 'CHECKING', { text: string; variant: 'info' | 'success' | 'secondary' | 'outline' | 'warning' }> = {
-  ACTIVE: { text: 'In Lever', variant: 'info' },
-  HIRED: { text: 'Hired', variant: 'success' },
-  ARCHIVED: { text: 'Archived', variant: 'secondary' },
-  NOT_FOUND: { text: 'Not in Lever', variant: 'outline' },
-  ERROR: { text: 'Lever unknown', variant: 'warning' },
-  CHECKING: { text: 'Checking Lever…', variant: 'outline' },
-};
 
 export function leverUrl(opportunityId: string): string {
   return `https://hire.lever.co/candidates/${encodeURIComponent(opportunityId)}`;
@@ -56,7 +48,7 @@ export default function LeverSection({ candidateId, lever, draftId }: Props) {
   const f = override?.for === candidateId ? { ...lever, ...override.fields } : lever;
 
   const state = f.leverState ?? null;
-  const chip = CHIP[state ?? 'CHECKING'];
+  const chip = leverChip(f);
   const inLever = !!f.leverOpportunityId || state === 'ACTIVE' || state === 'HIRED' || state === 'ARCHIVED';
   const job = [f.leverPostingTitle, f.leverStage].filter(Boolean).join(' · ');
   const checked = checkedLabel(f.leverCheckedAt);

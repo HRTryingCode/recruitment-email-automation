@@ -1,12 +1,11 @@
 import { Link } from 'react-router-dom';
-import { Circle, Inbox } from 'lucide-react';
+import { Circle } from 'lucide-react';
 import type { Mailbox, MailboxSyncHealth, TodaySummary } from '../../lib/api';
 import { mailboxHealthState, type MailboxHealthState } from '../../lib/mailboxHealth';
 import { viewHref } from '../../lib/urlState';
 import { cn, formatTimeAgo } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
-import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../ui/empty';
 import { Skeleton } from '../ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
 
@@ -66,22 +65,8 @@ export default function MailboxTable({
       <CardContent>
         {!summary ? (
           <Skeleton data-testid="today-skeleton" className="h-32" />
-        ) : summary.mailboxes.length === 0 ? (
-          <Empty>
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <Inbox />
-              </EmptyMedia>
-              <EmptyTitle>No mailboxes connected</EmptyTitle>
-              <EmptyDescription>Connect a Gmail account to start syncing candidate replies.</EmptyDescription>
-            </EmptyHeader>
-            <EmptyContent>
-              <Button asChild size="sm" variant="outline">
-                <Link to={settingsHref}>Connect a mailbox</Link>
-              </Button>
-            </EmptyContent>
-          </Empty>
         ) : (
+          // No mailbox at all never gets here: AppShell shows ConnectMailboxCard on /today.
           <Table aria-label="Mailboxes">
             <TableHeader>
               <TableRow>

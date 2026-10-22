@@ -13,6 +13,7 @@ vi.mock('../../src/lib/api', () => ({
   fetchCandidates: vi.fn(),
   fetchSyncHealth: vi.fn(),
   addGmailMailbox: vi.fn(),
+  fetchMailboxes: vi.fn(),
 }));
 
 const syncHealth = vi.mocked(api.fetchSyncHealth);
@@ -50,6 +51,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   document.documentElement.classList.remove('dark');
   syncHealth.mockResolvedValue({ success: true, data: [] });
+  vi.mocked(api.fetchMailboxes).mockResolvedValue({ success: true, data: [] });
 });
 
 async function openPalette() {
@@ -58,6 +60,31 @@ async function openPalette() {
 }
 
 describe('⌘K command palette', () => {
+  it('"Filter by mailbox" sets the global mailbox filter on the current page (U2a)', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.fetchMailboxes).mockResolvedValue({
+      success: true,
+      data: [
+        { id: 'mb1', emailAddress: 'sofia@archive.com' },
+        { id: 'mb2', emailAddress: 'paul@archive.com' },
+      ] as never,
+    });
+    renderPalette('/settings/team?mailboxId=mb1');
+    const input = await openPalette();
+    await user.type(input, 'filter');
+    await user.click(await screen.findByRole('option', { name: /filter by mailbox: paul@archive\.com/i }));
+    expect(screen.getByTestId('location')).toHaveTextContent('/settings/team?mailboxId=mb2');
+    await openPalette();
+    await user.click(await screen.findByRole('option', { name: /filter by mailbox: all mailboxes/i }));
+    expect(screen.getByTestId('location')).toHaveTextContent(/^\/settings\/team$/);
+  });
+
+  it('says "Connect Gmail mailbox"', async () => {
+    renderPalette();
+    await openPalette();
+    expect(await screen.findByRole('option', { name: 'Connect Gmail mailbox' })).toBeInTheDocument();
+  });
+
   it('lists navigation and actions', async () => {
     renderPalette();
     await openPalette();

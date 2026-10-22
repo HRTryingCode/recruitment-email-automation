@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { fetchDraftCcOptions } from '../../lib/api';
-import { initials } from '../../components/shell/AccountMenu';
+import { initials } from '../../lib/utils';
+import QueryError from '../../components/shell/QueryError';
 import { Avatar, AvatarFallback } from '../../components/ui/avatar';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
 import { Skeleton } from '../../components/ui/skeleton';
@@ -11,7 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
  * "No CC" sentinel), which is also who a handoff draft can CC.
  */
 export default function TeamSettings() {
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, isFetching, refetch } = useQuery({
     queryKey: ['cc-options', 'team'],
     queryFn: () => fetchDraftCcOptions(),
     staleTime: 5 * 60_000,
@@ -29,7 +30,7 @@ export default function TeamSettings() {
         {isLoading ? (
           <Skeleton className="h-24" />
         ) : isError ? (
-          <p className="text-sm text-muted-foreground">The team list is not available right now.</p>
+          <QueryError thing="the team" onRetry={() => void refetch()} retrying={isFetching} />
         ) : (
           <Table>
             <TableHeader>
