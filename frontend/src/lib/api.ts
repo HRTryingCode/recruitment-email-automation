@@ -404,3 +404,72 @@ export async function getMe(): Promise<User> {
   const body = res.data as SingleResponse<{ user: User }>;
   return body.data.user;
 }
+
+// ── Sender coverage (audit H2) ───────────────────────────────────────────
+export interface UnmonitoredSender {
+  emailAddress: string;
+  displayName: string | null;
+  sources: string[];
+  expectedSends30d: number | null;
+}
+
+export interface QuietMailbox {
+  mailboxId: string;
+  emailAddress: string;
+  outbound30d: number;
+  expectedAddresses: string[];
+  expectedSends30d: number | null;
+}
+
+export interface SenderCoverageReport {
+  generatedAt: string;
+  windowDays: number;
+  expectedSenderCount: number;
+  unmonitored: UnmonitoredSender[];
+  quietMailboxes: QuietMailbox[];
+  mailboxes: Array<{
+    id: string;
+    emailAddress: string;
+    displayName: string | null;
+    sendAsAddresses: string[];
+    sendAsSyncedAt: string | null;
+    authStatus: string;
+    outbound30d: number;
+  }>;
+}
+
+export interface ExpectedSender {
+  id: string;
+  emailAddress: string;
+  displayName: string | null;
+  source: string;
+  expectedSends30d: number | null;
+  notes: string | null;
+  isActive: boolean;
+}
+
+export async function fetchSenderCoverage(): Promise<SingleResponse<SenderCoverageReport>> {
+  const res = await api.get('/coverage');
+  return res.data as SingleResponse<SenderCoverageReport>;
+}
+
+/** Admin-only (403 for recruiters). */
+export async function fetchExpectedSenders(): Promise<SingleResponse<ExpectedSender[]>> {
+  const res = await api.get('/coverage/expected-senders');
+  return res.data as SingleResponse<ExpectedSender[]>;
+}
+
+export async function upsertExpectedSender(data: {
+  emailAddress: string;
+  displayName?: string | null;
+  expectedSends30d?: number | null;
+  notes?: string | null;
+}): Promise<SingleResponse<ExpectedSender>> {
+  const res = await api.post('/coverage/expected-senders', data);
+  return res.data as SingleResponse<ExpectedSender>;
+}
+
+export async function deleteExpectedSender(id: string): Promise<{ success: boolean }> {
+  const res = await api.delete(`/coverage/expected-senders/${id}`);
+  return res.data as { success: boolean };
+}

@@ -21,6 +21,7 @@ import { cn } from '../lib/utils';
 import { summarizeHealth, mailboxHealthState, type HealthSummary } from '../lib/mailboxHealth';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './ui/empty';
 import { Skeleton } from './ui/skeleton';
+import UnmonitoredSenders from './UnmonitoredSenders';
 import {
   toastSuccess,
   toastError,
@@ -1112,6 +1113,8 @@ export default function Dashboard({
           </div>
         )}
       </section>
+
+      <UnmonitoredSenders />
 
       {/* Mailbox health (collapsible) */}
       <MailboxHealthAccordion
