@@ -13,6 +13,8 @@ import {
   mailboxOwnAddresses,
   sendAsEmailsFromGmail,
 } from '../lib/senderIdentity';
+import { COMPANY_DOMAIN, isCompanyEmail } from '../lib/accessPolicy';
+import { createError } from '../middleware/error';
 import type { Mailbox, EmailThread } from '@prisma/client';
 
 /**
@@ -23,35 +25,31 @@ export function serializeCredentials(creds: Record<string, unknown>): string {
   return encrypt(JSON.stringify(creds));
 }
 
-function parseCredentials(mailbox: Mailbox): Record<string, unknown> {
+/**
+ * Decrypt a mailbox's stored credentials. Throws when they can't be decrypted
+ * or parsed (audit B6 / L9) — the old plaintext-JSON fallback is gone (all
+ * prod rows were verified encrypted) and a broken row now surfaces as an error
+ * instead of an empty credential set. The message never includes the payload.
+ */
+export function parseCredentials(mailbox: Mailbox): Record<string, unknown> {
   const raw = mailbox.credentials;
   if (typeof raw !== 'string' || raw.length === 0) {
     return {};
   }
 
-  // Try decrypting (current format). Fall back to plaintext JSON for rows
-  // written before encryption was introduced.
-  // TODO: remove plaintext fallback after backfill (re-encrypt all existing
-  // Mailbox.credentials rows and remove this try/catch).
+  let plaintext: string;
   try {
-    const plaintext = decrypt(raw);
+    plaintext = decrypt(raw);
+  } catch (err) {
+    throw new Error(
+      `[Gmail] Failed to decrypt credentials for mailbox ${mailbox.id}: ` +
+        (err instanceof Error ? err.message : 'unknown error')
+    );
+  }
+  try {
     return JSON.parse(plaintext) as Record<string, unknown>;
-  } catch (decryptErr) {
-    try {
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      console.warn(
-        `[Gmail] Mailbox ${mailbox.id} credentials are stored as plaintext; ` +
-          'they will be re-encrypted on next write. Remove plaintext fallback ' +
-          'after backfilling.'
-      );
-      return parsed;
-    } catch {
-      console.error(
-        `[Gmail] Failed to parse credentials for mailbox ${mailbox.id}:`,
-        decryptErr
-      );
-      return {};
-    }
+  } catch {
+    throw new Error(`[Gmail] Decrypted credentials for mailbox ${mailbox.id} are not valid JSON`);
   }
 }
 
@@ -146,14 +144,22 @@ export async function fetchUserInfo(
   }
 }
 
-export async function handleCallback(code: string, mailboxId?: string): Promise<Mailbox> {
+export async function handleCallback(
+  code: string,
+  opts: { actorUserId: string | null } = { actorUserId: null }
+): Promise<Mailbox> {
   const oauth2Client = createOAuth2Client();
   const { tokens } = await oauth2Client.getToken(code);
   oauth2Client.setCredentials(tokens);
 
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
   const profile = await gmail.users.getProfile({ userId: 'me' });
-  const emailAddress = profile.data.emailAddress ?? '';
+  const emailAddress = (profile.data.emailAddress ?? '').toLowerCase();
+  // L6: only company Workspace mailboxes may be connected. Checked before any
+  // DB read/write so a personal account's tokens are never stored.
+  if (!isCompanyEmail(emailAddress)) {
+    throw createError(`Only @${COMPANY_DOMAIN} mailboxes can be connected`, 403);
+  }
   // Baseline historyId so the first incremental sync isn't empty.
   const baselineHistoryId = profile.data.historyId ?? null;
 
@@ -172,6 +178,19 @@ export async function handleCallback(code: string, mailboxId?: string): Promise<
   // old baseline and now. Only reset baseline on a genuinely-new connect.
   const existing = await prisma.mailbox.findUnique({ where: { emailAddress } });
   const wasNeedsReauth = existing?.authStatus === AUTH_STATUS_NEEDS_REAUTH;
+
+  // L6: isActive=false is only ever set by the admin-only DELETE route, so a
+  // disabled mailbox stays disabled unless an admin reconnects it.
+  const actor = opts.actorUserId
+    ? await prisma.user.findUnique({ where: { id: opts.actorUserId }, select: { role: true } })
+    : null;
+  if (existing && !existing.isActive && actor?.role !== 'admin') {
+    throw createError(
+      'This mailbox was disconnected by an admin; ask an admin to reconnect it',
+      403
+    );
+  }
+
   const isRefresh =
     !!existing &&
     existing.isActive &&
@@ -209,6 +228,7 @@ export async function handleCallback(code: string, mailboxId?: string): Promise<
       emailAddress,
       displayName: resolvedDisplayName,
       mode: isRefresh ? 'refresh' : 'fresh',
+      actorUserId: opts.actorUserId,
     },
     'INFO'
   );
@@ -941,6 +961,46 @@ async function createLiveDraft(
   }
 }
 
+/**
+ * True when the sender and every To/Cc recipient are on an internal domain
+ * (config.internalDomains; audit B6 / H8). Such mail on a thread with no candidate is internal
+ * correspondence: it is stored as metadata only and never sent to Claude.
+ * Recipient entries may be raw header fragments (`"Doe, Jane" <j@x>` split on
+ * commas), so fragments without an address are ignored.
+ */
+export function isInternalOnlyMessage(msg: {
+  fromAddress: string;
+  toAddresses: string[];
+  headers: { cc: string };
+}): boolean {
+  const isInternal = (addr: string) => isInternalAddress(addr, config.internalDomains);
+  if (!isInternal(msg.fromAddress)) return false;
+  const recipients = [...msg.toAddresses, msg.headers.cc]
+    .flatMap((entry) => entry.split(','))
+    .map((frag) => {
+      const angle = frag.match(/<([^>]+)>/);
+      return (angle ? angle[1] : frag).trim().toLowerCase();
+    })
+    .filter((addr) => addr.includes('@'));
+  return recipients.every(isInternal);
+}
+
+/**
+ * Drop the body of a just-classified message if its thread is still not
+ * linked to a candidate (H8): the message was judged non-recruiting, spam,
+ * no-role, or from an ignored sender. Subject/sender/headers are kept so
+ * threading and audit still work.
+ */
+async function scrubBodyIfUnlinked(threadId: string, externalMessageId: string): Promise<void> {
+  // One conditional write: only matches while the thread is still unlinked,
+  // so a concurrent classification that links it keeps the body.
+  await prisma.emailMessage.updateMany({
+    where: { externalMessageId, threadId, thread: { candidateId: null } },
+    data: { bodyText: null, bodyHtml: null },
+  });
+}
+
+/** @internal exported for tests */
 export async function fetchAndStoreMessage(
   gmail: ReturnType<typeof google.gmail>,
   mailbox: Mailbox,
@@ -1002,8 +1062,12 @@ export async function fetchAndStoreMessage(
       });
     }
 
+    // H8: internal-only mail on a thread with no candidate is stored as
+    // metadata only and skips classification.
+    const metadataOnly = !thread.candidateId && isInternalOnlyMessage(parsed);
+
     const tooOld = opts.classifyCutoff && parsed.receivedAt < opts.classifyCutoff;
-    const willClassify = !isOutbound && !opts.skipClassification && !tooOld;
+    const willClassify = !isOutbound && !metadataOnly && !opts.skipClassification && !tooOld;
 
     // Store message. A P2002 here means a concurrent run (webhook vs
     // reconcile) stored it between our pre-check and now — that's success.
@@ -1017,8 +1081,8 @@ export async function fetchAndStoreMessage(
           fromName: parsed.fromName,
           toAddresses: JSON.stringify(parsed.toAddresses),
           subject: parsed.subject,
-          bodyText: parsed.bodyText,
-          bodyHtml: parsed.bodyHtml,
+          bodyText: metadataOnly ? null : parsed.bodyText,
+          bodyHtml: metadataOnly ? null : parsed.bodyHtml,
           receivedAt: parsed.receivedAt,
           headers: JSON.stringify(parsed.headers),
           processingState: willClassify ? 'STORED' : isOutbound ? 'PROCESSED' : 'SKIPPED',
@@ -1074,14 +1138,18 @@ export async function fetchAndStoreMessage(
       return 'stored';
     }
 
+    if (metadataOnly) return 'stored';
+
     // Inbound: classify + maybe draft.
-    // Skipped for old messages during bulk resync (stored for context only).
+    // Skipped for old messages during bulk resync (stored for context only;
+    // orphan bodies left this way are purged by the retention job).
     if (willClassify) {
       await classifyAndDraft({ mailbox, thread, parsed });
       await prisma.emailMessage.update({
         where: { id: storedMessageId },
         data: { processingState: 'PROCESSED' },
       });
+      if (!thread.candidateId) await scrubBodyIfUnlinked(thread.id, externalMessageId);
     }
     return 'stored';
   } catch (err) {
@@ -2277,6 +2345,9 @@ export async function reclassifyOrphanedThreads(mailboxId: string): Promise<{ th
 
     const latest = inbound[0];
     if (!latest) continue;
+    // H8: a metadata-only message (body never stored, or scrubbed) can't be
+    // meaningfully re-classified — skip rather than classify a bare subject.
+    if (!thread.candidateId && !latest.bodyText && !latest.bodyHtml) continue;
 
     let toAddresses: string[] = [];
     let headers = { messageId: '', inReplyTo: '', references: '', cc: '' };
@@ -2397,6 +2468,7 @@ export async function sweepStuckMessages(
         where: { id: row.id },
         data: { processingState: 'PROCESSED' },
       });
+      if (!thread.candidateId) await scrubBodyIfUnlinked(thread.id, row.externalMessageId);
       processed += 1;
     } catch (err) {
       failed += 1;

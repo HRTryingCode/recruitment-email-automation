@@ -99,6 +99,13 @@ function validateEnv(): void {
         'to enforce JWT verification.'
     );
   }
+  if (process.env.PUBSUB_AUDIENCE && !process.env.PUBSUB_SERVICE_ACCOUNT_EMAIL) {
+    console.error(
+      '[config] WARNING: PUBSUB_AUDIENCE is set but PUBSUB_SERVICE_ACCOUNT_EMAIL ' +
+        'is not — the webhook verifies the JWT audience but not which service ' +
+        'account signed it. Set it to the push subscription\'s service account.'
+    );
+  }
 
   const encKey = process.env.ENCRYPTION_KEY;
   if (encKey) {
@@ -108,9 +115,11 @@ function validateEnv(): void {
     } catch {
       decodedLen = 0;
     }
-    if (decodedLen < 32) {
+    // Must match lib/crypto exactly — a longer key used to pass boot
+    // validation and then fail on the first encrypt/decrypt (L9).
+    if (decodedLen !== 32) {
       problems.push(
-        `ENCRYPTION_KEY must decode to at least 32 bytes (got ${decodedLen}); generate with: openssl rand -base64 32`
+        `ENCRYPTION_KEY must decode to exactly 32 bytes (got ${decodedLen}); generate with: openssl rand -base64 32`
       );
     }
   }

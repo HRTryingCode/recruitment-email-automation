@@ -175,3 +175,77 @@ describe('GET /api/internal/sync-health', () => {
     errSpy.mockRestore();
   });
 });
+
+// ── Audit B6: H7 / L5 / L21 ─────────────────────────────────────────────────
+describe('one-off repair routes are removed (H7)', () => {
+  let app: Awaited<ReturnType<typeof loadApp>>;
+
+  beforeEach(async () => {
+    resetPrismaMock(mockPrisma);
+    app = await loadApp();
+  });
+
+  it.each([
+    '/api/internal/fix-replied-at',
+    '/api/internal/restore-discarded-drafts',
+    '/api/internal/purge-no-role-candidates',
+  ])('POST %s returns 404 and mutates nothing (even for an admin)', async (path) => {
+    const res = await request(app).post(path).set('Authorization', AUTH);
+    expect(res.status).toBe(404);
+    expect(mockPrisma.candidate.update).not.toHaveBeenCalled();
+    expect(mockPrisma.candidate.updateMany).not.toHaveBeenCalled();
+    expect(mockPrisma.emailDraft.update).not.toHaveBeenCalled();
+    expect(mockPrisma.emailDraft.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('internal debug routes are admin-only (L5 / L21)', () => {
+  let app: Awaited<ReturnType<typeof loadApp>>;
+
+  beforeEach(async () => {
+    resetPrismaMock(mockPrisma);
+    app = await loadApp();
+  });
+
+  it.each([
+    '/api/internal/debug/mailbox?email=a@archive.com',
+    '/api/internal/debug/candidate?email=c@example.com',
+    '/api/internal/debug/drafts',
+  ])('GET %s returns 403 for a recruiter', async (path) => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce({ id: 'test-user-1', role: 'recruiter' });
+    const res = await request(app).get(path).set('Authorization', AUTH);
+    expect(res.status).toBe(403);
+    expect(mockPrisma.mailbox.findUnique).not.toHaveBeenCalled();
+    expect(mockPrisma.candidate.findUnique).not.toHaveBeenCalled();
+    expect(mockPrisma.emailDraft.findMany).not.toHaveBeenCalled();
+  });
+
+  it('debug/candidate never returns message bodies or draft bodies', async () => {
+    mockPrisma.candidate.findUnique.mockResolvedValueOnce({ id: 'cand-1', email: 'c@example.com', threads: [] });
+    mockPrisma.emailMessage.findMany.mockResolvedValueOnce([]);
+    mockPrisma.systemLog.findMany.mockResolvedValueOnce([]);
+    const res = await request(app)
+      .get('/api/internal/debug/candidate?email=c@example.com')
+      .set('Authorization', AUTH);
+    expect(res.status).toBe(200);
+    const arg = mockPrisma.candidate.findUnique.mock.calls[0][0];
+    const msgSelect = arg.include?.threads?.include?.messages?.select ?? arg.select?.threads?.select?.messages?.select;
+    const draftSelect = arg.include?.threads?.include?.drafts?.select ?? arg.select?.threads?.select?.drafts?.select;
+    expect(msgSelect).toBeDefined();
+    expect(msgSelect.bodyText).toBeUndefined();
+    expect(msgSelect.bodyHtml).toBeUndefined();
+    expect(msgSelect.headers).toBeUndefined();
+    expect(draftSelect).toBeDefined();
+    expect(draftSelect.bodyText).toBeUndefined();
+    expect(draftSelect.bodyHtml).toBeUndefined();
+  });
+
+  it('sync-health stays available to recruiters', async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce({ id: 'test-user-1', role: 'recruiter' });
+    mockPrisma.mailbox.findMany.mockResolvedValueOnce([]);
+    mockPrisma.$queryRaw.mockResolvedValueOnce([]);
+    mockPrisma.systemLog.findMany.mockResolvedValue([]);
+    const res = await request(app).get('/api/internal/sync-health').set('Authorization', AUTH);
+    expect(res.status).toBe(200);
+  });
+});

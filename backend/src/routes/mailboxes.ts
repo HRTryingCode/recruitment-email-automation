@@ -1,5 +1,4 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import crypto from 'crypto';
 import { prisma } from '../db/client';
 import {
   getAuthUrl,
@@ -12,7 +11,7 @@ import {
   watchMailbox,
   stopMailboxWatch,
 } from '../services/gmail.service';
-import { storeOAuthState } from '../lib/oauthState';
+import { createOAuthState } from '../lib/oauthState';
 import { createError } from '../middleware/error';
 import { requireAdmin } from '../middleware/requireAdmin';
 import { logEvent } from '../services/monitoring.service';
@@ -43,10 +42,10 @@ router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
 });
 
 // POST /api/mailboxes/gmail/auth
-router.post('/gmail/auth', async (_req: Request, res: Response, next: NextFunction) => {
+router.post('/gmail/auth', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const state = crypto.randomBytes(32).toString('hex');
-    await storeOAuthState(state);
+    if (!req.userId) return next(createError('Unauthenticated', 401));
+    const state = await createOAuthState(req.userId);
     const authUrl = getAuthUrl(state);
     res.json({ success: true, data: { authUrl } });
   } catch (err) {
@@ -60,7 +59,8 @@ router.post('/gmail/auth', async (_req: Request, res: Response, next: NextFuncti
 // requireAuth. The state-validation logic lives there as well.
 
 // POST /api/mailboxes/:id/resync
-router.post('/:id/resync', async (req: Request, res: Response, next: NextFunction) => {
+// Admin-only: a 30-day re-ingest that runs Claude on every new message.
+router.post('/:id/resync', requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = String(req.params.id);
     const mailbox = await prisma.mailbox.findUnique({ where: { id } });
@@ -68,7 +68,7 @@ router.post('/:id/resync', async (req: Request, res: Response, next: NextFunctio
       return next(createError('Mailbox not found', 404));
     }
     const result = await syncMessages(id, { daysBack: 30, classifyDaysBack: 30 });
-    await logEvent('MAILBOX_RESYNCED', { mailboxId: id, ...result }, 'INFO');
+    await logEvent('MAILBOX_RESYNCED', { mailboxId: id, ...result, actorUserId: req.userId }, 'INFO');
     res.json({ success: true, data: result });
   } catch (err) {
     // Surface OAuth/auth failures with a specific message so the UI can prompt
@@ -145,7 +145,11 @@ router.post('/workspace/connect', requireAdmin, async (req: Request, res: Respon
           },
         });
 
-        await logEvent('MAILBOX_WORKSPACE_CONNECTED', { mailboxId: mailbox.id, email }, 'INFO');
+        await logEvent(
+          'MAILBOX_WORKSPACE_CONNECTED',
+          { mailboxId: mailbox.id, email, actorUserId: req.userId },
+          'INFO'
+        );
 
         // Start push notifications now rather than waiting up to 6h for the
         // renew-watches cron (L4). Non-fatal: that cron retries it.
@@ -201,6 +205,7 @@ router.post('/workspace/connect', requireAdmin, async (req: Request, res: Respon
 // timeout (we hit Google userinfo for each).
 router.post(
   '/refresh-all-profiles',
+  requireAdmin,
   async (_req: Request, res: Response, next: NextFunction) => {
     try {
       const mailboxes = await prisma.mailbox.findMany({
@@ -394,7 +399,7 @@ router.delete('/:id', requireAdmin, async (req: Request, res: Response, next: Ne
       data: { isActive: false },
     });
 
-    await logEvent('MAILBOX_DISCONNECTED', { mailboxId: id }, 'INFO');
+    await logEvent('MAILBOX_DISCONNECTED', { mailboxId: id, actorUserId: req.userId }, 'INFO');
     res.json({ success: true, message: 'Mailbox disconnected' });
   } catch (err) {
     next(err);

@@ -39,11 +39,9 @@ app.set('trust proxy', 1);
 //
 // Scope caveat: helmet only runs on requests that hit the Express app, i.e.
 // /api/*. The frontend HTML + asset bundles are served by Vercel's static
-// layer (see vercel.json outputDirectory) and do NOT inherit this CSP. Adding
-// a matching static CSP via vercel.json `headers` is the natural follow-up —
-// noting the theme-bootstrap inline <script> in frontend/index.html would
-// need a 'sha256-…' hash or a relaxation. See docs/OPERATIONS.md for the
-// hand-off.
+// layer and get their CSP / frame-ancestors / nosniff from vercel.json
+// `headers` instead (the inline theme-bootstrap script is allowed by hash;
+// frontend/__tests__/csp.test.ts keeps the two in sync).
 //
 // If a future API response starts violating this CSP, the browser console
 // will surface the directive that blocked it — adjust the matching entry here
@@ -147,10 +145,11 @@ app.get(
       if (!state) {
         return next(createError('Missing OAuth state parameter', 400));
       }
-      if (!(await consumeOAuthState(state))) {
+      const consumed = await consumeOAuthState(state);
+      if (!consumed) {
         return next(createError('Invalid or expired OAuth state', 400));
       }
-      const mailbox = await handleCallback(code, state);
+      const mailbox = await handleCallback(code, { actorUserId: consumed.userId });
       try {
         await watchMailbox(mailbox.id);
       } catch (watchErr) {

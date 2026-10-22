@@ -27,13 +27,15 @@ export interface MockPrisma {
     'findUnique' | 'findMany' | 'count' | 'create' | 'update' | 'updateMany'
   >;
   emailDraft: MockedMethods<
-    'findUnique' | 'findMany' | 'count' | 'create' | 'update' | 'updateMany'
+    'findUnique' | 'findFirst' | 'findMany' | 'count' | 'create' | 'update' | 'updateMany'
   >;
-  emailThread: MockedMethods<'findUnique' | 'findMany' | 'update'>;
-  emailMessage: MockedMethods<'findUnique' | 'findFirst' | 'findMany' | 'count' | 'groupBy'>;
+  emailThread: MockedMethods<'findUnique' | 'findMany' | 'update' | 'upsert' | 'count'>;
+  emailMessage: MockedMethods<
+    'findUnique' | 'findFirst' | 'findMany' | 'count' | 'groupBy' | 'create' | 'update' | 'updateMany'
+  >;
   expectedSender: MockedMethods<'findMany' | 'findUnique' | 'upsert' | 'update' | 'delete'>;
   systemLog: MockedMethods<'create' | 'findMany' | 'findFirst'>;
-  oAuthState: MockedMethods<'create' | 'findUnique' | 'update' | 'deleteMany'>;
+  oAuthState: MockedMethods<'create' | 'findUnique' | 'update' | 'updateMany' | 'deleteMany'>;
   $transaction: Mock;
   $queryRaw: Mock;
 }
@@ -58,17 +60,27 @@ export function buildPrismaMock(): MockPrisma {
     ),
     emailDraft: methods(
       'findUnique',
+      'findFirst',
       'findMany',
       'count',
       'create',
       'update',
       'updateMany'
     ),
-    emailThread: methods('findUnique', 'findMany', 'update'),
-    emailMessage: methods('findUnique', 'findFirst', 'findMany', 'count', 'groupBy'),
+    emailThread: methods('findUnique', 'findMany', 'update', 'upsert', 'count'),
+    emailMessage: methods(
+      'findUnique',
+      'findFirst',
+      'findMany',
+      'count',
+      'groupBy',
+      'create',
+      'update',
+      'updateMany'
+    ),
     expectedSender: methods('findMany', 'findUnique', 'upsert', 'update', 'delete'),
     systemLog: methods('create', 'findMany', 'findFirst'),
-    oAuthState: methods('create', 'findUnique', 'update', 'deleteMany'),
+    oAuthState: methods('create', 'findUnique', 'update', 'updateMany', 'deleteMany'),
     $transaction: vi.fn(),
     $queryRaw: vi.fn(),
   };

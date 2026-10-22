@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../db/client';
-import { logEvent } from '../services/monitoring.service';
 import { safeError } from '../lib/safeError';
+import { requireAdmin } from '../middleware/requireAdmin';
 
 const router = Router();
 
@@ -193,7 +193,7 @@ router.get('/sync-health', async (_req: Request, res: Response, next: NextFuncti
 
 // GET /api/internal/debug/mailbox?email=aaronrampersad@archive.com
 // Admin-only debug: shows what messages + candidates the DB has for a mailbox.
-router.get('/debug/mailbox', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/debug/mailbox', requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const email = typeof req.query.email === 'string' ? req.query.email.trim() : null;
     if (!email) return res.status(400).json({ success: false, message: 'email query param required' });
@@ -261,8 +261,9 @@ router.get('/debug/mailbox', async (req: Request, res: Response, next: NextFunct
   }
 });
 
-// GET /api/internal/debug/candidate?email=sofiadelgadosandoval@gmail.com
-router.get('/debug/candidate', async (req: Request, res: Response, next: NextFunction) => {
+// GET /api/internal/debug/candidate?email=someone@example.com
+// Admin-only. Returns metadata only — never message or draft bodies (L21).
+router.get('/debug/candidate', requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const email = typeof req.query.email === 'string' ? req.query.email.trim() : null;
     if (!email) return res.status(400).json({ success: false, message: 'email query param required' });
@@ -272,8 +273,22 @@ router.get('/debug/candidate', async (req: Request, res: Response, next: NextFun
       include: {
         threads: {
           include: {
-            messages: { orderBy: { receivedAt: 'asc' }, take: 5 },
-            drafts: { orderBy: { createdAt: 'desc' }, take: 3 },
+            messages: {
+              orderBy: { receivedAt: 'asc' },
+              take: 5,
+              select: {
+                id: true,
+                externalMessageId: true,
+                fromAddress: true,
+                subject: true,
+                receivedAt: true,
+              },
+            },
+            drafts: {
+              orderBy: { createdAt: 'desc' },
+              take: 3,
+              select: { id: true, status: true, createdAt: true, updatedAt: true },
+            },
           },
         },
       },
@@ -311,159 +326,16 @@ router.get('/debug/candidate', async (req: Request, res: Response, next: NextFun
   }
 });
 
-// POST /api/internal/fix-replied-at
-// Clears repliedAt on candidates where no outbound message in their threads
-// is a genuine reply to the candidate.
-//
-// An outbound is a "genuine reply" if its stored headers.inReplyTo is non-empty.
-// Original outreach emails have no inReplyTo; replies always do. Using inReplyTo
-// rather than receivedAt ordering avoids false-positives from the now-fixed bug
-// where missing Date: headers defaulted to new Date() (causing repliedAt to be
-// set on messages whose receivedAt was incorrectly stored as "now").
-router.post('/fix-replied-at', async (_req: Request, res: Response, next: NextFunction) => {
-  try {
-    const candidates = await prisma.candidate.findMany({
-      where: { repliedAt: { not: null } },
-      include: {
-        threads: {
-          include: {
-            messages: { orderBy: { receivedAt: 'asc' } },
-          },
-        },
-      },
-    });
-
-    let cleared = 0;
-    for (const candidate of candidates) {
-      let hasGenuineReply = false;
-
-      for (const thread of candidate.threads) {
-        const mailbox = await prisma.mailbox.findUnique({ where: { id: thread.mailboxId } });
-        if (!mailbox) continue;
-        const mailboxEmail = mailbox.emailAddress.toLowerCase();
-
-        const hasInbound = thread.messages.some(
-          (m) => m.fromAddress.toLowerCase() !== mailboxEmail
-        );
-        if (!hasInbound) continue;
-
-        // A genuine reply has inReplyTo set in its headers. Original outreach
-        // emails sent to candidates don't have inReplyTo.
-        const outboundMsgs = thread.messages.filter(
-          (m) => m.fromAddress.toLowerCase() === mailboxEmail
-        );
-        const genuineReply = outboundMsgs.some((m) => {
-          try {
-            const h = JSON.parse(typeof m.headers === 'string' ? m.headers : JSON.stringify(m.headers ?? {})) as { inReplyTo?: string };
-            return h.inReplyTo && h.inReplyTo.trim().length > 0;
-          } catch {
-            return false;
-          }
-        });
-
-        if (genuineReply) {
-          hasGenuineReply = true;
-          break;
-        }
-      }
-
-      if (!hasGenuineReply) {
-        await prisma.candidate.update({
-          where: { id: candidate.id },
-          data: { repliedAt: null },
-        });
-        cleared++;
-      }
-    }
-
-    res.json({ success: true, data: { checked: candidates.length, cleared } });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// POST /api/internal/restore-discarded-drafts
-// Restores all DISCARDED drafts from the last 24h back to APPROVED and clears
-// repliedAt on their candidates. Scoped to 24h to avoid surfacing old
-// intentionally-discarded work.
-router.post('/restore-discarded-drafts', async (_req: Request, res: Response, next: NextFunction) => {
-  try {
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const discardedDrafts = await prisma.emailDraft.findMany({
-      where: { status: 'DISCARDED', updatedAt: { gte: since } },
-      select: { id: true, thread: { select: { candidateId: true } } },
-    });
-
-    let restored = 0;
-    const processedCandidates = new Set<string>();
-
-    for (const draft of discardedDrafts) {
-      await prisma.emailDraft.update({
-        where: { id: draft.id },
-        data: { status: 'APPROVED' },
-      });
-      restored++;
-
-      const candidateId = draft.thread?.candidateId;
-      if (candidateId && !processedCandidates.has(candidateId)) {
-        processedCandidates.add(candidateId);
-        await prisma.candidate.update({
-          where: { id: candidateId },
-          data: { repliedAt: null },
-        });
-      }
-    }
-
-    await logEvent('DISCARDED_DRAFTS_RESTORED', { checked: discardedDrafts.length, restored }, 'INFO');
-    res.json({ success: true, data: { checked: discardedDrafts.length, restored } });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// POST /api/internal/purge-no-role-candidates
-// Marks IGNORED all candidates where no role was detected, and discards any
-// pending/approved drafts for them. These are almost always spam or bulk
-// outreach that slipped past the NOT_RECRUITING_RELATED filter.
-router.post('/purge-no-role-candidates', async (_req: Request, res: Response, next: NextFunction) => {
-  try {
-    const noRoleCandidates = await prisma.candidate.findMany({
-      where: { role: null, status: { not: 'IGNORED' } },
-      select: { id: true },
-    });
-
-    const ids = noRoleCandidates.map((c) => c.id);
-
-    const [ignoredCount, discardedCount] = await Promise.all([
-      prisma.candidate.updateMany({
-        where: { id: { in: ids } },
-        data: { status: 'IGNORED' },
-      }),
-      prisma.emailDraft.updateMany({
-        where: {
-          thread: { candidateId: { in: ids } },
-          status: { in: ['PENDING', 'APPROVED'] },
-        },
-        data: { status: 'DISCARDED' },
-      }),
-    ]);
-
-    await logEvent(
-      'NO_ROLE_CANDIDATES_PURGED',
-      { ignored: ignoredCount.count, draftsDiscarded: discardedCount.count },
-      'INFO'
-    );
-
-    res.json({ success: true, data: { ignored: ignoredCount.count, draftsDiscarded: discardedCount.count } });
-  } catch (err) {
-    next(err);
-  }
-});
+// One-off repair routes (fix-replied-at, restore-discarded-drafts,
+// purge-no-role-candidates) were removed in audit batch B6 (H7/L5): they were
+// unconfirmed bulk mutations reachable by any recruiter, and fix-replied-at's
+// heuristic would have cleared repliedAt on ~257 of 269 candidates. Data
+// repairs belong in reviewed, dry-run-first scripts under backend/scripts/.
 
 // GET /api/internal/debug/drafts
 // Returns all drafts from the last 48h grouped by status so we can see
 // exactly what happened to recently-approved work.
-router.get('/debug/drafts', async (_req: Request, res: Response, next: NextFunction) => {
+router.get('/debug/drafts', requireAdmin, async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const since = new Date(Date.now() - 48 * 60 * 60 * 1000);
     const drafts = await prisma.emailDraft.findMany({

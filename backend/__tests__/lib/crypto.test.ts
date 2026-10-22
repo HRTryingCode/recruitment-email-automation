@@ -39,42 +39,101 @@ describe('lib/crypto', () => {
     expect(decrypt(b)).toBe(plaintext);
   });
 
-  it('emits a 3-part `iv:authTag:ciphertext` payload', () => {
+  it('emits a key-versioned `v1:iv:authTag:ciphertext` payload (L9)', () => {
     const payload = encrypt('x');
     const parts = payload.split(':');
-    expect(parts).toHaveLength(3);
+    expect(parts).toHaveLength(4);
+    expect(parts[0]).toBe('v1');
     parts.forEach((p) => expect(p.length).toBeGreaterThan(0));
+  });
+
+  describe('key versioning + rotation (L9)', () => {
+    const OLD_KEY = crypto.randomBytes(32).toString('base64');
+    const NEW_KEY = crypto.randomBytes(32).toString('base64');
+    const saved: Record<string, string | undefined> = {};
+
+    beforeEach(() => {
+      for (const k of ['ENCRYPTION_KEY_VERSION', 'ENCRYPTION_KEY_PREVIOUS']) saved[k] = process.env[k];
+      delete process.env.ENCRYPTION_KEY_VERSION;
+      delete process.env.ENCRYPTION_KEY_PREVIOUS;
+    });
+    afterEach(() => {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    });
+
+    function legacyEncrypt(plaintext: string, keyB64: string): string {
+      const iv = crypto.randomBytes(12);
+      const c = crypto.createCipheriv('aes-256-gcm', Buffer.from(keyB64, 'base64'), iv);
+      const ct = Buffer.concat([c.update(plaintext, 'utf8'), c.final()]);
+      return [iv, c.getAuthTag(), ct].map((b) => b.toString('base64')).join(':');
+    }
+
+    it('still decrypts legacy unversioned payloads (all prod rows today)', () => {
+      expect(decrypt(legacyEncrypt('legacy-token', VALID_KEY_B64))).toBe('legacy-token');
+    });
+
+    it('after rotation, decrypts v1 and legacy payloads with ENCRYPTION_KEY_PREVIOUS and writes v2', () => {
+      process.env.ENCRYPTION_KEY = OLD_KEY;
+      const v1 = encrypt('old-token');
+      const legacy = legacyEncrypt('older-token', OLD_KEY);
+
+      process.env.ENCRYPTION_KEY = NEW_KEY;
+      process.env.ENCRYPTION_KEY_VERSION = '2';
+      process.env.ENCRYPTION_KEY_PREVIOUS = OLD_KEY;
+
+      expect(decrypt(v1)).toBe('old-token');
+      expect(decrypt(legacy)).toBe('older-token');
+      const v2 = encrypt('new-token');
+      expect(v2.startsWith('v2:')).toBe(true);
+      expect(decrypt(v2)).toBe('new-token');
+    });
+
+    it('throws for a version with no matching key', () => {
+      process.env.ENCRYPTION_KEY = OLD_KEY;
+      const v1 = encrypt('t');
+      process.env.ENCRYPTION_KEY = NEW_KEY;
+      process.env.ENCRYPTION_KEY_VERSION = '2';
+      expect(() => decrypt(v1)).toThrow(/no key configured for version v1/i);
+    });
+
+    it('rejects a malformed version tag', () => {
+      process.env.ENCRYPTION_KEY_VERSION = 'abc';
+      expect(() => encrypt('x')).toThrow(/ENCRYPTION_KEY_VERSION/);
+    });
   });
 
   describe('tamper rejection', () => {
     it('throws when the ciphertext is mutated', () => {
-      const [iv, tag, ct] = encrypt('payload').split(':');
+      const [ver, iv, tag, ct] = encrypt('payload').split(':');
       // Flip the last byte of the ciphertext.
       const ctBuf = Buffer.from(ct, 'base64');
       ctBuf[ctBuf.length - 1] ^= 0x01;
-      const tampered = `${iv}:${tag}:${ctBuf.toString('base64')}`;
+      const tampered = `${ver}:${iv}:${tag}:${ctBuf.toString('base64')}`;
       expect(() => decrypt(tampered)).toThrow();
     });
 
     it('throws when the authTag is mutated', () => {
-      const [iv, tag, ct] = encrypt('payload').split(':');
+      const [ver, iv, tag, ct] = encrypt('payload').split(':');
       const tagBuf = Buffer.from(tag, 'base64');
       tagBuf[0] ^= 0x01;
-      const tampered = `${iv}:${tagBuf.toString('base64')}:${ct}`;
+      const tampered = `${ver}:${iv}:${tagBuf.toString('base64')}:${ct}`;
       expect(() => decrypt(tampered)).toThrow();
     });
 
     it('throws when the IV is mutated', () => {
-      const [iv, tag, ct] = encrypt('payload').split(':');
+      const [ver, iv, tag, ct] = encrypt('payload').split(':');
       const ivBuf = Buffer.from(iv, 'base64');
       ivBuf[0] ^= 0x01;
-      const tampered = `${ivBuf.toString('base64')}:${tag}:${ct}`;
+      const tampered = `${ver}:${ivBuf.toString('base64')}:${tag}:${ct}`;
       expect(() => decrypt(tampered)).toThrow();
     });
   });
 
   describe('malformed payload rejection', () => {
-    it('throws on a payload without three parts', () => {
+    it('throws on a payload without three (legacy) or four (versioned) parts', () => {
       expect(() => decrypt('not:a-valid-payload')).toThrow(
         /Invalid encrypted payload format/
       );
@@ -88,6 +147,7 @@ describe('lib/crypto', () => {
       const tag = Buffer.alloc(16).toString('base64');
       const ct = Buffer.from('garbage').toString('base64');
       expect(() => decrypt(`${wrongIv}:${tag}:${ct}`)).toThrow(/Invalid IV length/);
+      expect(() => decrypt(`v1:${wrongIv}:${tag}:${ct}`)).toThrow(/Invalid IV length/);
     });
   });
 
