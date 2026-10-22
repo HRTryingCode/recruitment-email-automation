@@ -26,6 +26,7 @@ const MANIFEST: Record<string, Guard> = {
   'POST /api/webhooks/gmail': 'pubsub',
   'GET /api/internal/cron/renew-watches': 'cron',
   'GET /api/internal/cron/reconcile': 'cron',
+  'GET /api/internal/cron/purge-orphan-bodies': 'cron',
   'GET /api/mailboxes/gmail/callback': 'oauth',
 
   'GET /api/mailboxes/': 'auth',

@@ -653,3 +653,66 @@ describe('/api/internal/cron', () => {
     );
   });
 });
+
+// ── Audit B6 / H8: orphan-body retention cron ───────────────────────────────
+describe('GET /api/internal/cron/purge-orphan-bodies', () => {
+  const savedSecret = process.env.CRON_SECRET;
+  const savedDays = process.env.ORPHAN_BODY_RETENTION_DAYS;
+  let app: Awaited<ReturnType<typeof loadApp>>;
+
+  beforeEach(async () => {
+    process.env.CRON_SECRET = CRON_SECRET;
+    delete process.env.ORPHAN_BODY_RETENTION_DAYS;
+    resetPrismaMock(mockPrisma);
+    app = await loadApp();
+  });
+
+  afterEach(() => {
+    if (savedSecret === undefined) delete process.env.CRON_SECRET;
+    else process.env.CRON_SECRET = savedSecret;
+    if (savedDays === undefined) delete process.env.ORPHAN_BODY_RETENTION_DAYS;
+    else process.env.ORPHAN_BODY_RETENTION_DAYS = savedDays;
+  });
+
+  it('requires the cron secret', async () => {
+    const res = await request(app).get('/api/internal/cron/purge-orphan-bodies');
+    expect(res.status).toBe(401);
+  });
+
+  it('is a no-op while ORPHAN_BODY_RETENTION_DAYS is unset (needs human approval to enable)', async () => {
+    const res = await request(app)
+      .get('/api/internal/cron/purge-orphan-bodies')
+      .set('Authorization', `Bearer ${CRON_SECRET}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ skipped: true });
+    expect(mockPrisma.emailMessage.count).not.toHaveBeenCalled();
+    expect(mockPrisma.emailMessage.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op for a window under 7 days', async () => {
+    process.env.ORPHAN_BODY_RETENTION_DAYS = '2';
+    const res = await request(app)
+      .get('/api/internal/cron/purge-orphan-bodies')
+      .set('Authorization', `Bearer ${CRON_SECRET}`);
+    expect(res.body.data).toMatchObject({ skipped: true });
+    expect(mockPrisma.emailMessage.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('purges and logs when enabled', async () => {
+    process.env.ORPHAN_BODY_RETENTION_DAYS = '30';
+    mockPrisma.emailMessage.count.mockResolvedValueOnce(1);
+    mockPrisma.emailMessage.findMany
+      .mockResolvedValueOnce([{ id: 'a' }])
+      .mockResolvedValueOnce([]);
+    mockPrisma.emailMessage.updateMany.mockResolvedValueOnce({ count: 1 });
+    const res = await request(app)
+      .get('/api/internal/cron/purge-orphan-bodies')
+      .set('Authorization', `Bearer ${CRON_SECRET}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ purged: 1, complete: true });
+    const logged = mockPrisma.systemLog.create.mock.calls.find(
+      ([a]) => (a as { data: { event: string } }).data.event === 'ORPHAN_BODIES_PURGED'
+    );
+    expect(logged).toBeDefined();
+  });
+});

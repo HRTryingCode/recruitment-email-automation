@@ -12,6 +12,7 @@ import { pruneSystemLog } from '../services/systemLogRetention.service';
 import { logEvent, runWatchdog } from '../services/monitoring.service';
 import { markMailboxNeedsReauth, AUTH_STATUS_NEEDS_REAUTH } from '../services/mailboxAuth.service';
 import { safeError, isAuthRevokedError, MailboxNeedsReauthError } from '../lib/safeError';
+import { purgeOrphanBodies, retentionDaysFromEnv } from '../services/retention.service';
 
 const router = Router();
 
@@ -349,6 +350,40 @@ router.get(
       }
       const summary = await sendWeeklyCoverageSummary();
       res.status(200).json({ success: true, data: { sendAsRefreshed, sendAsFailed, ...summary } });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// GET /api/internal/cron/purge-orphan-bodies
+// Daily retention (audit B6 / H8): nulls bodies of messages on threads with no
+// candidate once they are older than ORPHAN_BODY_RETENTION_DAYS. A no-op
+// until that env var is set to an integer >= 7. Enabling it purges the
+// existing backlog on the first run, so it needs explicit human approval.
+router.get(
+  '/purge-orphan-bodies',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!isAuthorized(req)) {
+        res.status(401).json({ success: false, error: 'Unauthorized' });
+        return;
+      }
+      const days = retentionDaysFromEnv(process.env.ORPHAN_BODY_RETENTION_DAYS);
+      if (days === null) {
+        res.status(200).json({
+          success: true,
+          data: { skipped: true, reason: 'ORPHAN_BODY_RETENTION_DAYS not set (or < 7)' },
+        });
+        return;
+      }
+      const result = await purgeOrphanBodies({
+        olderThanDays: days,
+        dryRun: false,
+        deadline: Date.now() + 45_000,
+      });
+      await logEvent('ORPHAN_BODIES_PURGED', { retentionDays: days, ...result }, 'INFO');
+      res.status(200).json({ success: true, data: result });
     } catch (err) {
       next(err);
     }

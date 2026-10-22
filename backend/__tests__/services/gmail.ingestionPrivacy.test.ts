@@ -90,7 +90,7 @@ describe('fetchAndStoreMessage body persistence (H8)', () => {
     mockPrisma.emailMessage.update.mockResolvedValue({});
     mockPrisma.emailMessage.updateMany.mockResolvedValue({ count: 1 });
     mockPrisma.emailMessage.findMany.mockResolvedValue([]);
-    mockPrisma.emailDraft.findFirst = vi.fn().mockResolvedValue(null) as never;
+    mockPrisma.emailDraft.findFirst.mockResolvedValue(null);
     mockPrisma.candidate.findUnique.mockResolvedValue(null);
   });
 

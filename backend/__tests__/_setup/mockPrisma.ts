@@ -27,7 +27,7 @@ export interface MockPrisma {
     'findUnique' | 'findMany' | 'count' | 'create' | 'update' | 'updateMany'
   >;
   emailDraft: MockedMethods<
-    'findUnique' | 'findMany' | 'count' | 'create' | 'update' | 'updateMany'
+    'findUnique' | 'findFirst' | 'findMany' | 'count' | 'create' | 'update' | 'updateMany'
   >;
   emailThread: MockedMethods<'findUnique' | 'findMany' | 'update' | 'upsert' | 'count'>;
   emailMessage: MockedMethods<
@@ -60,6 +60,7 @@ export function buildPrismaMock(): MockPrisma {
     ),
     emailDraft: methods(
       'findUnique',
+      'findFirst',
       'findMany',
       'count',
       'create',
