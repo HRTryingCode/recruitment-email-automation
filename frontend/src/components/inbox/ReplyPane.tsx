@@ -166,6 +166,8 @@ interface Props {
   onRewrite: (instruction: string) => void;
   onRegenerate: () => void;
   rewriting: boolean;
+  /** Offered while the editor still shows the last rewrite's text. */
+  onUndoRewrite?: () => void;
   onChangeCc: (ccEmail: string | null) => void;
   /** Dismiss and Snooze menus (owned by the page so D/S can open them). */
   menus: ReactNode;
@@ -278,6 +280,7 @@ export default function ReplyPane(props: Props) {
             rewriting={props.rewriting}
             onRewrite={props.onRewrite}
             onRegenerate={props.onRegenerate}
+            onUndoRewrite={props.onUndoRewrite}
           />
         </div>
       </div>

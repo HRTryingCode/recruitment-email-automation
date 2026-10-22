@@ -291,6 +291,7 @@ const LOCK_VERBS: Record<string, string> = {
   Rewrite: 'Rewriting',
   Regenerate: 'Regenerating',
   Change: 'Changing the CC',
+  Restore: 'Restoring',
 };
 
 export function lockWarning(actionLabel: string): string {

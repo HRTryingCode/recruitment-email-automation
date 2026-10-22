@@ -320,6 +320,38 @@ describe('rewrites', () => {
     await waitFor(() => expect((box as HTMLTextAreaElement).value).toMatch(/^Rewritten/));
   });
 
+  it('"Undo rewrite" brings back the text from before the rewrite', async () => {
+    const store = installInbox(ITEMS);
+    const user = userEvent.setup();
+    renderInbox('/inbox?view=interested&item=d1');
+    const pane = await openPane();
+    const box = within(pane).getByRole('textbox', { name: 'Reply' }) as HTMLTextAreaElement;
+    await user.type(box, ' PS');
+    const before = box.value;
+    await user.click(within(pane).getByRole('button', { name: 'Shorter' }));
+    await waitFor(() => expect(box.value).toMatch(/^Rewritten/));
+    // Offered both in the toast and next to the editor.
+    const toast = (await screen.findByText('Rewritten')).closest('[data-sonner-toast]') as HTMLElement;
+    expect(within(toast).getByRole('button', { name: 'Undo rewrite' })).toBeInTheDocument();
+    await user.click(within(pane).getByRole('button', { name: 'Undo rewrite' }));
+    await waitFor(() => expect(box.value).toBe(before));
+    const patches = store.calls.filter((c) => c.method === 'PATCH');
+    expect((patches.at(-1)!.body as { bodyText: string }).bodyText).toBe(before);
+    expect(within(pane).queryByRole('button', { name: 'Undo rewrite' })).not.toBeInTheDocument();
+  });
+
+  it('the editor\'s "Undo rewrite" goes away once the rewritten text is edited', async () => {
+    installInbox(ITEMS);
+    const user = userEvent.setup();
+    renderInbox('/inbox?view=interested&item=d1');
+    const pane = await openPane();
+    const box = within(pane).getByRole('textbox', { name: 'Reply' }) as HTMLTextAreaElement;
+    await user.click(within(pane).getByRole('button', { name: 'Shorter' }));
+    await within(pane).findByRole('button', { name: 'Undo rewrite' });
+    await user.type(box, '!');
+    expect(within(pane).queryByRole('button', { name: 'Undo rewrite' })).not.toBeInTheDocument();
+  });
+
   it('"Regenerate with instruction…" rewrites with the typed instruction', async () => {
     const store = installInbox(ITEMS);
     const user = userEvent.setup();

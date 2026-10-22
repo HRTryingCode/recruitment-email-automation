@@ -404,6 +404,11 @@ export default function InboxPage() {
                 onRewrite={(instruction) => draft && actions.rewrite(draft, editor.body, editor.dirty, instruction, editor.reset)}
                 onRegenerate={() => draft && actions.regenerate(draft, editor.body, editor.dirty, editor.reset)}
                 rewriting={actions.rewriting}
+                onUndoRewrite={
+                  draft && actions.rewriteUndo?.draftId === draft.id && editor.body === actions.rewriteUndo.rewritten
+                    ? () => actions.undoRewrite(draft, actions.rewriteUndo!, editor.reset)
+                    : undefined
+                }
                 onChangeCc={(cc) => draft && actions.changeCc(draft, cc)}
                 menus={menus}
               />

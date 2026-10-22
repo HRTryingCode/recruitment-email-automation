@@ -30,6 +30,14 @@ export function lockedBy(err: unknown): string | null {
   return data?.lockedBy ?? 'Someone';
 }
 
+export interface RewriteUndo {
+  draftId: string;
+  /** The body before the rewrite (edits included). */
+  previous: string;
+  /** What the rewrite produced; the undo is offered while the editor still shows it. */
+  rewritten: string;
+}
+
 interface Options {
   /** Keys of the items in the open view, in list order. */
   keys: string[];
@@ -51,6 +59,8 @@ export function useInboxActions({ keys, setItem, onLocalChange, onSent, nameOf }
   const qc = useQueryClient();
   const [lock, setLock] = useState<LockState | null>(null);
   const [busy, setBusy] = useState<'send' | 'rewrite' | null>(null);
+  /** The last rewrite/regenerate that replaced the body, until undone or edited over. */
+  const [rewriteUndo, setRewriteUndo] = useState<RewriteUndo | null>(null);
   const lastSend = useRef<{ id: string; name: string; until: number; toastId: string | number } | null>(null);
   const keysRef = useRef(keys);
   const cbs = useRef({ onLocalChange, onSent, nameOf });
@@ -229,6 +239,30 @@ export function useInboxActions({ keys, setItem, onLocalChange, onSent, nameOf }
     [mergeDraft]
   );
 
+  const undoRewrite = useCallback(
+    (draft: EmailDraft, undo: RewriteUndo, adopt: (body: string) => void) => {
+      void guarded('Restore anyway', 'Could not undo the rewrite', async (override) => {
+        const res = await updateDraft(draft.id, { bodyText: undo.previous, ...(override ? { override: true } : {}) });
+        mergeDraft(res.data);
+        adopt(undo.previous);
+        setRewriteUndo((cur) => (cur === undo ? null : cur));
+      });
+    },
+    [guarded, mergeDraft]
+  );
+
+  /** Adopt a rewritten body, keeping the old one for "Undo rewrite". */
+  const adoptRewrite = useCallback(
+    (draft: EmailDraft, previous: string, rewritten: string, adopt: (body: string) => void) => {
+      adopt(rewritten);
+      if (previous === rewritten) return;
+      const undo = { draftId: draft.id, previous, rewritten };
+      setRewriteUndo(undo);
+      toastSuccess('Rewritten', undefined, { label: 'Undo rewrite', onClick: () => undoRewrite(draft, undo, adopt) });
+    },
+    [undoRewrite]
+  );
+
   const rewrite = useCallback(
     (draft: EmailDraft, body: string, dirty: boolean, instruction: string, adopt: (body: string) => void) => {
       setBusy('rewrite');
@@ -236,10 +270,10 @@ export function useInboxActions({ keys, setItem, onLocalChange, onSent, nameOf }
         await saveIfDirty(draft, body, dirty, override);
         const res = await dictateDraft(draft.id, instruction, override ? { override: true } : {});
         mergeDraft(res.data);
-        adopt(res.data.bodyText);
+        adoptRewrite(draft, body, res.data.bodyText, adopt);
       }).finally(() => setBusy(null));
     },
-    [guarded, saveIfDirty, mergeDraft]
+    [guarded, saveIfDirty, mergeDraft, adoptRewrite]
   );
 
   const regenerate = useCallback(
@@ -250,10 +284,10 @@ export function useInboxActions({ keys, setItem, onLocalChange, onSent, nameOf }
         const res = await regenerateDraft(draft.id, { keepEdits: true, ...(override ? { override: true } : {}) });
         mergeDraft(res.data);
         if (res.data.keptEdits) toastSuccess('New AI draft ready', 'Your edits were kept — use Show changes to compare.');
-        else adopt(res.data.bodyText);
+        else adoptRewrite(draft, body, res.data.bodyText, adopt);
       }).finally(() => setBusy(null));
     },
-    [guarded, saveIfDirty, mergeDraft]
+    [guarded, saveIfDirty, mergeDraft, adoptRewrite]
   );
 
   const changeCc = useCallback(
@@ -316,6 +350,8 @@ export function useInboxActions({ keys, setItem, onLocalChange, onSent, nameOf }
     unsnooze,
     rewrite,
     regenerate,
+    rewriteUndo,
+    undoRewrite,
     changeCc,
     batchSend,
   };

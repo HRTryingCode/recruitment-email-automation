@@ -21,6 +21,7 @@ describe('lockWarning', () => {
     ['Rewrite anyway', 'Rewriting now may overwrite their changes.'],
     ['Regenerate anyway', 'Regenerating now may overwrite their changes.'],
     ['Change anyway', 'Changing the CC now may overwrite their changes.'],
+    ['Restore anyway', 'Restoring now may overwrite their changes.'],
   ])('%s → %s', (label, text) => {
     expect(lockWarning(label)).toBe(text);
   });
