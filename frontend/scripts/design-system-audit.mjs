@@ -5,6 +5,9 @@
 //
 //   node scripts/design-system-audit.mjs            # summary per area/rule
 //   node scripts/design-system-audit.mjs --markdown # full inventory tables
+//   node scripts/design-system-audit.mjs --write-docs
+//     # regenerate the inventory between the audit markers in
+//     # docs/DESIGN-SYSTEM.md (run it at the end of each R batch)
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -83,6 +86,11 @@ export const RULES = [
     id: 'legacy-token',
     fix: 'shadcn token (foreground, muted-foreground, card, border, primary …)',
     re: new RegExp(`(?<![\\w-])(?:[\\w-]+:)*(?:${COLOR_UTIL})-(?:fg|surface|line|ink|accent-\\d{2,3})(?:-[\\w]+)?(?:\\/[\\d.\\[\\]]+)?(?![\\w-])`, 'g'),
+  },
+  {
+    id: 'legacy-css-class',
+    fix: 'ui/card, ui/skeleton, ui/separator (index.css @layer components classes go away in R1)',
+    re: /className=[^\n]*?(?<![\w-])(card-hover|card|hairline|skeleton|grid-bg)(?![\w-])/g,
   },
   { id: 'ad-hoc-shadow', fix: 'component elevation (Card, popover) — no shadow-* outside ui', re: /(?<![\w-])(?:[\w-]+:)*shadow(?:-(?:sm|md|lg|xl|2xl|inner|none|glow|card-hover|\[[^\]]+\]))?(?![\w-])/g },
   { id: 'ad-hoc-radius', fix: 'component radius (rounded-* lives in ui/)', re: /(?<![\w-])(?:[\w-]+:)*rounded(?:-(?:[trblse]{1,2}-)?(?:none|sm|md|lg|xl|2xl|3xl|4xl|full|\[[^\]]+\]))?(?![\w-])/g },
@@ -167,7 +175,16 @@ export function toMarkdown(findings) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const findings = audit();
-  if (process.argv.includes('--markdown')) {
+  if (process.argv.includes('--write-docs')) {
+    const doc = path.resolve(root, '..', 'docs', 'DESIGN-SYSTEM.md');
+    const text = fs.readFileSync(doc, 'utf8');
+    const start = '<!-- audit:start -->';
+    const end = '<!-- audit:end -->';
+    const [head, rest] = text.split(start);
+    const tail = rest.split(end)[1];
+    fs.writeFileSync(doc, `${head}${start}\n${toMarkdown(findings)}\n${end}${tail}`);
+    console.log(`wrote ${findings.length} findings to ${path.relative(process.cwd(), doc)}`);
+  } else if (process.argv.includes('--markdown')) {
     console.log(toMarkdown(findings));
   } else {
     const summary = summarize(findings);
