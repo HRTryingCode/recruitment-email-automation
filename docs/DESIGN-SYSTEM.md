@@ -91,7 +91,7 @@ Tailwind in `tailwind.config.ts` so alpha works (`bg-primary/80`).
 | `--destructive` | `bg-destructive` `text-destructive` | errors, discard, reconnect-required |
 | `--border` / `--input` / `--ring` | `border-border` `border-input` `ring-ring` | hairlines, fields, focus |
 | `--chart-1` … `--chart-5` | `fill-chart-1` / `var(--chart-1)` | `ui/chart` series only |
-| `--sidebar-*` | `bg-sidebar` … | unused (no sidebar; see §4) |
+| `--sidebar-*` | `bg-sidebar` … | via `ui/sidebar` (app shell) |
 | `--radius` | `rounded-lg/md/sm` derive from it | owned by ui components |
 
 ### Legacy tokens — being removed by R1–R4
@@ -108,30 +108,51 @@ These predate shadcn and are what the audit counts as `legacy-token`
 | `bg-surface-elevated`, `bg-surface-overlay`, `bg-ink-700…900` | `bg-muted` / `bg-popover` |
 | `bg-fg-strong/[0.03…0.06]` (hover tints) | `bg-muted` / `hover:bg-muted` |
 | `ring-fg-strong/[0.08]`, `border-line*`, `divide-line` | `ring-foreground/10`, `border-border`, `divide-border` |
-| `accent-300…900` (purple ramp, incl. `from-/to-accent-*` gradients) | `primary` — **pending the brand decision below** |
-| `--emerald` / `--rose` / `--amber` / `--sky` and the matching Tailwind palette classes | `destructive` for rose; new `success` / `warning` / `info` tokens for the rest (R1 adds them — see §5) |
+| `accent-300…900` (old purple ramp, incl. `from-/to-accent-*` gradients) | `primary` (full taupe, see below) |
+| emerald / rose / amber / sky Tailwind palette classes | `success` / `destructive` / `warning` / `info` (added in R1) |
 | `--glow-*`, `--grid-line`, `.grid-bg`, `shadow-glow`, `shadow-card-hover` | delete |
-| `.card`, `.card-hover`, `.hairline`, `.skeleton` (`index.css` `@layer components`) | `ui/card`, `ui/separator`, `ui/skeleton`; R1 deletes the CSS classes |
+| `.card-hover`, `.skeleton` (`index.css` `@layer components`; R1 deleted `.card`, `.hairline`, `.grid-bg`) | `ui/card`, `ui/separator`, `ui/skeleton` |
 
 Note the name clash: in `tailwind.config.ts`, `accent` is *both* shadcn's
 `--accent` (`bg-accent`) and the legacy purple ramp (`bg-accent-500`). R1
 should remove the numbered ramp once R2–R4 no longer use it (the last batch
 removes it if R1 can't).
 
-### ⚠ Decision needed (Andriy): brand colour
+### Brand colour: full taupe (decided 2026-10-22, R1)
 
-The taupe theme is neutral — `--primary` is near-black in light mode and
-near-white in dark mode. Today the app's identity is the **purple**
-`accent-*` ramp (logo tile, primary buttons, active tab, avatars). Going
-"everything on shadcn" literally means the purple disappears. Options:
+Andriy chose **full taupe** — there is no purple anywhere. `--primary` is the
+preset's taupe (near-black in light, near-white in dark) and is the only
+"brand" colour: primary buttons, active nav, focus rings, the logo, avatars.
 
-1. **Full taupe** — replace `accent-*` with `primary`. Purest preset, no purple.
-2. **Taupe + purple primary** — keep the preset but override `--primary`
-   (and `--ring`, `--chart-*`) with the current purple in `index.css`. Still
-   100% tokens/components, just a branded primary.
+Colour means state, and only state:
 
-R1 needs this answer before touching the shell. Until then R1–R4 must not
-hard-code either choice: use `primary` and let the token decide.
+| Meaning | Token | Tailwind / component |
+|---|---|---|
+| interested, OK, healthy | `--success` | `text-success`, `bg-success/10`, `<Badge variant="success">` |
+| unsure, needs review, warning | `--warning` | `text-warning`, `<Badge variant="warning">`, `<Alert variant="warning">` |
+| not interested, error, reconnect required | `--destructive` | `text-destructive`, `variant="destructive"` |
+| informational (e.g. "contacted, no reply") | `--info` | `text-info`, `<Badge variant="info">` |
+| everything else | taupe neutrals | `foreground`, `muted-foreground`, `secondary`, `border` |
+
+Each has a `-foreground` pair, light + dark values in `index.css`.
+
+**How R1 removed purple without touching R2–R4 screens** (token layer only):
+
+- The legacy `accent-50…900` ramp resolves through `--accent-<n>` CSS
+  variables that point at taupe tokens (light: tints for 50–200, `--primary`
+  above; dark: light taupe for 50–400 because those are used as text,
+  a mid taupe for 500–700 because those sit under `text-white`).
+- Tailwind's `violet` / `purple` / `indigo` / `fuchsia` palettes are mapped
+  onto the same ramp (e.g. LeverBadge's `bg-violet-500/10`).
+- Legacy `fg-*`, `surface-*`, `line`, `ink-*` classes resolve to the shadcn
+  tokens; `shadow-glow` / `shadow-card-hover` are neutral; the body glow
+  gradients, `.card`, `.hairline` and `.grid-bg` are gone (`.card-hover` and
+  `.skeleton` stay until their last R2–R4 user is refactored).
+- `__tests__/design-system/theme-tokens.test.ts` compiles the real app CSS
+  and fails on any purple colour literal (hex, rgb triplet or oklch hue).
+
+R2–R4 still replace the legacy class names with the shadcn ones in their
+screens; the last batch deletes the legacy mappings from `tailwind.config.ts`.
 
 ## 4. Component inventory (`frontend/src/components/ui`)
 
@@ -170,10 +191,23 @@ hard-code either choice: use `primary` and let the token decide.
 | `textarea` | **new** | draft body editor, dictation notes (R4) |
 | `toggle`, `toggle-group` | **new** | segmented filters (draft status, reply status) |
 
-Not added: `sidebar` and `navigation-menu`. The shell is a top bar with
-three tabs, so `tabs` + `dropdown-menu` cover it, and `sidebar` would be a
-layout redesign nobody asked for. Add one only if R1 is explicitly asked to
-re-layout the shell.
+Added in R1: **`sidebar`** (+ `hooks/use-mobile.ts`) for the app shell —
+collapsible to icons on desktop, a Sheet on mobile, ⌘B toggles it. `badge`
+gained `success` / `warning` / `info` variants and `alert` a `warning`
+variant. `navigation-menu` is still not needed.
+
+### App shell (R1)
+
+| Piece | File | Notes |
+|---|---|---|
+| Layout route | `components/shell/AppShell.tsx` | Sidebar + header + status banner + `<Outlet/>` |
+| Nav items | `components/shell/nav.ts` | Inbox, Candidates, Today, Settings (+ `g`-key) |
+| Header | `components/shell/AppHeader.tsx` | ⌘K trigger, mailbox filter, theme, account menu |
+| ⌘K palette | `components/LookupBar.tsx` | email lookup first, then Go to / Actions |
+| Shortcut help | `components/shell/ShortcutsDialog.tsx` | `?`, `g i/c/t/s` |
+| Status banner | `components/shell/StatusBanner.tsx` | reconnect-needed mailboxes, dismiss per session |
+| URL state | `lib/urlState.ts`, `lib/legacyRedirect.ts` | `?mailboxId=` is global; view params reset on view switch; `/?tab=` redirects |
+| Settings | `pages/settings/*`, `components/settings/*` | Mailboxes, Integrations, Team |
 
 ## 5. Rules for R1–R4
 
@@ -185,9 +219,8 @@ re-layout the shell.
 2. **No direct Radix imports** outside ui/ (`@radix-ui/*`, `radix-ui`).
 3. **Colours only via tokens** (§3). No hex/rgb/hsl/oklch, no Tailwind
    palette classes (`text-rose-600`, `bg-emerald-500/10`, `text-white`), no
-   legacy tokens. Status colours: **R1 adds `--success`, `--warning`, `--info`
-   (+ `-foreground`) to `index.css` (light + dark) and `tailwind.config.ts`**
-   so that R2–R4 can map emerald/amber/sky onto them (rose → `destructive`).
+   legacy tokens. Status colours: `success` / `warning` / `info` /
+   `destructive` (§3) — map emerald / amber / sky / rose onto them.
 4. **No ad-hoc shadows, radii or z-index.** Elevation, rounding and stacking
    belong to the components (`Card`, `Popover`, `Dialog`, `Sheet`). Outside
    ui/, `shadow-*`, `rounded-*` and `z-*` should disappear; the exceptions are
@@ -214,7 +247,8 @@ re-layout the shell.
 | Guard | Where | Mode now | Who flips it |
 |---|---|---|---|
 | ui/ compiles under Tailwind 3 | `__tests__/design-system/tw3-classes.test.ts` | **strict** | — |
-| Hand-rolled UI per batch | `__tests__/design-system/hotspots.test.ts` + `scripts/design-system-audit.mjs` | report-only: prints the per-batch baseline on every `npm test` / CI run | each batch adds its area to `STRICT_AREAS` |
+| No purple (full taupe) | `__tests__/design-system/theme-tokens.test.ts` | **strict** | — |
+| Hand-rolled UI per batch | `__tests__/design-system/hotspots.test.ts` + `scripts/design-system-audit.mjs` | **R1 strict**; R2–R4 report-only (prints the per-batch baseline on every `npm test` / CI run) | each batch adds its area to `STRICT_AREAS` |
 | ESLint `no-restricted-syntax` / `no-restricted-imports` | `frontend/eslint.config.mjs`, `npm run lint:ds` | `warn` (exit 0) | the last batch sets `DS_SEVERITY = 'error'` |
 | CI | `.github/workflows/test.yml` → "Design-system baseline (report-only)" | prints `audit:ds` + the ESLint warning count | — |
 
@@ -232,7 +266,7 @@ comments are ignored.
 Ownership: `R1` = everything not claimed below (pages, App, main, shell
 components, `lib/`, other hooks, and any **new** file) · `R2` = Dashboard,
 UnmonitoredSenders · `R3` = CandidateTable, LookupBar, LookupIntegrations,
-LeverBadge, AddToLeverButton, AddToLeverDialog, GemConnect · `R4` =
+LeverBadge, AddToLeverButton, AddToLeverDialog, JobCombobox, GemConnect, GemReturnToast · `R4` =
 EmailDrafts, DraftReviewPane, DraftCcSelect, useDraftKeyboardShortcuts. New
 feature files default to R1. If one belongs elsewhere, add it to
 `AREA_BY_FILE`.
@@ -246,116 +280,36 @@ regenerated it.
 <!-- audit:start -->
 | Batch | Scope | Findings |
 |---|---|---:|
-| R1 | Shell — App, main, pages (Login, Index, NotFound), nav, ThemeToggle, MailboxFilter, ProtectedRoute, lib | 155 |
-| R2 | Dashboard — Dashboard, UnmonitoredSenders | 394 |
-| R3 | Candidates — CandidateTable, LookupBar, LookupIntegrations, LeverBadge, AddToLever*, GemConnect | 375 |
+| R1 | Shell — App, main, pages (Login, NotFound, route pages, settings), components/shell + settings, ThemeToggle, MailboxFilter, ProtectedRoute, lib, hooks | 0 |
+| R2 | Dashboard — Dashboard, UnmonitoredSenders | 180 |
+| R3 | Candidates — CandidateTable, LookupBar, LookupIntegrations, LeverBadge, AddToLever*, JobCombobox, Gem* | 278 |
 | R4 | Drafts — EmailDrafts, DraftReviewPane, DraftCcSelect, useDraftKeyboardShortcuts | 302 |
-| **Total** | | **1226** |
+| **Total** | | **760** |
 
-### R1 — Shell (155)
+### R1 — Shell (0)
 
-`legacy-token` 76 · `arbitrary-value` 22 · `palette-colour` 16 · `ad-hoc-radius` 13 · `decorative-effect` 9 · `ad-hoc-shadow` 4 · `ad-hoc-z-index` 3 · `input-adornment` 2 · `raw-button` 2 · `direct-radix` 2 · `inline-style` 2 · `raw-select` 1 · `custom-spinner` 1 · `raw-img` 1 · `legacy-css-class` 1
+_none_
 
-**`src/components/MailboxFilter.tsx`** (12)
+### R2 — Dashboard (180)
 
-| Rule | Lines | Examples |
-|---|---|---|
-| `raw-select` (1) | 15 | `<select` |
-| `input-adornment` (2) | 27, 28 | `pointer-events-none absolute` |
-| `legacy-token` (7) | 18, 27, 28 | `border-line` `bg-surface-raised/70` `text-fg-default` `hover:border-line-strong` |
-| `ad-hoc-radius` (1) | 18 | `rounded-lg` |
-| `arbitrary-value` (1) | 18 | `text-[13px]` |
+`legacy-token` 76 · `palette-colour` 49 · `arbitrary-value` 23 · `ad-hoc-radius` 19 · `raw-button` 6 · `native-tooltip` 5 · `ad-hoc-shadow` 1 · `decorative-effect` 1
 
-**`src/components/ProtectedRoute.tsx`** (3)
+**`src/components/Dashboard.tsx`** (180)
 
 | Rule | Lines | Examples |
 |---|---|---|
-| `custom-spinner` (1) | 30 | `animate-spin` |
-| `legacy-token` (2) | 29, 30 | `text-fg-muted` `text-accent-400` |
+| `raw-button` (6) | 85, 184, 193, 209, 261, 559 | `<button` |
+| `decorative-effect` (1) | 162 | `bg-gradient-to-br` |
+| `native-tooltip` (5) | 212, 555, 578, 603, 615 | ` title={`` ` title="` |
+| `palette-colour` (49) | 70, 71, 75, 76, 80, 81, 162, 188, 213, 254, 263, 281, 282, 283 | `hover:border-amber-400/50` `group-hover:text-amber-700` `dark:group-hover:text-amber-200` `hover:border-emerald-400/50` |
+| `legacy-token` (76) | 69, 74, 79, 80, 81, 89, 115, 117, 119, 159, 162, 167, 171, 178, 196, 237, 239, 243, 246, 249, 253, 284, 331, 335, 363, 368, 371, 374, 501, 504, 554, 561, 569, 582, 602, 607, 619 | `hover:border-accent-400/50` `group-hover:text-accent-500` `dark:group-hover:text-accent-200` `bg-accent-500/12` |
+| `ad-hoc-shadow` (1) | 89 | `hover:shadow-card-hover` |
+| `ad-hoc-radius` (19) | 89, 95, 162, 171, 188, 196, 213, 239, 263, 297, 325, 335, 363, 569, 571, 582, 607, 609, 619 | `rounded-2xl` `rounded-xl` `rounded-full` `rounded-md` |
+| `arbitrary-value` (23) | 99, 108, 115, 117, 162, 167, 171, 178, 188, 213, 243, 246, 263, 297, 331, 335, 371, 374, 501, 504, 561 | `h-[18px]` `w-[18px]` `text-[34px]` `text-[13px]` |
 
-**`src/components/ThemeToggle.tsx`** (9)
+### R3 — Candidates (278)
 
-| Rule | Lines | Examples |
-|---|---|---|
-| `raw-button` (1) | 36 | `<button` |
-| `legacy-token` (7) | 46 | `border-line` `bg-surface-raised/60` `text-fg-muted` `hover:border-line-strong` |
-| `ad-hoc-radius` (1) | 46 | `rounded-full` |
-
-**`src/pages/Index.tsx`** (85)
-
-| Rule | Lines | Examples |
-|---|---|---|
-| `raw-button` (1) | 301 | `<button` |
-| `raw-img` (1) | 57 | `<img` |
-| `decorative-effect` (5) | 71, 257, 266, 267, 316 | `bg-gradient-to-br` `backdrop-blur-xl` `blur-md` |
-| `direct-radix` (2) | 4, 5 | `from '@radix-ui/react-dropdown-menu'` `from '@radix-ui/react-tabs'` |
-| `palette-colour` (9) | 71, 267, 268, 291, 390, 391 | `text-white` `ring-white/15` `bg-amber-500/15` `text-amber-700` |
-| `legacy-token` (41) | 63, 71, 255, 257, 266, 267, 272, 275, 291, 302, 306, 309, 316, 319, 328, 333, 340, 343, 360, 372, 373, 380, 381, 390 | `ring-fg-strong/[0.08]` `from-accent-500` `to-accent-700` `text-fg-default` |
-| `ad-hoc-shadow` (2) | 291, 316 | `shadow-glow` `shadow-2xl` |
-| `ad-hoc-radius` (8) | 63, 71, 266, 267, 291, 302, 316, 343 | `rounded-full` `rounded-lg` `rounded-xl` |
-| `ad-hoc-z-index` (2) | 257, 316 | `z-40` `z-50` |
-| `arbitrary-value` (12) | 71, 272, 275, 291, 302, 306, 316, 370, 388 | `text-[11px]` `text-[15px]` `text-[10.5px]` `tracking-[0.14em]` |
-| `inline-style` (2) | 64, 70 | `style={{` |
-
-**`src/pages/Login.tsx`** (33)
-
-| Rule | Lines | Examples |
-|---|---|---|
-| `decorative-effect` (4) | 81, 85, 86, 100 | `grid-bg` `blur-xl` `bg-gradient-to-br` `backdrop-blur-xl` |
-| `palette-colour` (6) | 86, 87, 125 | `ring-white/15` `text-white` `border-rose-500/30` `bg-rose-500/10` |
-| `legacy-token` (13) | 85, 86, 91, 94, 100, 103, 107, 117, 133, 134 | `bg-accent-500/40` `from-accent-400` `via-accent-500` `to-accent-700` |
-| `legacy-css-class` (1) | 81 | `className="absolute inset-0 -z-10 grid-bg` |
-| `ad-hoc-shadow` (1) | 100 | `shadow-2xl` |
-| `ad-hoc-radius` (2) | 85, 86 | `rounded-xl` |
-| `ad-hoc-z-index` (1) | 81 | `-z-10` |
-| `arbitrary-value` (5) | 94, 107, 117, 133 | `text-[10.5px]` `tracking-[0.14em]` `text-[13.5px]` `text-[12px]` |
-
-**`src/pages/NotFound.tsx`** (13)
-
-| Rule | Lines | Examples |
-|---|---|---|
-| `palette-colour` (1) | 19 | `text-white` |
-| `legacy-token` (6) | 8, 11, 14, 19 | `text-accent-500` `dark:text-accent-400` `text-fg-strong` `text-fg-muted` |
-| `ad-hoc-shadow` (1) | 19 | `shadow-glow` |
-| `ad-hoc-radius` (1) | 19 | `rounded-lg` |
-| `arbitrary-value` (4) | 8, 14, 19 | `text-[11px]` `tracking-[0.2em]` `text-[14px]` `text-[13.5px]` |
-
-### R2 — Dashboard (394)
-
-`legacy-token` 149 · `palette-colour` 94 · `arbitrary-value` 70 · `ad-hoc-radius` 32 · `raw-table` 19 · `raw-button` 14 · `native-tooltip` 7 · `custom-spinner` 3 · `custom-disclosure` 2 · `ad-hoc-shadow` 1 · `decorative-effect` 1 · `inline-style` 1 · `raw-input` 1
-
-**`src/components/Dashboard.tsx`** (340)
-
-| Rule | Lines | Examples |
-|---|---|---|
-| `raw-button` (12) | 94, 193, 202, 232, 284, 399, 508, 520, 547, 628, 816, 1033 | `<button` |
-| `raw-input` (1) | 620 | `<input` |
-| `raw-table` (19) | 431, 432, 433, 434, 435, 436, 439, 442, 445, 446, 449, 469, 473, 581, 589, 592, 595, 598, 601 | `<table` `<thead` `<tr` `<th` |
-| `custom-disclosure` (1) | 401 | `aria-expanded={` |
-| `decorative-effect` (1) | 171 | `bg-gradient-to-br` |
-| `custom-spinner` (3) | 517, 537, 826 | `animate-spin` |
-| `native-tooltip` (7) | 235, 535, 568, 1029, 1052, 1077, 1089 | ` title={`` ` title="` |
-| `palette-colour` (84) | 79, 80, 84, 85, 89, 90, 171, 197, 236, 277, 286, 300, 301, 319, 320, 321, 405, 453, 457, 481, 486, 500, 506, 556, 571, 589, 639, 663, 673, 683, 697, 822, 824, 836, 843 | `hover:border-amber-400/50` `group-hover:text-amber-700` `dark:group-hover:text-amber-200` `hover:border-emerald-400/50` |
-| `legacy-token` (126) | 78, 83, 88, 89, 90, 98, 124, 126, 128, 168, 171, 176, 180, 187, 205, 260, 262, 266, 269, 272, 276, 299, 302, 322, 398, 403, 409, 410, 416, 417, 422, 426, 433, 449, 454, 458, 471, 474, 477, 515, 534, 541, 550, 556, 576, 589, 592, 595, 617, 618, 626, 631, 637, 664, 678, 687, 735, 739, 767, 772, 775, 778, 819, 972, 975, 1028, 1035, 1043, 1056, 1076, 1081, 1093 | `hover:border-accent-400/50` `group-hover:text-accent-500` `dark:group-hover:text-accent-200` `bg-accent-500/12` |
-| `ad-hoc-shadow` (1) | 98 | `hover:shadow-card-hover` |
-| `ad-hoc-radius` (28) | 98, 104, 171, 180, 197, 205, 236, 262, 286, 335, 398, 405, 424, 486, 556, 626, 631, 637, 729, 739, 767, 819, 1043, 1045, 1056, 1081, 1083, 1093 | `rounded-2xl` `rounded-xl` `rounded-full` `rounded-md` |
-| `arbitrary-value` (56) | 108, 117, 124, 126, 171, 176, 180, 187, 197, 236, 266, 269, 286, 335, 409, 410, 426, 431, 433, 474, 477, 481, 486, 500, 506, 515, 534, 541, 550, 556, 576, 604, 618, 626, 631, 637, 735, 739, 775, 778, 819, 836, 843, 972, 975, 1035 | `h-[18px]` `w-[18px]` `text-[34px]` `text-[13px]` |
-| `inline-style` (1) | 562 | `style={{` |
-
-**`src/components/UnmonitoredSenders.tsx`** (54)
-
-| Rule | Lines | Examples |
-|---|---|---|
-| `raw-button` (2) | 94, 144 | `<button` |
-| `custom-disclosure` (1) | 146 | `aria-expanded={` |
-| `palette-colour` (10) | 98, 141, 154, 155 | `hover:text-rose-600` `border-amber-500/40` `bg-amber-500/10` `text-amber-700` |
-| `legacy-token` (23) | 60, 64, 87, 90, 93, 98, 105, 140, 141, 148, 161, 162, 165, 170, 173, 180, 181, 189, 195, 196, 208 | `text-fg-muted` `divide-line` `border-line` `bg-surface-raised/60` |
-| `ad-hoc-radius` (4) | 87, 98, 140, 152 | `rounded-lg` `rounded` `rounded-xl` |
-| `arbitrary-value` (14) | 60, 64, 80, 89, 93, 105, 161, 162, 173, 179, 181, 189, 194, 196 | `text-[11.5px]` `text-[12.5px]` `text-[11px]` `text-[12px]` |
-
-### R3 — Candidates (375)
-
-`legacy-token` 169 · `arbitrary-value` 64 · `palette-colour` 53 · `ad-hoc-radius` 31 · `raw-table` 19 · `raw-button` 13 · `input-adornment` 5 · `custom-spinner` 3 · `raw-select` 3 · `native-tooltip` 3 · `custom-combobox` 3 · `raw-input` 2 · `ad-hoc-shadow` 2 · `css-colour-fn` 2 · `custom-skeleton` 1 · `raw-kbd` 1 · `custom-disclosure` 1
+`legacy-token` 120 · `arbitrary-value` 45 · `palette-colour` 35 · `ad-hoc-radius` 24 · `raw-table` 19 · `raw-button` 13 · `input-adornment` 5 · `custom-spinner` 3 · `raw-select` 3 · `native-tooltip` 3 · `ad-hoc-shadow` 2 · `css-colour-fn` 2 · `custom-skeleton` 1 · `raw-input` 1 · `custom-combobox` 1 · `custom-disclosure` 1
 
 **`src/components/AddToLeverButton.tsx`** (7)
 
@@ -366,15 +320,14 @@ regenerated it.
 | `ad-hoc-radius` (1) | 49 | `rounded-md` |
 | `arbitrary-value` (1) | 49 | `text-[11.5px]` |
 
-**`src/components/AddToLeverDialog.tsx`** (47)
+**`src/components/AddToLeverDialog.tsx`** (11)
 
 | Rule | Lines | Examples |
 |---|---|---|
-| `custom-spinner` (2) | 91, 323 | `animate-spin` |
-| `palette-colour` (10) | 74, 194, 243, 315 | `text-red-600` `dark:text-red-400` `bg-amber-500/10` `text-amber-800` |
-| `legacy-token` (17) | 38, 90, 225, 232, 234, 239, 253, 287, 305, 308, 321 | `bg-fg-strong/[0.05]` `text-fg-default` `ring-fg-strong/[0.08]` `text-fg-muted` |
-| `ad-hoc-radius` (4) | 38, 194, 232, 308 | `rounded-md` `rounded-lg` `rounded` |
-| `arbitrary-value` (14) | 38, 66, 74, 90, 194, 232, 234, 239, 243, 287, 305, 308, 315, 321 | `text-[11.5px]` `max-h-[90vh]` `text-[13px]` `text-[12.5px]` |
+| `custom-spinner` (3) | 103, 258, 380 | `animate-spin` |
+| `palette-colour` (4) | 229 | `bg-amber-500/10` `text-amber-800` `ring-amber-500/20` `dark:text-amber-200` |
+| `ad-hoc-radius` (2) | 229, 365 | `rounded-lg` `rounded-2xl` |
+| `arbitrary-value` (2) | 77, 229 | `max-h-[90vh]` `text-[12.5px]` |
 
 **`src/components/CandidateTable.tsx`** (217)
 
@@ -398,11 +351,21 @@ regenerated it.
 
 | Rule | Lines | Examples |
 |---|---|---|
-| `raw-button` (1) | 47 | `<button` |
-| `palette-colour` (2) | 44 | `text-amber-700` `dark:text-amber-300` |
-| `legacy-token` (6) | 44, 51 | `text-fg-default` `text-fg-muted` `text-accent-700` `ring-accent-500/20` |
-| `ad-hoc-radius` (1) | 51 | `rounded-md` |
-| `arbitrary-value` (2) | 43, 51 | `text-[13px]` `text-[12px]` |
+| `raw-button` (1) | 51 | `<button` |
+| `palette-colour` (2) | 48 | `text-amber-700` `dark:text-amber-300` |
+| `legacy-token` (6) | 48, 55 | `text-fg-default` `text-fg-muted` `text-accent-700` `ring-accent-500/20` |
+| `ad-hoc-radius` (1) | 55 | `rounded-md` |
+| `arbitrary-value` (2) | 47, 55 | `text-[13px]` `text-[12px]` |
+
+**`src/components/JobCombobox.tsx`** (5)
+
+| Rule | Lines | Examples |
+|---|---|---|
+| `raw-button` (1) | 68 | `<button` |
+| `custom-combobox` (1) | 70 | `role="combobox"` |
+| `custom-disclosure` (1) | 72 | `aria-expanded={` |
+| `ad-hoc-radius` (1) | 76 | `rounded-3xl` |
+| `arbitrary-value` (1) | 88 | `w-[--radix-popover-trigger-width]` |
 
 **`src/components/LeverBadge.tsx`** (24)
 
@@ -412,21 +375,6 @@ regenerated it.
 | `legacy-token` (13) | 15, 16, 17, 18, 155 | `bg-fg-strong/[0.05]` `text-fg-default` `ring-fg-strong/[0.08]` `bg-fg-strong/[0.03]` |
 | `ad-hoc-radius` (1) | 10 | `rounded-md` |
 | `arbitrary-value` (2) | 10, 155 | `text-[11.5px]` `text-[12px]` |
-
-**`src/components/LookupBar.tsx`** (66)
-
-| Rule | Lines | Examples |
-|---|---|---|
-| `raw-button` (1) | 253 | `<button` |
-| `raw-input` (1) | 276 | `<input` |
-| `raw-kbd` (1) | 260 | `<kbd` |
-| `custom-combobox` (3) | 282, 303, 308 | `role="combobox"` `role="listbox"` `role="option"` |
-| `custom-disclosure` (1) | 285 | `aria-expanded={` |
-| `custom-spinner` (1) | 294 | `animate-spin` |
-| `palette-colour` (12) | 33, 38, 43 | `bg-emerald-500/10` `text-emerald-700` `ring-emerald-500/20` `dark:text-emerald-300` |
-| `legacy-token` (32) | 47, 79, 80, 93, 98, 100, 256, 260, 274, 275, 292, 294, 299, 313, 314, 317, 318, 323, 330 | `bg-fg-strong/[0.06]` `text-fg-muted` `ring-line` `text-fg-default` |
-| `ad-hoc-radius` (6) | 93, 256, 260, 267, 274, 313 | `rounded-2xl` `rounded-lg` `rounded` `rounded-3xl` |
-| `arbitrary-value` (8) | 95, 102, 256, 260, 267, 292, 313 | `text-[11px]` `text-[13px]` `text-[10.5px]` `top-[8vh]` |
 
 **`src/components/LookupIntegrations.tsx`** (2)
 

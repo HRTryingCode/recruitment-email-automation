@@ -1,8 +1,8 @@
 import { Navigate, Outlet } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Loader2 } from 'lucide-react';
 import { getMe } from '../lib/api';
 import { getToken, setUser } from '../lib/auth';
+import { Spinner } from './ui/spinner';
 
 export default function ProtectedRoute() {
   const hasToken = !!getToken();
@@ -25,11 +25,9 @@ export default function ProtectedRoute() {
 
   if (isLoading) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="flex items-center gap-3 text-fg-muted">
-          <Loader2 className="h-5 w-5 animate-spin text-accent-400" />
-          <span className="text-sm">Loading…</span>
-        </div>
+      <div className="flex min-h-screen items-center justify-center gap-3 bg-background text-sm text-muted-foreground">
+        <Spinner />
+        Loading…
       </div>
     );
   }

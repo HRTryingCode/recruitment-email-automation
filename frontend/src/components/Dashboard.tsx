@@ -1,26 +1,19 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   fetchCandidateCounts,
   fetchMailboxes,
   fetchDrafts,
   fetchSyncHealth,
-  fetchMailboxSignatureHtml,
   approveDraft,
-  resyncMailbox,
-  reclassifyMailbox,
-  debugCandidate,
-  addGmailMailbox,
   type Mailbox,
   type EmailDraft,
-  type MailboxSyncHealth,
-  type ResyncResult,
 } from '../lib/api';
 import { cn } from '../lib/utils';
 import { summarizeHealth, mailboxHealthState, type HealthSummary } from '../lib/mailboxHealth';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './ui/empty';
 import { Skeleton } from './ui/skeleton';
-import UnmonitoredSenders from './UnmonitoredSenders';
+import { startGmailReconnect } from '../lib/reconnect';
 import {
   toastSuccess,
   toastError,
@@ -36,12 +29,10 @@ import {
   Activity,
   Inbox,
   ChevronRight,
-  ChevronDown,
   Sparkles,
   Check,
   CheckCircle2,
   RefreshCw,
-  Pen,
 } from 'lucide-react';
 
 interface Props {
@@ -213,20 +204,6 @@ function QuickTriageRow({
 
 // ---------- Account Pipelines (condensed row) ----------
 
-/**
- * Start the Gmail OAuth flow. Reconnecting must be done while signed in to
- * Google as the mailbox owner; handleCallback upserts by address and resets
- * Mailbox.authStatus to OK.
- */
-async function startGmailReconnect(): Promise<void> {
-  try {
-    const res = await addGmailMailbox();
-    window.location.href = res.data.authUrl;
-  } catch (err) {
-    toastError('Could not start reconnect', extractApiErrorMessage(err, 'Please try again from the Mailboxes page.'));
-  }
-}
-
 function ReconnectButton({ emailAddress }: { emailAddress: string }) {
   return (
     <button
@@ -295,21 +272,6 @@ function AccountRow({
 
 // ---------- Mailbox health helpers ----------
 
-function watchExpiryTone(hours: number | null): string {
-  if (hours === null) return 'text-fg-subtle';
-  if (hours < 0) return 'text-rose-700 dark:text-rose-300';
-  if (hours < 24) return 'text-amber-700 dark:text-amber-300';
-  return 'text-fg-muted';
-}
-
-function formatWatchExpiry(h: number | null): string {
-  if (h === null) return 'no watch';
-  if (h < 0) return `−${Math.abs(Math.round(h))}h`;
-  if (h < 1) return `< 1h`;
-  if (h < 48) return `${Math.round(h)}h`;
-  return `${Math.round(h / 24)}d`;
-}
-
 function HealthPill({
   summary,
 }: {
@@ -341,372 +303,6 @@ function HealthPill({
     </span>
   );
 }
-
-function MailboxHealthAccordion({
-  data,
-  loading,
-  error,
-  autoExpand = false,
-  onResync,
-}: {
-  data: MailboxSyncHealth[];
-  loading: boolean;
-  error?: boolean;
-  /** Open automatically when something is unhealthy (summary is rose). */
-  autoExpand?: boolean;
-  onResync: (mailboxId: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  useEffect(() => {
-    if (autoExpand) setOpen(true);
-  }, [autoExpand]);
-  const [resyncing, setResyncing] = useState<string | null>(null);
-  const [reclassifying, setReclassifying] = useState<string | null>(null);
-  const [reclassifyResult, setReclassifyResult] = useState<{ mailboxId: string; threadsFound: number; threadsClassified: number } | null>(null);
-  const [sigPreview, setSigPreview] = useState<{ mailboxId: string; html: string | null } | null>(null);
-  const [loadingSig, setLoadingSig] = useState<string | null>(null);
-  const [debugEmail, setDebugEmail] = useState('');
-  const [debugResult, setDebugResult] = useState<{ loading: boolean; data?: unknown; error?: string } | null>(null);
-
-  const handleDebugEmail = async () => {
-    if (!debugEmail.trim()) return;
-    setDebugResult({ loading: true });
-    try {
-      const res = await debugCandidate(debugEmail.trim());
-      setDebugResult({ loading: false, data: res.data });
-    } catch (err: unknown) {
-      setDebugResult({ loading: false, error: err instanceof Error ? err.message : String(err) });
-    }
-  };
-
-  const handlePreviewSig = async (mailboxId: string) => {
-    if (sigPreview?.mailboxId === mailboxId) { setSigPreview(null); return; }
-    setLoadingSig(mailboxId);
-    try {
-      const { signatureHtml } = await fetchMailboxSignatureHtml(mailboxId);
-      setSigPreview({ mailboxId, html: signatureHtml });
-    } catch {
-      setSigPreview({ mailboxId, html: null });
-    } finally {
-      setLoadingSig(null);
-    }
-  };
-
-  if (!loading && !error && data.length === 0) return null;
-
-  return (
-    <section className="overflow-hidden rounded-xl border border-line bg-surface-raised/60">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        aria-controls="mailbox-health-detail"
-        className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-fg-strong/[0.02]"
-      >
-        <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-700 ring-1 ring-inset ring-emerald-500/20 dark:text-emerald-300">
-          <Activity className="h-3.5 w-3.5" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="text-[13px] font-medium text-fg-strong">Mailbox health</p>
-          <p className="mt-0.5 text-[11.5px] text-fg-muted">
-            Watch tokens, reconciliation drift, webhook errors per mailbox.
-          </p>
-        </div>
-        <ChevronDown
-          className={cn(
-            'h-4 w-4 flex-shrink-0 text-fg-muted transition-transform',
-            open && 'rotate-180 text-fg-strong'
-          )}
-        />
-      </button>
-      {open && (
-        <div id="mailbox-health-detail" className="border-t border-line">
-          {loading ? (
-            <Skeleton className="h-24 rounded-none" />
-          ) : error ? (
-            <p className="px-4 py-4 text-[13px] text-fg-muted">
-              Could not load mailbox health data — the server returned an error. Check Vercel logs for details.
-            </p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-[13px]">
-                <thead>
-                  <tr className="border-b border-line text-[11px] font-medium uppercase tracking-[0.08em] text-fg-muted">
-                    <th className="px-4 py-2.5 text-left">Mailbox</th>
-                    <th className="px-4 py-2.5 text-left">Watch expires</th>
-                    <th className="hidden px-4 py-2.5 text-left sm:table-cell">
-                      Total msgs
-                    </th>
-                    <th className="hidden px-4 py-2.5 text-left sm:table-cell">
-                      Candidates
-                    </th>
-                    <th className="hidden px-4 py-2.5 text-left md:table-cell">
-                      Last reconciled
-                    </th>
-                    <th className="px-4 py-2.5 text-left">Drift</th>
-                    <th className="px-4 py-2.5 text-left">Errors / 24h</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-line-soft">
-                  {data.map((row) => {
-                    const driftTone =
-                      row.lastReconciliationFoundMissing >= 10
-                        ? 'text-amber-700 dark:text-amber-300'
-                        : 'text-fg-subtle';
-                    const webhookErrTone =
-                      row.webhookErrorsLast24h >= 10
-                        ? 'text-rose-700 dark:text-rose-300'
-                        : 'text-fg-subtle';
-                    const rowState = mailboxHealthState(row);
-                    const recon = row.lastReconciliationAt
-                      ? new Date(row.lastReconciliationAt).toLocaleString(undefined, {
-                          month: 'short',
-                          day: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })
-                      : '—';
-                    return (
-                      <tr
-                        key={row.mailboxId}
-                        className="transition-colors hover:bg-fg-strong/[0.02]"
-                      >
-                        <td className="px-4 py-2.5">
-                          <p className="max-w-[220px] truncate font-mono text-[12px] text-fg-strong">
-                            {row.emailAddress}
-                          </p>
-                          <p className="font-mono text-[10px] text-fg-subtle select-all">
-                            {row.mailboxId}
-                          </p>
-                          {!row.isActive && (
-                            <span className="text-[10px] text-rose-700 dark:text-rose-300">
-                              inactive
-                            </span>
-                          )}
-                          {rowState === 'reconnect' && (
-                            <div className="mt-1 max-w-[260px] rounded-md bg-rose-500/10 px-2 py-1 text-[10.5px] text-rose-700 ring-1 ring-inset ring-rose-500/20 dark:text-rose-300">
-                              <p className="font-semibold">Reconnect required — not syncing</p>
-                              <p className="opacity-80">
-                                {row.authStatus === 'NEEDS_REAUTH'
-                                  ? `Google rejected the login (${row.lastAuthError ?? 'unknown error'})${row.lastAuthErrorAt ? ` since ${new Date(row.lastAuthErrorAt).toLocaleDateString()}` : ''}.`
-                                  : 'Gmail push watch expired.'}{' '}
-                                Sign in as this mailbox to reconnect, then Resync.
-                              </p>
-                              <div className="mt-1">
-                                <ReconnectButton emailAddress={row.emailAddress} />
-                              </div>
-                            </div>
-                          )}
-                          {rowState === 'failing' && (
-                            <p className="mt-1 max-w-[260px] text-[10.5px] text-rose-700 dark:text-rose-300">
-                              Not syncing: {row.consecutiveReconcileFailures} reconcile failure{row.consecutiveReconcileFailures === 1 ? '' : 's'} in a row
-                              {row.lastReconcileError ? ` — ${row.lastReconcileError.slice(0, 80)}` : ''}
-                            </p>
-                          )}
-                          {row.error && (
-                            <p className="mt-1 text-[10px] text-amber-700 dark:text-amber-300">Some counts unavailable</p>
-                          )}
-                          <button
-                            onClick={() => {
-                              setResyncing(row.mailboxId);
-                              onResync(row.mailboxId);
-                              setTimeout(() => setResyncing(null), 4000);
-                            }}
-                            disabled={resyncing === row.mailboxId}
-                            className="mt-1 flex items-center gap-1 text-[10px] text-fg-muted hover:text-fg-strong disabled:opacity-50"
-                          >
-                            <RefreshCw className={cn('h-2.5 w-2.5', resyncing === row.mailboxId && 'animate-spin')} />
-                            {resyncing === row.mailboxId ? 'Resyncing…' : 'Resync'}
-                          </button>
-                          <button
-                            onClick={async () => {
-                              setReclassifying(row.mailboxId);
-                              setReclassifyResult(null);
-                              try {
-                                const res = await reclassifyMailbox(row.mailboxId);
-                                setReclassifyResult({ mailboxId: row.mailboxId, ...res.data });
-                              } catch {
-                                // ignore
-                              } finally {
-                                setReclassifying(null);
-                              }
-                            }}
-                            disabled={reclassifying === row.mailboxId}
-                            className="mt-0.5 flex items-center gap-1 text-[10px] text-fg-muted hover:text-fg-strong disabled:opacity-50"
-                            title="Re-classify threads that have messages but no linked candidate"
-                          >
-                            <RefreshCw className={cn('h-2.5 w-2.5', reclassifying === row.mailboxId && 'animate-spin')} />
-                            {reclassifying === row.mailboxId ? 'Classifying…' : 'Re-classify unlinked'}
-                          </button>
-                          {reclassifyResult?.mailboxId === row.mailboxId && (
-                            <span className="mt-0.5 text-[10px] text-fg-muted">
-                              {reclassifyResult.threadsFound === 0
-                                ? 'No orphaned threads found'
-                                : `${reclassifyResult.threadsClassified}/${reclassifyResult.threadsFound} threads classified`}
-                            </span>
-                          )}
-                          <button
-                            onClick={() => handlePreviewSig(row.mailboxId)}
-                            disabled={loadingSig === row.mailboxId}
-                            className="mt-0.5 flex items-center gap-1 text-[10px] text-fg-muted hover:text-fg-strong disabled:opacity-50"
-                          >
-                            <Pen className="h-2.5 w-2.5" />
-                            {loadingSig === row.mailboxId ? 'Loading…' : sigPreview?.mailboxId === row.mailboxId ? 'Hide sig' : 'Preview sig'}
-                          </button>
-                          {sigPreview?.mailboxId === row.mailboxId && (
-                            <div className="mt-1.5 max-w-[280px] rounded border border-line bg-white p-2 text-[11px]">
-                              {sigPreview.html ? (
-                                <iframe
-                                  srcDoc={`<!DOCTYPE html><html><body style="margin:0;padding:0;font-family:sans-serif;font-size:13px">${sigPreview.html}</body></html>`}
-                                  sandbox="allow-same-origin"
-                                  className="w-full border-0"
-                                  style={{ minHeight: 60 }}
-                                  onLoad={(e) => {
-                                    const iframe = e.currentTarget;
-                                    const body = iframe.contentDocument?.body;
-                                    if (body) iframe.style.height = `${body.scrollHeight + 8}px`;
-                                  }}
-                                  title="Signature preview"
-                                />
-                              ) : (
-                                <span className="text-rose-600">No signature found — see notes below.</span>
-                              )}
-                            </div>
-                          )}
-                          {sigPreview?.mailboxId === row.mailboxId && !sigPreview.html && (
-                            <p className="mt-1 max-w-[280px] text-[10px] text-fg-muted leading-snug">
-                              Grant <code>gmail.settings.basic</code> in Google Admin Console → Security → API controls → Domain-wide delegation, then resync.
-                            </p>
-                          )}
-                        </td>
-                        <td
-                          className={cn(
-                            'px-4 py-2.5 font-mono tabular-nums',
-                            watchExpiryTone(row.watchExpiresInHours)
-                          )}
-                        >
-                          {formatWatchExpiry(row.watchExpiresInHours)}
-                        </td>
-                        <td className={cn('hidden px-4 py-2.5 font-mono tabular-nums sm:table-cell', row.totalMessages === 0 ? 'text-rose-600' : 'text-fg-default')}>
-                          {row.totalMessages ?? '—'}
-                        </td>
-                        <td className="hidden px-4 py-2.5 font-mono tabular-nums text-fg-default sm:table-cell">
-                          {row.totalCandidates ?? '—'}
-                        </td>
-                        <td className="hidden px-4 py-2.5 text-fg-muted md:table-cell">
-                          {recon}
-                        </td>
-                        <td className={cn('px-4 py-2.5 font-mono tabular-nums', driftTone)}>
-                          {row.lastReconciliationFoundMissing}
-                        </td>
-                        <td className={cn('px-4 py-2.5', webhookErrTone)}>
-                          <span className="font-mono tabular-nums">{row.webhookErrorsLast24h}</span>
-                          {row.lastWebhookError && (
-                            <span className="ml-2 text-[11px] opacity-75 truncate max-w-[200px] inline-block align-middle" title={row.lastWebhookError}>
-                              — {row.lastWebhookError.slice(0, 60)}{row.lastWebhookError.length > 60 ? '…' : ''}
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-          {!loading && !error && (
-            <div className="border-t border-line px-4 py-3 flex flex-col gap-2">
-              <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-fg-muted">Find candidate by email</p>
-              <div className="flex gap-2">
-                <input
-                  type="email"
-                  placeholder="e.g. sofiadelgadosandoval@gmail.com"
-                  value={debugEmail}
-                  onChange={(e) => setDebugEmail(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && void handleDebugEmail()}
-                  className="flex-1 rounded border border-line bg-surface px-2.5 py-1.5 text-[12px] font-mono placeholder:text-fg-subtle focus:outline-none focus:ring-1 focus:ring-accent-400"
-                />
-                <button
-                  onClick={() => void handleDebugEmail()}
-                  disabled={debugResult?.loading}
-                  className="rounded border border-line px-3 py-1.5 text-[12px] text-fg-muted hover:bg-fg-strong/[0.04] hover:text-fg-strong disabled:opacity-50"
-                >
-                  {debugResult?.loading ? 'Searching…' : 'Search'}
-                </button>
-              </div>
-              {debugResult && !debugResult.loading && (
-                <div className="rounded border border-line bg-surface p-2 text-[11px] font-mono">
-                  {debugResult.error ? (
-                    <span className="text-rose-600">{debugResult.error}</span>
-                  ) : (
-                    <CandidateDebugResult data={debugResult.data} />
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function CandidateDebugResult({ data }: { data: unknown }) {
-  const d = data as {
-    candidate?: { id: string; name: string; email: string; status: string; createdAt: string; threads?: { id: string; subject: string; messages?: unknown[]; drafts?: { id: string; status: string }[] }[] } | null;
-    messagesFromEmail?: { externalMessageId: string; subject: string; receivedAt: string; mailboxId: string; thread: { id: string; candidateId: string | null; subject: string } }[];
-    skipLogs?: { event: string; createdAt: string; details: string }[];
-  };
-
-  if (!d.candidate && (!d.messagesFromEmail || d.messagesFromEmail.length === 0)) {
-    return (
-      <div className="flex flex-col gap-1">
-        <span className="text-rose-600 font-semibold">Not in DB — no candidate record and no stored messages from this email.</span>
-        <span className="text-fg-muted">This means the reply was either: (a) never synced — try Resync all inboxes, or (b) the message exists in Gmail but couldn&apos;t be fetched.</span>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-2">
-      {d.candidate ? (
-        <div className="flex flex-col gap-0.5">
-          <span className="text-emerald-600 font-semibold">✓ Candidate found</span>
-          <span>{d.candidate.name} &lt;{d.candidate.email}&gt;</span>
-          <span>Status: <strong>{d.candidate.status}</strong> — created {new Date(d.candidate.createdAt).toLocaleString()}</span>
-          {d.candidate.threads?.map((t) => (
-            <div key={t.id} className="ml-2">
-              <span className="text-fg-muted">Thread: &quot;{t.subject}&quot; — {t.messages?.length ?? 0} msgs, {t.drafts?.length ?? 0} drafts</span>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <span className="text-amber-600 font-semibold">No candidate record for this email.</span>
-      )}
-      {d.messagesFromEmail && d.messagesFromEmail.length > 0 && (
-        <div className="flex flex-col gap-0.5">
-          <span className="text-fg-muted">Messages stored from this sender ({d.messagesFromEmail.length}):</span>
-          {d.messagesFromEmail.map((m) => (
-            <div key={m.externalMessageId} className="ml-2">
-              <span>{new Date(m.receivedAt).toLocaleString()} — &quot;{m.subject}&quot;{m.thread.candidateId ? '' : ' — ⚠ no candidate linked'}</span>
-            </div>
-          ))}
-        </div>
-      )}
-      {d.skipLogs && d.skipLogs.length > 0 && (
-        <div className="flex flex-col gap-0.5">
-          <span className="text-amber-600 font-semibold">Classification events ({d.skipLogs.length}):</span>
-          {d.skipLogs.map((l, i) => (
-            <div key={i} className="ml-2">
-              <span>{new Date(l.createdAt).toLocaleString()} — <strong>{l.event}</strong></span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------- Section header ----------
 
 function SectionHeader({
   icon: Icon,
@@ -781,73 +377,6 @@ function EmptyState({
       </EmptyHeader>
       {action ? <div>{action}</div> : null}
     </Empty>
-  );
-}
-
-// ---------- Resync All Button ----------
-
-function ResyncAllButton({ mailboxes }: { mailboxes: Mailbox[] }) {
-  const [resyncing, setResyncing] = useState(false);
-  const [results, setResults] = useState<{ email: string; ok: boolean; data?: ResyncResult; error?: string }[] | null>(null);
-
-  const handleResyncAll = async () => {
-    setResyncing(true);
-    setResults(null);
-    const outcomes = await Promise.all(
-      mailboxes.map(async (mb) => {
-        try {
-          const res = await resyncMailbox(mb.id);
-          return { email: mb.emailAddress, ok: true, data: res.data };
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return { email: mb.emailAddress, ok: false, error: msg };
-        }
-      })
-    );
-    setResults(outcomes);
-    setResyncing(false);
-  };
-
-  const allOk = results?.every((r) => r.ok);
-  const anyFailed = results?.some((r) => !r.ok);
-
-  return (
-    <div className="flex flex-col items-end gap-1">
-      <button
-        onClick={handleResyncAll}
-        disabled={resyncing}
-        className="flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-[12px] text-fg-muted transition-colors hover:bg-fg-strong/[0.04] hover:text-fg-strong disabled:opacity-50"
-      >
-        {allOk ? (
-          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-        ) : anyFailed ? (
-          <AlertCircle className="h-3.5 w-3.5 text-rose-500" />
-        ) : (
-          <RefreshCw className={cn('h-3.5 w-3.5', resyncing && 'animate-spin')} />
-        )}
-        {resyncing ? 'Resyncing…' : allOk ? 'Done — refresh page' : anyFailed ? 'Partial failure' : 'Resync all inboxes'}
-      </button>
-      {results && (
-        <div className="flex flex-col gap-0.5 text-right">
-          {results.map((r) => {
-            const isAuthError = !r.ok && (r.error?.toLowerCase().includes('auth') || r.error?.toLowerCase().includes('oauth') || r.error?.toLowerCase().includes('credentials'));
-            return (
-              <div key={r.email} className="flex flex-col gap-0">
-                <p className={`text-[11px] ${r.ok ? 'text-emerald-600' : 'text-rose-600'}`}>
-                  {r.email.split('@')[0]}:{' '}
-                  {r.ok
-                    ? `✓ ${r.data?.messagesStored ?? 0} stored / ${r.data?.messagesSeen ?? 0} seen`
-                    : `✗ ${r.error ?? 'failed'}`}
-                </p>
-                {isAuthError && (
-                  <p className="text-[11px] text-amber-500">↳ Mailbox needs to be reconnected</p>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -982,9 +511,6 @@ export default function Dashboard({
             ? <HealthPill summary={{ tone: 'neutral', label: 'Health data unavailable', unhealthy: false }} />
             : <HealthPill summary={healthSummary} />
         )}
-        {mailboxes.length > 0 && (
-          <ResyncAllButton mailboxes={mailboxes} />
-        )}
       </div>
 
       {/* Action pills — the new hero */}
@@ -1105,23 +631,6 @@ export default function Dashboard({
         )}
       </section>
 
-      <UnmonitoredSenders />
-
-      {/* Mailbox health (collapsible) */}
-      <MailboxHealthAccordion
-        data={syncHealth}
-        loading={loadingSyncHealth}
-        error={syncHealthError}
-        autoExpand={healthSummary.unhealthy}
-        onResync={async (mailboxId) => {
-          try {
-            await resyncMailbox(mailboxId);
-            toastSuccess('Resync started', 'Checking the last 7 days of sent mail. Refresh the page in a minute to see updated drafts.');
-          } catch {
-            toastError('Resync failed', 'Could not trigger resync. Check that you are an admin.');
-          }
-        }}
-      />
     </div>
   );
 }

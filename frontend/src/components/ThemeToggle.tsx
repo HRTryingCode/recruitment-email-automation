@@ -8,6 +8,7 @@ import {
   subscribeToTheme,
   type Theme,
 } from '../lib/theme';
+import { Button } from './ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 
 interface Props {
@@ -33,8 +34,10 @@ export default function ThemeToggle({ className }: Props) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="icon"
           onClick={() => {
             setLocalTheme(next);
             setTheme(next);
@@ -42,10 +45,7 @@ export default function ThemeToggle({ className }: Props) {
           aria-label={label}
           aria-pressed={theme === 'dark'}
           data-theme={theme}
-          className={cn(
-            'group relative flex size-9 items-center justify-center rounded-full border border-line bg-surface-raised/60 text-fg-muted transition-all hover:border-line-strong hover:bg-surface-elevated hover:text-fg-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/40',
-            className
-          )}
+          className={cn('relative', className)}
         >
           <Sun
             className={cn(
@@ -65,7 +65,7 @@ export default function ThemeToggle({ className }: Props) {
             )}
             strokeWidth={2}
           />
-        </button>
+        </Button>
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>

@@ -367,26 +367,15 @@ describe('<Dashboard />', () => {
     expect(await screen.findByText(/all caught up/i)).toBeInTheDocument();
   });
 
-  it('mailbox health renders as a collapsed accordion by default', async () => {
+  it('mailbox admin lives in Settings now: no health table or debug lookup on Today (R1)', async () => {
     renderDashboard();
-
-    await screen.findByText(/mailbox health/i);
-
-    // The accordion is closed by default — the detail table should not be
-    // mounted, so the column header is not visible.
+    await screen.findAllByText('sofia@archive.com');
     expect(screen.queryByText(/watch expires/i)).not.toBeInTheDocument();
-
-    // Toggling expands it
-    const user = userEvent.setup();
-    const trigger = screen.getByRole('button', { name: /mailbox health/i });
-    await user.click(trigger);
-
-    expect(
-      await screen.findByText(/watch expires/i)
-    ).toBeInTheDocument();
+    expect(screen.queryByText(/find candidate by email/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /resync all/i })).not.toBeInTheDocument();
   });
 
-  it('surfaces a revoked mailbox: rose pill, auto-expanded accordion, reconnect on the account row', async () => {
+  it('surfaces a revoked mailbox: rose pill and reconnect on the account row', async () => {
     fetchSyncHealthMock.mockResolvedValue({
       success: true,
       data: [
@@ -402,21 +391,12 @@ describe('<Dashboard />', () => {
     renderDashboard();
 
     expect(await screen.findByText('1 mailbox: reconnect required')).toBeInTheDocument();
-    // Accordion opens itself when something is unhealthy.
-    const toggle = screen.getByRole('button', { name: /mailbox health/i });
-    await waitFor(() => expect(toggle).toHaveAttribute('aria-expanded', 'true'));
-    const detail = document.getElementById('mailbox-health-detail')!;
-    expect(within(detail).getByText(/reconnect required/i)).toBeInTheDocument();
-    expect(within(detail).getByText(/invalid_grant/)).toBeInTheDocument();
-    // Account row offers a reconnect action.
-    expect(screen.getAllByRole('button', { name: /reconnect sofia@archive\.com/i }).length).toBeGreaterThan(0);
+    expect(await screen.findByRole('button', { name: /reconnect sofia@archive\.com/i })).toBeInTheDocument();
   });
 
-  it('keeps the accordion collapsed and shows no reconnect action when healthy', async () => {
+  it('shows no reconnect action when healthy', async () => {
     renderDashboard();
     await screen.findAllByText('sofia@archive.com');
-    const toggle = screen.getByRole('button', { name: /mailbox health/i });
-    expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByRole('button', { name: /reconnect sofia/i })).not.toBeInTheDocument();
   });
 });

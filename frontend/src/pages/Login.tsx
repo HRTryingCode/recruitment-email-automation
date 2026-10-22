@@ -6,6 +6,8 @@ import { loginWithGoogle } from '../lib/api';
 import { safeNextPath, setToken, setUser } from '../lib/auth';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Alert, AlertDescription } from '../components/ui/alert';
+import { Avatar, AvatarFallback } from '../components/ui/avatar';
+import { currentTheme } from '../lib/shortcuts';
 
 const GOOGLE_CLIENT_ID =
   '403302601606-m9l02nom1med5ok7bh6rign6a3hk01o3.apps.googleusercontent.com';
@@ -50,7 +52,7 @@ export default function Login() {
       });
 
       gis.renderButton(btnRef.current, {
-        theme: 'filled_blue',
+        theme: currentTheme() === 'dark' ? 'filled_black' : 'outline',
         size: 'large',
         width: 320,
         text: 'continue_with',
@@ -77,61 +79,46 @@ export default function Login() {
   }, [navigate]);
 
   return (
-    <div className="flex min-h-screen items-center justify-center px-4">
-      <div className="absolute inset-0 -z-10 grid-bg opacity-60" />
-      <div className="w-full max-w-md">
-        <div className="mb-10 flex items-center justify-center gap-3">
-          <div className="relative">
-            <div className="absolute inset-0 rounded-xl bg-accent-500/40 blur-xl" />
-            <div className="relative flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-accent-400 via-accent-500 to-accent-700 ring-1 ring-white/15">
-              <Sparkles className="h-5 w-5 text-white" strokeWidth={2.4} />
-            </div>
-          </div>
+    <div className="flex min-h-screen items-center justify-center bg-background px-4">
+      <div className="flex w-full max-w-sm flex-col gap-6">
+        <div className="flex items-center justify-center gap-3">
+          <Avatar size="lg">
+            <AvatarFallback className="bg-primary text-primary-foreground">
+              <Sparkles className="size-5" />
+            </AvatarFallback>
+          </Avatar>
           <div>
-            <h1 className="font-display text-xl font-semibold leading-none text-fg-strong tracking-tight">
-              Archive Recruiting
-            </h1>
-            <p className="mt-1.5 text-[10.5px] font-medium uppercase tracking-[0.14em] text-fg-muted">
-              AI Email Automation
-            </p>
+            <h1 className="text-lg font-semibold leading-none tracking-tight">Archive Recruiting</h1>
+            <p className="mt-1 text-xs text-muted-foreground">AI email automation</p>
           </div>
         </div>
 
-        <Card className="border border-line bg-surface-raised/70 backdrop-blur-xl shadow-2xl">
+        <Card>
           <CardHeader>
             <CardTitle>
-              <h2 className="font-display text-2xl font-semibold tracking-tight text-fg-strong">
-                Welcome back
-              </h2>
+              <h2 className="text-xl font-semibold tracking-tight">Welcome back</h2>
             </CardTitle>
-            <CardDescription className="text-[13.5px] leading-relaxed text-fg-muted">
-              Sign in with your Archive Google account to continue.
-            </CardDescription>
+            <CardDescription>Sign in with your Archive Google account to continue.</CardDescription>
           </CardHeader>
-          <CardContent className="flex flex-col gap-5">
+          <CardContent className="flex flex-col gap-4">
             <div className="flex justify-center">
               <div ref={btnRef} />
             </div>
 
             {!gisReady && (
-              <p className="text-center text-[12px] text-fg-subtle">
-                Loading Google sign-in…
-              </p>
+              <p className="text-center text-xs text-muted-foreground">Loading Google sign-in…</p>
             )}
 
             {error && (
-              <Alert
-                variant="destructive"
-                className="border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-300"
-              >
+              <Alert variant="destructive">
                 <AlertDescription>{error}</AlertDescription>
               </Alert>
             )}
           </CardContent>
         </Card>
 
-        <p className="mt-6 text-center text-[12px] text-fg-subtle">
-          Restricted to <span className="font-mono text-fg-muted">@archive.com</span> accounts.
+        <p className="text-center text-xs text-muted-foreground">
+          Restricted to <span className="font-mono">@archive.com</span> accounts.
         </p>
       </div>
     </div>
