@@ -56,14 +56,14 @@ function StatusCell({ row }: { row: MailboxSyncHealth }) {
         <p className="max-w-xs text-xs text-muted-foreground">
           {row.authStatus === 'NEEDS_REAUTH'
             ? `Google rejected the login (${row.lastAuthError ?? 'unknown error'})${row.lastAuthErrorAt ? ` since ${new Date(row.lastAuthErrorAt).toLocaleDateString()}` : ''}.`
-            : 'Gmail push watch expired.'}{' '}
+            : 'Gmail stopped sending live updates.'}{' '}
           Sign in as this mailbox to reconnect, then resync.
         </p>
       )}
       {state === 'failing' && (
-        <p className="max-w-xs text-xs text-muted-foreground">
-          {row.consecutiveReconcileFailures} reconcile failure{row.consecutiveReconcileFailures === 1 ? '' : 's'} in a row
-          {row.lastReconcileError ? ` — ${row.lastReconcileError.slice(0, 80)}` : ''}
+        <p className="max-w-xs text-xs text-muted-foreground" title={row.lastReconcileError?.slice(0, 200) ?? undefined}>
+          Catch-up sync failed {row.consecutiveReconcileFailures} time{row.consecutiveReconcileFailures === 1 ? '' : 's'} in a row. Try Resync; if it
+          keeps failing, ask an admin to check the server logs.
         </p>
       )}
     </div>
@@ -71,8 +71,8 @@ function StatusCell({ row }: { row: MailboxSyncHealth }) {
 }
 
 /**
- * Settings → Mailboxes health table: watch tokens, reconcile drift, webhook
- * errors per mailbox, plus reconnect / resync / re-classify / signature.
+ * Settings → Mailboxes health table: Gmail live-update (watch) expiry,
+ * catch-up (reconcile) drift and delivery (webhook) errors per mailbox, plus reconnect / resync / re-classify / signature.
  * Each action's spinner follows its own request (not a timer).
  */
 export default function MailboxHealthTable({ data }: { data: MailboxSyncHealth[] }) {
@@ -118,12 +118,12 @@ export default function MailboxHealthTable({ data }: { data: MailboxSyncHealth[]
           <TableRow>
             <TableHead>Mailbox</TableHead>
             <TableHead>Status</TableHead>
-            <TableHead>Watch expires</TableHead>
+            <TableHead>Live updates renew in</TableHead>
             <TableHead className="hidden lg:table-cell">Messages</TableHead>
             <TableHead className="hidden lg:table-cell">Candidates</TableHead>
-            <TableHead className="hidden md:table-cell">Last reconciled</TableHead>
-            <TableHead>Drift</TableHead>
-            <TableHead>Errors / 24h</TableHead>
+            <TableHead className="hidden md:table-cell">Last catch-up sync</TableHead>
+            <TableHead>Missed emails found</TableHead>
+            <TableHead>Delivery errors (24h)</TableHead>
             <TableHead className="text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
@@ -156,7 +156,9 @@ export default function MailboxHealthTable({ data }: { data: MailboxSyncHealth[]
                 <TableCell className={cn('whitespace-normal', row.webhookErrorsLast24h >= 10 && 'text-destructive')}>
                   <span className="font-mono tabular-nums">{row.webhookErrorsLast24h}</span>
                   {row.lastWebhookError && (
-                    <p className="max-w-48 truncate text-xs text-muted-foreground">{row.lastWebhookError.slice(0, 80)}</p>
+                    <p className="max-w-48 truncate text-xs text-muted-foreground" title={row.lastWebhookError.slice(0, 200)}>
+                      Latest error details on hover
+                    </p>
                   )}
                 </TableCell>
                 <TableCell>

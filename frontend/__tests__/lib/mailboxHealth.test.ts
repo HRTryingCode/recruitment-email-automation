@@ -89,11 +89,11 @@ describe('summarizeHealth', () => {
   it('uses amber for high webhook error rates and high drift', () => {
     expect(summarizeHealth([row({ webhookErrorsLast24h: 25 })], NOW)).toMatchObject({
       tone: 'amber',
-      label: 'Webhook errors elevated',
+      label: 'More Gmail delivery errors than usual',
     });
     expect(summarizeHealth([row({ lastReconciliationFoundMissing: 30 })], NOW)).toMatchObject({
       tone: 'amber',
-      label: 'High reconcile drift',
+      label: 'Catch-up sync is finding missed emails',
     });
   });
 
@@ -107,7 +107,7 @@ describe('summarizeHealth', () => {
   it('keeps "expiring soon" for watches between 0 and 24h', () => {
     expect(summarizeHealth([row({ watchExpiresInHours: 5 })], NOW)).toMatchObject({
       tone: 'amber',
-      label: '1 watch expiring soon',
+      label: 'Live updates expire soon for 1 mailbox',
     });
   });
 

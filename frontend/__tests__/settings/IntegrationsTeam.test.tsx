@@ -30,9 +30,43 @@ describe('Settings → Integrations', () => {
     wrap(<IntegrationsSettings />);
     expect(await screen.findByText('Connected')).toHaveAttribute('data-status', 'OK');
     expect(screen.getByRole('button', { name: 'Disconnect' })).toBeInTheDocument();
-    expect(await screen.findByText('Configured')).toBeInTheDocument();
-    expect(screen.getByText('Disabled')).toBeInTheDocument();
+    expect(await screen.findByText('Connected')).toBeInTheDocument();
+    expect(screen.getByText('Off')).toBeInTheDocument();
     expect(screen.getByText('Rae R')).toBeInTheDocument();
+  });
+
+  it('explains, in plain words, what "not configured" means and who fixes it', async () => {
+    vi.mocked(leverApi.fetchGemStatus).mockResolvedValue({ status: 'NOT_CONNECTED', lastError: null });
+    vi.mocked(leverApi.fetchLeverMe).mockResolvedValue({ configured: false, createEnabled: false, appEmail: null, leverUser: null });
+    wrap(<IntegrationsSettings />);
+    expect(await screen.findByText("Lever isn't connected. An admin needs to add the Lever API key in Vercel.")).toBeInTheDocument();
+    expect(screen.queryByText('Not configured')).not.toBeInTheDocument();
+  });
+
+  it('explains why Add to Lever is off', async () => {
+    vi.mocked(leverApi.fetchGemStatus).mockResolvedValue({ status: 'OK', lastError: null });
+    vi.mocked(leverApi.fetchLeverMe).mockResolvedValue({
+      configured: true, createEnabled: false, appEmail: 'rae@archive.com', leverUser: { id: 'lu1', name: 'Rae R' },
+    });
+    wrap(<IntegrationsSettings />);
+    expect(await screen.findByText(/an admin needs to turn it on in Vercel/i)).toBeInTheDocument();
+  });
+
+  it('explains a signed-in user with no matching Lever account', async () => {
+    vi.mocked(leverApi.fetchGemStatus).mockResolvedValue({ status: 'OK', lastError: null });
+    vi.mocked(leverApi.fetchLeverMe).mockResolvedValue({
+      configured: true, createEnabled: true, appEmail: 'rae@archive.com', leverUser: null,
+    });
+    wrap(<IntegrationsSettings />);
+    expect(await screen.findByText(/no Lever user matches rae@archive\.com/i)).toBeInTheDocument();
+  });
+
+  it('has no developer jargon', async () => {
+    vi.mocked(leverApi.fetchGemStatus).mockResolvedValue({ status: 'OK', lastError: null });
+    vi.mocked(leverApi.fetchLeverMe).mockResolvedValue({ configured: false, createEnabled: false, appEmail: null, leverUser: null });
+    const { container } = wrap(<IntegrationsSettings />);
+    await screen.findByText(/lever isn't connected/i);
+    expect(container.textContent).not.toMatch(/environment settings|env var|configured by an admin via/i);
   });
 
   it('says so when the Lever status cannot load', async () => {
@@ -62,5 +96,11 @@ describe('Settings → Team', () => {
     vi.mocked(api.fetchDraftCcOptions).mockRejectedValue(new Error('403'));
     wrap(<TeamSettings />);
     expect(await screen.findByText(/team list is not available/i)).toBeInTheDocument();
+  });
+
+  it('an empty admin list says what to do', async () => {
+    vi.mocked(api.fetchDraftCcOptions).mockResolvedValue({ success: true, data: [{ email: null, name: 'No CC', firstName: null }] });
+    wrap(<TeamSettings />);
+    expect(await screen.findByText(/no admins yet/i)).toBeInTheDocument();
   });
 });

@@ -56,7 +56,9 @@ export default function TeamSettings() {
               ))}
               {admins.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={3} className="text-muted-foreground">No admins configured.</TableCell>
+                  <TableCell colSpan={3} className="text-muted-foreground">
+                    No admins yet. An existing admin or the person who set up this app can make someone an admin.
+                  </TableCell>
                 </TableRow>
               )}
             </TableBody>
