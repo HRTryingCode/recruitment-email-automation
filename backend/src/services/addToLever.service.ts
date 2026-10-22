@@ -278,6 +278,36 @@ export async function findCandidateForPrefill(by: { id: string } | { email: stri
   })) as CandidateForPrefill | null;
 }
 
+const GEM_PREFILL_OUTCOME: Record<GemLookupStatus, string> = {
+  FOUND: 'found',
+  NOT_FOUND: 'not_found',
+  NOT_CONNECTED: 'not_connected',
+  NEEDS_REAUTH: 'needs_reauth',
+  UNAVAILABLE: 'error',
+};
+
+/**
+ * Gem lookup for a prefill, with one GEM_PREFILL SystemLog row per attempt
+ * so a "Gem didn't fill anything" report can be diagnosed. Outcome, timing
+ * and which fields came back only — never the values (candidate PII).
+ */
+async function timedGemLookup(userId: string, email: string): Promise<GemLookup> {
+  const t0 = Date.now();
+  const gem = await addToLeverDeps.gemLookup(userId, email).catch((): GemLookup => ({ status: 'UNAVAILABLE' }));
+  const p = gem.status === 'FOUND' ? gem.person : undefined;
+  await logEvent(
+    'GEM_PREFILL',
+    {
+      userId,
+      outcome: GEM_PREFILL_OUTCOME[gem.status],
+      durationMs: Date.now() - t0,
+      ...(p && { fields: { linkedin: !!p.linkedinUrl, title: !!p.title, location: !!p.location, resume: !!p.resume } }),
+    },
+    gem.status === 'UNAVAILABLE' ? 'WARN' : 'INFO'
+  );
+  return gem;
+}
+
 export async function buildPrefill(args: {
   actorUserId: string;
   email: string;
@@ -288,7 +318,7 @@ export async function buildPrefill(args: {
   const [postings, stages, gem, status, actor, latest] = await Promise.all([
     getOpenPostings(),
     getStages(),
-    addToLeverDeps.gemLookup(args.actorUserId, email).catch((): GemLookup => ({ status: 'UNAVAILABLE' })),
+    timedGemLookup(args.actorUserId, email),
     reader.findByEmail(email),
     actorEmail(args.actorUserId),
     prisma.emailMessage.findFirst({

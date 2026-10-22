@@ -226,6 +226,33 @@ describe('Add to Lever routes', () => {
       expect(res.body.data.resume.available).toBe(false);
     });
 
+    it('logs one GEM_PREFILL row per attempt with the outcome and counts only (no PII)', async () => {
+      const cases: Array<[GemLookup, string]> = [
+        [GEM_FOUND, 'found'],
+        [{ status: 'NOT_FOUND' }, 'not_found'],
+        [{ status: 'NOT_CONNECTED' }, 'not_connected'],
+        [{ status: 'NEEDS_REAUTH' }, 'needs_reauth'],
+        [{ status: 'UNAVAILABLE', message: 'Gem unavailable — paste LinkedIn manually' }, 'error'],
+      ];
+      for (const [lookup, outcome] of cases) {
+        mockPrisma.systemLog.create.mockClear();
+        gemLookup.mockResolvedValueOnce(lookup);
+        expect((await request(app).get(`/api/candidates/${CAND}/lever/prefill`).set(auth)).status).toBe(200);
+        const rows = mockPrisma.systemLog.create.mock.calls.filter((c) => c[0].data.event === 'GEM_PREFILL');
+        expect(rows).toHaveLength(1);
+        const details = JSON.parse(rows[0]![0].data.details);
+        expect(details).toMatchObject({ outcome, userId: USER });
+        expect(typeof details.durationMs).toBe('number');
+        expect(rows[0]![0].data.details).not.toMatch(/jane|linkedin\.com|Berlin|1234|s3\.gem|Acme|Staff Engineer/i);
+      }
+      const found = { linkedin: true, title: true, location: true, resume: true };
+      gemLookup.mockResolvedValueOnce(GEM_FOUND);
+      mockPrisma.systemLog.create.mockClear();
+      await request(app).get(`/api/candidates/${CAND}/lever/prefill`).set(auth);
+      const row = mockPrisma.systemLog.create.mock.calls.find((c) => c[0].data.event === 'GEM_PREFILL')!;
+      expect(JSON.parse(row[0].data.details).fields).toEqual(found);
+    });
+
     it('no matching posting → suggestedPostingId null', async () => {
       mockPrisma.candidate.findUnique.mockResolvedValueOnce({ ...candidateRow, role: 'Head of Sales' });
       const res = await request(app).get(`/api/candidates/${CAND}/lever/prefill`).set(auth);
