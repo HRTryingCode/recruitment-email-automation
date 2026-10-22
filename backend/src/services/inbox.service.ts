@@ -69,12 +69,17 @@ export function decodeCursor(raw: string): InboxCursor | null {
   return { sortAt, kind, id };
 }
 
-interface CteParams {
+export interface CteParams {
   now: Date;
   mailboxId?: string;
 }
 
-function inboxItemsCte({ now, mailboxId }: CteParams): Prisma.Sql {
+/**
+ * The view rules as a CTE ending in `inbox_items (id, kind, view, sortAt,
+ * mailboxId, expiresAt)`. expiresAt is set for PENDING/APPROVED drafts only
+ * (the ones the expiry window applies to). Shared with today.service.
+ */
+export function inboxItemsCte({ now, mailboxId }: CteParams): Prisma.Sql {
   const midnight = etMidnight(now);
   const expiryCutoff = new Date(now.getTime() - DRAFT_EXPIRY_DAYS * 24 * 3600_000);
   const draftMailbox = mailboxId ? Prisma.sql`AND t."mailboxId" = ${mailboxId}` : Prisma.empty;
@@ -102,7 +107,11 @@ function inboxItemsCte({ now, mailboxId }: CteParams): Prisma.Sql {
         CASE WHEN d.status IN ('SCHEDULED', 'SENDING', 'SENT')
           THEN COALESCE(d."sentAt", d."scheduledSendAt", d."updatedAt")
           ELSE d."createdAt"
-        END AS "sortAt"
+        END AS "sortAt",
+        t."mailboxId" AS "mailboxId",
+        CASE WHEN d.status IN ('PENDING', 'APPROVED')
+          THEN d."createdAt" + make_interval(days => ${DRAFT_EXPIRY_DAYS}::int)
+        END AS "expiresAt"
       FROM "EmailDraft" d
       JOIN "EmailThread" t ON t.id = d."threadId"
       LEFT JOIN "Candidate" c ON c.id = t."candidateId"
@@ -112,7 +121,8 @@ function inboxItemsCte({ now, mailboxId }: CteParams): Prisma.Sql {
     ),
     candidate_items AS (
       SELECT c.id, 'candidate'::text AS kind, 'needs_review'::text AS view,
-        COALESCE(c."lastInboundAt", c."updatedAt") AS "sortAt"
+        COALESCE(c."lastInboundAt", c."updatedAt") AS "sortAt",
+        c."mailboxId" AS "mailboxId", NULL::timestamp AS "expiresAt"
       FROM "Candidate" c
       WHERE c.status = 'NEEDS_REVIEW'
         AND COALESCE(c."lastInboundAt", c."updatedAt") >= ${expiryCutoff}
@@ -124,9 +134,9 @@ function inboxItemsCte({ now, mailboxId }: CteParams): Prisma.Sql {
         )
     ),
     inbox_items AS (
-      SELECT id, kind, view, "sortAt" FROM draft_items WHERE view IS NOT NULL
+      SELECT id, kind, view, "sortAt", "mailboxId", "expiresAt" FROM draft_items WHERE view IS NOT NULL
       UNION ALL
-      SELECT id, kind, view, "sortAt" FROM candidate_items
+      SELECT id, kind, view, "sortAt", "mailboxId", "expiresAt" FROM candidate_items
     )`;
 }
 

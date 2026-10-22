@@ -77,10 +77,11 @@ jobs:
         run: cd frontend && npm run build
       - name: Run frontend tests (with coverage floor)
         run: cd frontend && npm run test:coverage
-      # Report-only until R1–R4 land (docs/DESIGN-SYSTEM.md): prints the
-      # hand-rolled-UI baseline per batch; warnings never fail the job.
-      - name: Design-system baseline (report-only)
-        run: cd frontend && npm run audit:ds && npm run lint:ds -- --format stylish | tail -1
+      # Design-system guard (docs/DESIGN-SYSTEM.md §6): prints the per-batch
+      # audit, then fails on any ESLint design-system error. R3's files are
+      # warn-only until R3 merges (eslint.config.mjs TODO).
+      - name: Design-system guard
+        run: cd frontend && npm run audit:ds && npm run lint:ds -- --format stylish
 
   # End-to-end smoke tests against THIS commit, not prod (audit M31).
   # Playwright boots the backend (tsx) and `vite preview` of the built SPA
