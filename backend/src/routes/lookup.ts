@@ -9,6 +9,14 @@ import {
   type SkipReason,
 } from '../lib/lookup';
 import { leverLookupIntegration, type LeverLookupIntegration } from '../services/leverLookup';
+import {
+  buildPrefill,
+  createInLever,
+  createRequestSchema,
+  findCandidateForPrefill,
+  isLeverCreateEnabled,
+  toHttpError,
+} from '../services/addToLever.service';
 
 const router = Router();
 
@@ -209,6 +217,48 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       },
     });
   } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/lookup/lever-prefill?email= — F3 Add to Lever for any address,
+// including people the app has never seen.
+router.get('/lever-prefill', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const email = normalizeLookupEmail(req.query.email);
+    if (!email) return next(createError('email must be a single valid email address', 400));
+    const candidate = await findCandidateForPrefill({ email });
+    const data = await buildPrefill({ actorUserId: req.userId!, email, candidate });
+    res.json({ success: true, data });
+  } catch (err) {
+    const mapped = toHttpError(err);
+    if (mapped) return res.status(mapped.status).json(mapped.body);
+    next(err);
+  }
+});
+
+// POST /api/lookup/lever — F3 create by email (body = confirmed payload + email).
+router.post('/lever', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!isLeverCreateEnabled()) return next(createError('Add to Lever is turned off', 403));
+    const email = normalizeLookupEmail(req.body?.email);
+    if (!email) return next(createError('email must be a single valid email address', 400));
+    const body = createRequestSchema.safeParse(req.body);
+    if (!body.success) return next(createError(body.error.issues[0]?.message ?? 'Invalid request', 400));
+    const candidate = await prisma.candidate.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' } },
+      select: { id: true },
+    });
+    const data = await createInLever({
+      actorUserId: req.userId!,
+      email,
+      candidateId: candidate?.id ?? null,
+      req: body.data,
+    });
+    res.status(data.duplicateRequest ? 200 : 201).json({ success: true, data });
+  } catch (err) {
+    const mapped = toHttpError(err);
+    if (mapped) return res.status(mapped.status).json(mapped.body);
     next(err);
   }
 });

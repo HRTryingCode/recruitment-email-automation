@@ -74,6 +74,7 @@ describe('LeverClient.findByEmail', () => {
     expect(res.state).toBe('ACTIVE');
     expect(res.primary).toMatchObject({
       id: 'o1',
+      postingId: 'post-1',
       postingTitle: 'Founding Engineer',
       stage: 'Interest Call',
       archivedReason: null,
@@ -211,7 +212,7 @@ describe('pickPrimary', () => {
   });
   it('ignores opportunities with no updatedAt ordering issues', () => {
     const o = (id: string, archived: boolean, updatedAt: string | null): LeverOpportunity => ({
-      id, archived, hired: false, postingTitle: null, stage: null, archivedReason: null,
+      id, archived, hired: false, postingId: null, postingTitle: null, stage: null, archivedReason: null,
       createdAt: null, updatedAt, leverUrl: '',
     });
     expect(pickPrimary([o('a', false, null), o('b', false, '2026-01-01T00:00:00.000Z')])?.id).toBe('b');

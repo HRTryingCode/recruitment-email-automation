@@ -35,6 +35,8 @@ const MANIFEST: Record<string, Guard> = {
   'GET /api/internal/cron/coverage-summary': 'cron',
   'GET /api/internal/cron/lever-sync': 'cron',
   'GET /api/mailboxes/gmail/callback': 'oauth',
+  // F3: Gem (GeMCP) OAuth callback, bound to the user by the one-time gem- state.
+  'GET /api/integrations/gem/callback': 'oauth',
 
   'GET /api/mailboxes/': 'auth',
   'POST /api/mailboxes/gmail/auth': 'auth',
@@ -55,6 +57,9 @@ const MANIFEST: Record<string, Guard> = {
   'POST /api/candidates/:id/unignore': 'auth',
   'POST /api/candidates/backfill-roles': 'admin',
   'POST /api/candidates/:id/lever/refresh': 'auth',
+  // F3 Add to Lever: create is also gated by LEVER_CREATE_ENABLED in-handler.
+  'GET /api/candidates/:id/lever/prefill': 'auth',
+  'POST /api/candidates/:id/lever': 'auth',
 
   'GET /api/emails/threads': 'auth',
   'GET /api/emails/threads/:id/messages': 'auth',
@@ -75,6 +80,15 @@ const MANIFEST: Record<string, Guard> = {
 
   // F1 global lookup: "do we know this email?" — metadata only.
   'GET /api/lookup/': 'auth',
+  'GET /api/lookup/lever-prefill': 'auth',
+  'POST /api/lookup/lever': 'auth',
+
+  // F3: Lever reference data + the caller's own Gem connection.
+  'GET /api/lever/postings': 'auth',
+  'GET /api/lever/me': 'auth',
+  'GET /api/integrations/gem/connect': 'auth',
+  'GET /api/integrations/gem/status': 'auth',
+  'DELETE /api/integrations/gem': 'auth',
 
   // B3 sender coverage: summary for any user; expected-sender registry is admin-managed.
   'GET /api/coverage/': 'auth',
