@@ -18,7 +18,7 @@ import {
   type InboxItem,
   type LeverCandidateFields,
 } from '@/lib/api';
-import { messagePlainText, sendLine } from '@/lib/inbox';
+import { lockWarning, messagePlainText, sendLine } from '@/lib/inbox';
 import { formatTimeAgo } from '@/lib/utils';
 import type { DraftEditorState } from '@/hooks/useDraftEditor';
 import { LabelChip, PresenceChip, RoleChip, firstName } from './chips';
@@ -45,7 +45,7 @@ export function LockedAlert({ lock, onCancel }: { lock: LockState; onCancel: () 
       <Lock />
       <AlertTitle>{`${firstName(lock.name)} is editing this reply`}</AlertTitle>
       <AlertDescription className="flex flex-col gap-2">
-        <span>They opened it first. Sending now may overwrite their changes.</span>
+        <span>{`They opened it first. ${lockWarning(lock.actionLabel)}`}</span>
         <span className="flex flex-wrap gap-2">
           <Button size="sm" variant="destructive" onClick={lock.retry}>
             {lock.actionLabel}

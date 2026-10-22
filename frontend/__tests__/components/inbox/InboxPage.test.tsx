@@ -52,6 +52,13 @@ describe('InboxPage', () => {
     expect(await screen.findByText('Inbox zero — nothing waiting')).toBeInTheDocument();
   });
 
+  it('explains what lands in each empty view', async () => {
+    installInbox([]);
+    renderInbox('/inbox?view=snoozed');
+    expect(await screen.findByText('Nothing snoozed')).toBeInTheDocument();
+    expect(screen.getByText('Press S on a reply to bring it back later.')).toBeInTheDocument();
+  });
+
   it('shows an error with Retry that refetches', async () => {
     installInbox(ITEMS);
     let fail = true;
@@ -93,7 +100,7 @@ describe('InboxPage', () => {
     expect(within(pane).getByRole('textbox', { name: 'Reply' })).toHaveValue(
       "Hi Ada,\n\nThanks for getting back to me! Let's find a time.\n\nBest,\nRae"
     );
-    expect(within(pane).getByText('Sending as rae@archive.com · CC no one · Lever: no change')).toBeInTheDocument();
+    expect(within(pane).getByText('Sending as rae@archive.com · CC no one')).toBeInTheDocument();
     expect(within(pane).queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
     expect(pane.textContent).not.toMatch(/\d%/);
   });

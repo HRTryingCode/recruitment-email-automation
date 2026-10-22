@@ -229,6 +229,8 @@ describe('presence lock (423)', () => {
     await user.click(await screen.findByRole('menuitem', { name: 'Spam' }));
     const alert = await within(pane).findByRole('alert');
     expect(alert).toHaveTextContent('Sofia is editing this reply');
+    expect(alert).toHaveTextContent('Dismissing now may overwrite their changes.');
+    expect(alert).not.toHaveTextContent('Sending');
     await user.click(within(alert).getByRole('button', { name: 'Dismiss anyway' }));
     await waitFor(() => expect(posts(store, '/d1/dismiss').at(-1)!.body).toEqual({ reason: 'spam', override: true }));
   });

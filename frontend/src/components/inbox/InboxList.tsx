@@ -7,13 +7,10 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { InboxItem, InboxView } from '@/lib/api';
-import { VIEWS, formatAge, type RoleGroup } from '@/lib/inbox';
+import { VIEWS, formatAge, itemKey, type RoleGroup } from '@/lib/inbox';
 import { LabelChip, MailboxChip, PresenceChip, RoleChip } from './chips';
 
-/** URL key of an item: the draft id, or `candidate:<id>` for draftless rows. */
-export function itemKey(item: InboxItem): string {
-  return item.kind === 'candidate' ? `candidate:${item.id}` : item.id;
-}
+export { itemKey } from '@/lib/inbox';
 
 function initials(name: string): string {
   return (
@@ -220,7 +217,7 @@ export default function InboxList({
               </EmptyMedia>
               <EmptyTitle>{roleFiltered ? 'No replies for this role' : meta.empty}</EmptyTitle>
               <EmptyDescription>
-                {roleFiltered ? 'Try another role, or show all roles.' : 'New replies show up here as candidates write back.'}
+                {roleFiltered ? 'Try another role, or show all roles.' : meta.hint}
               </EmptyDescription>
             </EmptyHeader>
           </Empty>

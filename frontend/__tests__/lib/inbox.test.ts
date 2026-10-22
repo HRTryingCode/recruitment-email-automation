@@ -91,9 +91,9 @@ describe('diffWords', () => {
 });
 
 describe('sendLine', () => {
-  it('spells out mailbox, CC and Lever', () => {
-    expect(sendLine('rae@x.com', null)).toBe('Sending as rae@x.com · CC no one · Lever: no change');
-    expect(sendLine('rae@x.com', 'Sofia')).toBe('Sending as rae@x.com · CC Sofia · Lever: no change');
+  it('spells out mailbox and CC', () => {
+    expect(sendLine('rae@x.com', null)).toBe('Sending as rae@x.com · CC no one');
+    expect(sendLine('rae@x.com', 'Sofia')).toBe('Sending as rae@x.com · CC Sofia');
   });
 });
 
