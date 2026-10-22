@@ -1,14 +1,16 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { AlertCircle, ArrowLeft, EyeOff, PenLine, X } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Kbd } from '@/components/ui/kbd';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
-import { fetchCandidate, ignoreCandidate, unignoreCandidate, type InboxItem } from '@/lib/api';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { fetchCandidate, type InboxItem } from '@/lib/api';
 import { messagePlainText, type TriageClass } from '@/lib/inbox';
-import { extractApiErrorMessage, toastError, toastSuccess } from '@/lib/toast';
 import { formatTimeAgo } from '@/lib/utils';
+import CandidateLink from './CandidateLink';
 import { LabelChip, RoleChip } from './chips';
 
 interface Props {
@@ -21,9 +23,12 @@ interface Props {
   /** Why the last attempt failed; shows an inline Retry. */
   error: string | null;
   onRetry: () => void;
-  /** Candidate ignored: move on. */
-  onDone: () => void;
+  /** Hide the candidate (the page owns it so D does the same, see useHideCandidate). */
+  onHide: () => void;
+  hiding: boolean;
 }
+
+export const HIDE_HINT = 'Hides them from Inbox and Candidates. You can undo or restore later.';
 
 function WritingSkeleton() {
   return (
@@ -39,9 +44,8 @@ function WritingSkeleton() {
   );
 }
 
-/** Needs-review candidate with no draft yet: decide the label to write one, or ignore. */
-export default function CandidatePane({ item, onClose, onReply, pending, error, onRetry, onDone }: Props) {
-  const qc = useQueryClient();
+/** Needs-review candidate with no draft yet: decide the label to write one, or hide them. */
+export default function CandidatePane({ item, onClose, onReply, pending, error, onRetry, onHide, hiding }: Props) {
   const candidateId = item.candidate?.id ?? item.id;
   const name = item.candidate?.name ?? 'Unknown candidate';
   const { data, isLoading, isError, refetch } = useQuery({
@@ -54,28 +58,6 @@ export default function CandidatePane({ item, onClose, onReply, pending, error, 
     .reverse()
     .find((m) => m.fromAddress.toLowerCase() !== mailboxAddr);
 
-  const ignoreMutation = useMutation({
-    mutationFn: () => ignoreCandidate(candidateId),
-    onSuccess: () => {
-      toastSuccess(`Ignored ${name}`, undefined, {
-        label: 'Undo',
-        onClick: () => {
-          unignoreCandidate(candidateId)
-            .then(() => {
-              void qc.invalidateQueries({ queryKey: ['inbox'] });
-              void qc.invalidateQueries({ queryKey: ['candidates'] });
-              toastSuccess(`Restored ${name}`);
-            })
-            .catch((err: unknown) => toastError('Could not undo', extractApiErrorMessage(err, 'Please try again.')));
-        },
-      });
-      void qc.invalidateQueries({ queryKey: ['inbox'] });
-      void qc.invalidateQueries({ queryKey: ['candidates'] });
-      onDone();
-    },
-    onError: (err) => toastError('Could not ignore', extractApiErrorMessage(err, 'Please try again.')),
-  });
-
   return (
     <section aria-label={`Reply to ${name}`} className="flex h-full min-h-0 flex-col">
       <header className="flex items-start gap-3 border-b border-border p-4">
@@ -84,7 +66,9 @@ export default function CandidatePane({ item, onClose, onReply, pending, error, 
         </Button>
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="truncate font-heading text-base font-semibold text-foreground">{name}</h2>
+            <h2 className="truncate font-heading text-base font-semibold text-foreground">
+              <CandidateLink id={item.candidate?.id} name={name} />
+            </h2>
             <RoleChip role={item.candidate?.role} />
             <LabelChip classification="NEUTRAL" />
           </div>
@@ -141,15 +125,23 @@ export default function CandidatePane({ item, onClose, onReply, pending, error, 
         <Button disabled={!thread || !!pending} onClick={() => thread && onReply(thread.id, 'INTERESTED')}>
           {pending === 'INTERESTED' ? <Spinner data-icon="inline-start" /> : <PenLine data-icon="inline-start" />}
           {pending === 'INTERESTED' ? 'Writing reply…' : 'Reply as Interested'}
+          <Kbd className="max-sm:hidden">I</Kbd>
         </Button>
         <Button variant="outline" disabled={!thread || !!pending} onClick={() => thread && onReply(thread.id, 'NOT_INTERESTED')}>
           {pending === 'NOT_INTERESTED' && <Spinner data-icon="inline-start" />}
           {pending === 'NOT_INTERESTED' ? 'Writing reply…' : 'Reply as Not interested'}
+          <Kbd className="max-sm:hidden">N</Kbd>
         </Button>
-        <Button variant="ghost" disabled={ignoreMutation.isPending || !!pending} onClick={() => ignoreMutation.mutate()}>
-          <EyeOff data-icon="inline-start" />
-          Ignore candidate
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="ghost" disabled={hiding || !!pending} onClick={onHide}>
+              <EyeOff data-icon="inline-start" />
+              Hide candidate
+              <Kbd className="max-sm:hidden">D</Kbd>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{HIDE_HINT}</TooltipContent>
+        </Tooltip>
       </footer>
     </section>
   );

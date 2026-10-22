@@ -213,7 +213,11 @@ describe('dismiss', () => {
 });
 
 describe('snooze', () => {
-  it.each(['Later today', 'Tomorrow 9am ET', 'Next week'])('"%s" posts the preset time and advances', async (label) => {
+  it.each([
+    ['later', /^Later today · \d{1,2}:\d{2} [AP]M ET$/],
+    ['tomorrow', /^Tomorrow 9am ET$/],
+    ['next_week', /^Next week · Mon 9am ET$/],
+  ] as const)('%s posts the preset time and advances', async (key, label) => {
     const store = installInbox(ITEMS);
     const user = userEvent.setup();
     renderInbox('/inbox?view=interested&item=d1');
@@ -222,7 +226,7 @@ describe('snooze', () => {
     await user.click(await screen.findByRole('menuitem', { name: label }));
     await waitFor(() => expect(posts(store, '/d1/snooze')).toHaveLength(1));
     const until = new Date((posts(store, '/d1/snooze')[0].body as { until: string }).until).getTime();
-    const expected = snoozePresets(new Date(before)).find((p) => p.label === label)!.until.getTime();
+    const expected = snoozePresets(new Date(before)).find((p) => p.key === key)!.until.getTime();
     expect(Math.abs(until - expected)).toBeLessThan(5_000);
     expect(await openPane('Ben Sample')).toBeInTheDocument();
   });

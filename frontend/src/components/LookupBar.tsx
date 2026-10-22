@@ -12,6 +12,7 @@ import {
 import { startGmailReconnect } from '../lib/reconnect';
 import { currentTheme, isTypingTarget, openShortcuts } from '../lib/shortcuts';
 import { LIVE_DRAFT_STATUSES } from '../lib/candidates';
+import { usePaletteCandidate } from '../lib/paletteContext';
 import { bannerIssues } from '../lib/statusBanner';
 import { setTheme } from '../lib/theme';
 import { viewHref } from '../lib/urlState';
@@ -156,6 +157,7 @@ export default function LookupBar() {
     setOpenState(next);
   };
   const [input, setInput] = useState('');
+  const here = usePaletteCandidate();
   const [debounced, setDebounced] = useState('');
 
   useEffect(() => {
@@ -231,6 +233,21 @@ export default function LookupBar() {
   };
 
   const commands: Array<{ heading: string; items: PaletteCommand[] }> = [
+    ...(here
+      ? [
+          {
+            heading: 'Current',
+            items: [
+              {
+                id: `open-candidate-${here.id}`,
+                label: `Open candidate · ${here.name}`,
+                icon: UserRound,
+                run: () => go('/candidates', { candidate: here.id }),
+              },
+            ],
+          },
+        ]
+      : []),
     {
       heading: 'Go to',
       items: NAV_ITEMS.map((n) => ({

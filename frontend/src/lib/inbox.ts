@@ -129,6 +129,20 @@ function etWallTime(y: number, m: number, d: number, h: number, min = 0): Date {
   return new Date(guess - etOffsetHours(new Date(guess)) * 3600_000);
 }
 
+/** "2:00 PM" in ET. */
+function etClock(d: Date): string {
+  return d.toLocaleTimeString('en-US', { timeZone: ET, hour: 'numeric', minute: '2-digit' });
+}
+
+/**
+ * An instant in ET, labelled ("Fri, Oct 23, 9:00 AM ET"). Snoozes are
+ * scheduled in ET, so they're shown in ET whatever the browser's zone.
+ */
+export function formatEt(d: Date): string {
+  const date = d.toLocaleDateString('en-US', { timeZone: ET, weekday: 'short', month: 'short', day: 'numeric' });
+  return `${date}, ${etClock(d)} ET`;
+}
+
 export type SnoozeKey = 'later' | 'tomorrow' | 'next_week';
 
 export function snoozePresets(now: Date): Array<{ key: SnoozeKey; label: string; until: Date }> {
@@ -137,9 +151,9 @@ export function snoozePresets(now: Date): Array<{ key: SnoozeKey; label: string;
   const later = new Date(Math.min(now.getTime() + 3 * 3600_000, endOfDay.getTime()));
   const daysToMonday = ((8 - p.weekday) % 7) || 7;
   return [
-    { key: 'later', label: 'Later today', until: later },
+    { key: 'later', label: `Later today · ${etClock(later)} ET`, until: later },
     { key: 'tomorrow', label: 'Tomorrow 9am ET', until: etWallTime(p.y, p.m, p.d + 1, 9) },
-    { key: 'next_week', label: 'Next week', until: etWallTime(p.y, p.m, p.d + daysToMonday, 9) },
+    { key: 'next_week', label: 'Next week · Mon 9am ET', until: etWallTime(p.y, p.m, p.d + daysToMonday, 9) },
   ];
 }
 

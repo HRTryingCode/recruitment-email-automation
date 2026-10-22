@@ -86,7 +86,7 @@ const Row = memo(function Row({ item, rowKey, selected, focused, highlighted, ch
         aria-current={selected ? 'true' : undefined}
         data-focused={focused ? 'true' : undefined}
         data-highlighted={highlighted ? 'true' : undefined}
-        className="transition-colors duration-700 data-[focused=true]:ring-2 data-[focused=true]:ring-ring/40 data-[highlighted=true]:bg-success/10 data-[highlighted=true]:ring-2 data-[highlighted=true]:ring-success/40"
+        className="transition-colors duration-700 data-[focused=true]:ring-2 data-[focused=true]:ring-ring data-[highlighted=true]:bg-success/10 data-[highlighted=true]:ring-2 data-[highlighted=true]:ring-success/40"
       >
         <Avatar size="sm">
           <AvatarFallback>{initials(name)}</AvatarFallback>

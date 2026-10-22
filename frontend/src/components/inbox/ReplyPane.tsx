@@ -18,10 +18,11 @@ import {
   type InboxItem,
   type LeverCandidateFields,
 } from '@/lib/api';
-import { lockWarning, messagePlainText, sendLine } from '@/lib/inbox';
+import { formatEt, lockWarning, messagePlainText, sendLine } from '@/lib/inbox';
 import { formatTimeAgo } from '@/lib/utils';
 import type { DraftEditorState } from '@/hooks/useDraftEditor';
 import { LabelChip, PresenceChip, RoleChip, firstName } from './chips';
+import CandidateLink from './CandidateLink';
 import DraftEditor from './DraftEditor';
 import DraftFlags from './DraftFlags';
 import EvidenceMessage from './EvidenceMessage';
@@ -136,7 +137,7 @@ function StatusNotice({ draft, onUndo, onUnsnooze }: { draft: EmailDraft; onUndo
     return (
       <Alert>
         <AlarmClock />
-        <AlertTitle>{`Snoozed until ${new Date(draft.snoozedUntil).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`}</AlertTitle>
+        <AlertTitle>{`Snoozed until ${formatEt(new Date(draft.snoozedUntil))}`}</AlertTitle>
         <AlertDescription>
           <Button size="sm" variant="outline" onClick={onUnsnooze}>
             Unsnooze
@@ -238,7 +239,7 @@ export default function ReplyPane(props: Props) {
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex flex-wrap items-center gap-2">
             <h2 ref={headingRef} tabIndex={-1} className="truncate font-heading text-base font-semibold text-foreground outline-none">
-              {name}
+              <CandidateLink id={candidateId} name={name} />
             </h2>
             <RoleChip role={role} />
             <LabelChip classification={draft.classification} confidenceLabel={draft.confidenceLabel} />
@@ -248,20 +249,25 @@ export default function ReplyPane(props: Props) {
           <p className="truncate text-sm text-muted-foreground">
             {candidate?.email ?? item?.candidate?.email}
           </p>
-          {candidateId && <LeverSection candidateId={candidateId} lever={lever} draftId={draft.id} />}
-          {draft.classificationReason && (
-            <p className="text-sm text-foreground">
-              <span className="text-muted-foreground">Why: </span>
-              <span>{draft.classificationReason}</span>
-            </p>
-          )}
         </div>
         <Button size="icon-sm" variant="ghost" aria-label="Close" onClick={onClose} className="max-lg:hidden">
           <X />
         </Button>
       </header>
 
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+      {/* Lever and "Why" scroll with the message, so short screens keep room for the editor. */}
+      <div data-slot="reply-body" className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+        {(candidateId || draft.classificationReason) && (
+          <div className="flex flex-col gap-1">
+            {candidateId && <LeverSection candidateId={candidateId} lever={lever} draftId={draft.id} />}
+            {draft.classificationReason && (
+              <p className="text-sm text-foreground">
+                <span className="text-muted-foreground">Why: </span>
+                <span>{draft.classificationReason}</span>
+              </p>
+            )}
+          </div>
+        )}
         <StatusNotice draft={draft} onUndo={props.onUndo} onUnsnooze={props.onUnsnooze} />
 
         {original && (

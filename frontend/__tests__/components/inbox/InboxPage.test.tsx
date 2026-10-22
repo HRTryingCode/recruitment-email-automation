@@ -194,7 +194,7 @@ describe('InboxPage', () => {
     expect(search().get('item')).toBe('d9');
   });
 
-  it('shows the Lever section and one label chip in the reply header', async () => {
+  it('shows one label chip in the reply header and the Lever section in the scrolling body', async () => {
     installInbox(ITEMS, {
       d1: {
         thread: {
@@ -210,7 +210,9 @@ describe('InboxPage', () => {
     renderInbox('/inbox?view=interested&item=d1');
     const pane = await screen.findByRole('region', { name: 'Reply to Ada Example' });
     const header = within(pane).getByRole('banner');
-    const lever = within(header).getByRole('group', { name: 'Lever' });
+    // U2b: Lever scrolls with the message so short screens keep room for the editor.
+    expect(within(header).queryByRole('group', { name: 'Lever' })).not.toBeInTheDocument();
+    const lever = within(pane).getByRole('group', { name: 'Lever' });
     expect(within(lever).getByText('In Lever')).toBeInTheDocument();
     expect(within(lever).getByText('Senior Engineer · Phone Screen')).toBeInTheDocument();
     expect(within(lever).getByText('Checked 10m ago')).toBeInTheDocument();

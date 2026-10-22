@@ -2,7 +2,7 @@ import { fireEvent, render } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useInboxShortcuts, SHORTCUTS, type InboxShortcut } from '../../src/hooks/useInboxShortcuts';
 
-const ids: InboxShortcut[] = ['prev', 'next', 'open', 'edit', 'send', 'undo', 'dismiss', 'snooze', 'close', 'help'];
+const ids: InboxShortcut[] = ['prev', 'next', 'open', 'edit', 'send', 'undo', 'dismiss', 'snooze', 'close', 'interested', 'not_interested'];
 let handlers: Record<InboxShortcut, ReturnType<typeof vi.fn>>;
 
 function Harness({ enabled = true }: { enabled?: boolean }) {
@@ -35,7 +35,8 @@ describe('useInboxShortcuts', () => {
     ['d', {}, 'dismiss'],
     ['s', {}, 'snooze'],
     ['Escape', {}, 'close'],
-    ['?', { shiftKey: true }, 'help'],
+    ['i', {}, 'interested'],
+    ['n', {}, 'not_interested'],
     ['Enter', { metaKey: true }, 'send'],
     ['Enter', { ctrlKey: true }, 'send'],
     ['z', { metaKey: true }, 'undo'],
@@ -46,9 +47,16 @@ describe('useInboxShortcuts', () => {
     for (const other of ids.filter((x) => x !== id)) expect(handlers[other]).not.toHaveBeenCalled();
   });
 
+  it('leaves ? to the shell (one shared shortcuts dialog)', () => {
+    setup();
+    const ev = new KeyboardEvent('keydown', { key: '?', shiftKey: true, bubbles: true, cancelable: true });
+    document.body.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(false);
+  });
+
   it('never fires single-key shortcuts while typing', () => {
     const { editor, field } = setup();
-    for (const key of ['d', 's', 'e', 'j', 'k', 'ArrowDown', 'ArrowUp', 'Enter', '?']) {
+    for (const key of ['d', 's', 'e', 'i', 'n', 'j', 'k', 'ArrowDown', 'ArrowUp', 'Enter', '?']) {
       fireEvent.keyDown(editor, { key });
       fireEvent.keyDown(field, { key });
     }

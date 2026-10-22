@@ -14,8 +14,8 @@ import InboxListControls from '@/components/inbox/InboxListControls';
 import InboxRail from '@/components/inbox/InboxRail';
 import OpenReply from '@/components/inbox/OpenReply';
 import { isSendable } from '@/components/inbox/ReplyPane';
-import ShortcutHelpDialog from '@/components/inbox/ShortcutHelpDialog';
 import SnoozeMenu from '@/components/inbox/SnoozeMenu';
+import { useHideCandidate } from '@/hooks/useHideCandidate';
 import { useInboxActions } from '@/hooks/useInboxActions';
 import { useInboxList } from '@/hooks/useInboxList';
 import { useLiveAnnouncer } from '@/hooks/useLiveAnnouncer';
@@ -29,6 +29,7 @@ import { fetchLeverMe } from '@/lib/leverApi';
 import { prefetchAddToLever } from '@/lib/leverQueries';
 import { toastWarning } from '@/lib/toast';
 import { LIVE_DRAFT_STATUSES } from '@/lib/candidates';
+import { usePublishPaletteCandidate } from '@/lib/paletteContext';
 import { VIEWS, groupByRole, isInboxView, mergePages, nextItemId } from '@/lib/inbox';
 import { cn } from '@/lib/utils';
 
@@ -198,7 +199,6 @@ export default function InboxPage() {
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [batchOpen, setBatchOpen] = useState(false);
-  const [helpOpen, setHelpOpen] = useState(false);
   const [checkedFor, setCheckedFor] = useState(`${listView}|${mailboxId ?? ''}`);
   // Selection belongs to one view: switching view or mailbox clears it.
   if (checkedFor !== `${listView}|${mailboxId ?? ''}`) {
@@ -215,6 +215,30 @@ export default function InboxPage() {
   }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   const name = draft?.thread?.candidate?.name ?? current?.candidate?.name ?? 'candidate';
+  usePublishPaletteCandidate(
+    selectedCandidateId ? { id: selectedCandidateId, name: draft?.thread?.candidate?.name ?? current?.candidate?.name ?? 'Unknown candidate' } : null
+  );
+
+  // A draftless Needs-review candidate: I / N write a reply, D hides them.
+  // Same cache entry as CandidatePane, so the thread is there once it shows.
+  const triageItem = candidateOpen ? current : undefined;
+  const triageCandidateId = triageItem?.candidate?.id ?? triageItem?.id;
+  const { data: triageCandidate } = useQuery({
+    queryKey: ['candidate', triageCandidateId],
+    queryFn: () => fetchCandidate(triageCandidateId!),
+    enabled: !!triageCandidateId,
+  });
+  const triageThreadId = triageCandidate?.data.threads?.[0]?.id;
+  const hide = useHideCandidate(triageCandidateId, triageItem?.candidate?.name ?? 'Unknown candidate', () =>
+    openItem(itemId ? nextItemId(keys, itemId) ?? undefined : undefined)
+  );
+  const replyAs = (classification: 'INTERESTED' | 'NOT_INTERESTED') => {
+    if (!triageItem || !itemId || !triageThreadId || triageDraft.pendingFor(itemId)) return;
+    triageDraft.start(itemId, triageItem, triageThreadId, classification);
+  };
+  const hideCurrent = () => {
+    if (triageItem && itemId && !hide.isPending && !triageDraft.pendingFor(itemId)) hide.mutate();
+  };
   const sendable = isSendable(draft) && draft?.id === draftId;
 
   // With nothing picked yet the first reply is the cursor, so ↵ works at once.
@@ -257,13 +281,15 @@ export default function InboxPage() {
     },
     undo: actions.undoLast,
     dismiss: () => {
-      if (sendable) setDismissOpen(true);
+      if (triageItem) hideCurrent();
+      else if (sendable) setDismissOpen(true);
     },
+    interested: () => replyAs('INTERESTED'),
+    not_interested: () => replyAs('NOT_INTERESTED'),
     snooze: () => {
       if (sendable) setSnoozeOpen(true);
     },
     close,
-    help: () => setHelpOpen(true),
   }, true, (id) => id === 'undo' && actions.canUndoLast() && !editorDirty.current);
 
   const menus =
@@ -319,6 +345,7 @@ export default function InboxPage() {
 
   return (
     <div className="flex min-h-0 w-full flex-1 bg-background text-foreground">
+      <h1 className="sr-only">Inbox</h1>
       <aside aria-label="Inbox" className="w-52 shrink-0 overflow-y-auto border-r border-border max-xl:hidden 2xl:w-56">
         <InboxRail view={listView} counts={counts} />
       </aside>
@@ -362,7 +389,8 @@ export default function InboxPage() {
             pending={triageDraft.pendingFor(itemId!)}
             error={triageDraft.errorFor(itemId!)}
             onRetry={() => triageDraft.retry(itemId!)}
-            onDone={() => openItem(nextItemId(keys, itemId!) ?? undefined)}
+            onHide={hideCurrent}
+            hiding={hide.isPending}
           />
         ) : itemId ? (
           <div className="flex h-full min-h-0 flex-col">
@@ -428,7 +456,6 @@ export default function InboxPage() {
           return res;
         }}
       />
-      <ShortcutHelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
       <div data-testid="inbox-live" role="status" aria-live="polite" className="sr-only">
         {live.message}
       </div>
