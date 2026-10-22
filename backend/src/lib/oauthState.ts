@@ -11,8 +11,17 @@
 //
 // Each row's lifetime: insert at /gmail/auth, optionally update consumedAt at
 // /gmail/callback, get reaped opportunistically (rows older than the 10-minute
-// TTL) on the next insert. One-time-use is enforced by checking consumedAt.
+// TTL) on the next insert. One-time-use is enforced atomically: a single
+// conditional updateMany on (state, consumedAt IS NULL, fresh) — exactly one
+// concurrent callback can flip consumedAt.
+//
+// Binding (audit B6 / L6): the state string is `<64 hex>.<userId>`. The full
+// string is stored server-side, so the userId suffix can't be forged — the
+// callback only succeeds for a state we issued — and it lets the callback
+// attribute the connect to (and authorize it for) the user who started it,
+// without a schema change.
 
+import crypto from 'crypto';
 import { prisma } from '../db/client';
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -29,16 +38,21 @@ export async function storeOAuthState(state: string): Promise<void> {
   await prisma.oAuthState.create({ data: { state } });
 }
 
-export async function consumeOAuthState(state: string): Promise<boolean> {
-  const row = await prisma.oAuthState.findUnique({ where: { state } });
-  if (!row) return false;
-  if (row.consumedAt) return false; // one-time use — protect against replay
-  if (row.createdAt.getTime() + OAUTH_STATE_TTL_MS < Date.now()) return false;
-  // Mark consumed; if a concurrent callback also marks it, the second
-  // findUnique above would already have observed consumedAt and rejected.
-  await prisma.oAuthState.update({
-    where: { state },
+export async function createOAuthState(userId: string): Promise<string> {
+  const state = `${crypto.randomBytes(32).toString('hex')}.${userId}`;
+  await storeOAuthState(state);
+  return state;
+}
+
+export async function consumeOAuthState(
+  state: string
+): Promise<{ userId: string | null } | null> {
+  const cutoff = new Date(Date.now() - OAUTH_STATE_TTL_MS);
+  const { count } = await prisma.oAuthState.updateMany({
+    where: { state, consumedAt: null, createdAt: { gte: cutoff } },
     data: { consumedAt: new Date() },
   });
-  return true;
+  if (count !== 1) return null;
+  const dot = state.indexOf('.');
+  return { userId: dot >= 0 ? state.slice(dot + 1) || null : null };
 }

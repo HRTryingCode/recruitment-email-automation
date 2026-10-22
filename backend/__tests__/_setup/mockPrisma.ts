@@ -33,7 +33,7 @@ export interface MockPrisma {
   emailMessage: MockedMethods<'findUnique' | 'findFirst' | 'findMany' | 'count' | 'groupBy'>;
   expectedSender: MockedMethods<'findMany' | 'findUnique' | 'upsert' | 'update' | 'delete'>;
   systemLog: MockedMethods<'create' | 'findMany' | 'findFirst'>;
-  oAuthState: MockedMethods<'create' | 'findUnique' | 'update' | 'deleteMany'>;
+  oAuthState: MockedMethods<'create' | 'findUnique' | 'update' | 'updateMany' | 'deleteMany'>;
   $transaction: Mock;
   $queryRaw: Mock;
 }
@@ -68,7 +68,7 @@ export function buildPrismaMock(): MockPrisma {
     emailMessage: methods('findUnique', 'findFirst', 'findMany', 'count', 'groupBy'),
     expectedSender: methods('findMany', 'findUnique', 'upsert', 'update', 'delete'),
     systemLog: methods('create', 'findMany', 'findFirst'),
-    oAuthState: methods('create', 'findUnique', 'update', 'deleteMany'),
+    oAuthState: methods('create', 'findUnique', 'update', 'updateMany', 'deleteMany'),
     $transaction: vi.fn(),
     $queryRaw: vi.fn(),
   };

@@ -13,6 +13,8 @@ import {
   mailboxOwnAddresses,
   sendAsEmailsFromGmail,
 } from '../lib/senderIdentity';
+import { COMPANY_DOMAIN, isCompanyEmail } from '../lib/accessPolicy';
+import { createError } from '../middleware/error';
 import type { Mailbox, EmailThread } from '@prisma/client';
 
 /**
@@ -146,14 +148,22 @@ export async function fetchUserInfo(
   }
 }
 
-export async function handleCallback(code: string, mailboxId?: string): Promise<Mailbox> {
+export async function handleCallback(
+  code: string,
+  opts: { actorUserId: string | null } = { actorUserId: null }
+): Promise<Mailbox> {
   const oauth2Client = createOAuth2Client();
   const { tokens } = await oauth2Client.getToken(code);
   oauth2Client.setCredentials(tokens);
 
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
   const profile = await gmail.users.getProfile({ userId: 'me' });
-  const emailAddress = profile.data.emailAddress ?? '';
+  const emailAddress = (profile.data.emailAddress ?? '').toLowerCase();
+  // L6: only company Workspace mailboxes may be connected. Checked before any
+  // DB read/write so a personal account's tokens are never stored.
+  if (!isCompanyEmail(emailAddress)) {
+    throw createError(`Only @${COMPANY_DOMAIN} mailboxes can be connected`, 403);
+  }
   // Baseline historyId so the first incremental sync isn't empty.
   const baselineHistoryId = profile.data.historyId ?? null;
 
@@ -172,6 +182,19 @@ export async function handleCallback(code: string, mailboxId?: string): Promise<
   // old baseline and now. Only reset baseline on a genuinely-new connect.
   const existing = await prisma.mailbox.findUnique({ where: { emailAddress } });
   const wasNeedsReauth = existing?.authStatus === AUTH_STATUS_NEEDS_REAUTH;
+
+  // L6: isActive=false is only ever set by the admin-only DELETE route, so a
+  // disabled mailbox stays disabled unless an admin reconnects it.
+  const actor = opts.actorUserId
+    ? await prisma.user.findUnique({ where: { id: opts.actorUserId }, select: { role: true } })
+    : null;
+  if (existing && !existing.isActive && actor?.role !== 'admin') {
+    throw createError(
+      'This mailbox was disconnected by an admin; ask an admin to reconnect it',
+      403
+    );
+  }
+
   const isRefresh =
     !!existing &&
     existing.isActive &&
@@ -209,6 +232,7 @@ export async function handleCallback(code: string, mailboxId?: string): Promise<
       emailAddress,
       displayName: resolvedDisplayName,
       mode: isRefresh ? 'refresh' : 'fresh',
+      actorUserId: opts.actorUserId,
     },
     'INFO'
   );

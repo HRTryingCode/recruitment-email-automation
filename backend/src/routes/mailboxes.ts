@@ -1,5 +1,4 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import crypto from 'crypto';
 import { prisma } from '../db/client';
 import {
   getAuthUrl,
@@ -12,7 +11,7 @@ import {
   watchMailbox,
   stopMailboxWatch,
 } from '../services/gmail.service';
-import { storeOAuthState } from '../lib/oauthState';
+import { createOAuthState } from '../lib/oauthState';
 import { createError } from '../middleware/error';
 import { requireAdmin } from '../middleware/requireAdmin';
 import { logEvent } from '../services/monitoring.service';
@@ -43,10 +42,10 @@ router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
 });
 
 // POST /api/mailboxes/gmail/auth
-router.post('/gmail/auth', async (_req: Request, res: Response, next: NextFunction) => {
+router.post('/gmail/auth', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const state = crypto.randomBytes(32).toString('hex');
-    await storeOAuthState(state);
+    if (!req.userId) return next(createError('Unauthenticated', 401));
+    const state = await createOAuthState(req.userId);
     const authUrl = getAuthUrl(state);
     res.json({ success: true, data: { authUrl } });
   } catch (err) {

@@ -16,9 +16,11 @@ const {
   serializeCredentials,
   watchMailbox,
   stopMailboxWatch,
+  handleCallback,
 } = vi.hoisted(() => ({
   watchMailbox: vi.fn(),
   stopMailboxWatch: vi.fn(),
+  handleCallback: vi.fn(),
   getAuthUrl: vi.fn(),
   resolveMailboxDisplayName: vi.fn(),
   syncMessages: vi.fn(),
@@ -37,6 +39,7 @@ vi.mock('../../src/services/gmail.service', async () => {
     syncMessages,
     createServiceAccountClient,
     serializeCredentials,
+    handleCallback,
     watchMailbox,
     stopMailboxWatch,
   };
@@ -73,6 +76,7 @@ describe('/api/mailboxes', () => {
     syncMessages.mockReset();
     createServiceAccountClient.mockReset();
     serializeCredentials.mockReset();
+    handleCallback.mockReset();
     watchMailbox.mockReset();
     stopMailboxWatch.mockReset();
     app = await loadApp();
@@ -129,6 +133,43 @@ describe('/api/mailboxes', () => {
       // The route generates state internally and threads it through getAuthUrl.
       expect(getAuthUrl).toHaveBeenCalledTimes(1);
       expect(typeof getAuthUrl.mock.calls[0]?.[0]).toBe('string');
+      // L6: state is bound to the initiating user.
+      expect(getAuthUrl.mock.calls[0]?.[0]).toMatch(/^[0-9a-f]{64}\.test-user-1$/);
+    });
+  });
+
+  describe('GET /api/mailboxes/gmail/callback (L6)', () => {
+    it('passes the user bound to the consumed state into handleCallback', async () => {
+      mockPrisma.oAuthState.updateMany.mockResolvedValueOnce({ count: 1 });
+      handleCallback.mockResolvedValueOnce({ id: 'mb-1' });
+      watchMailbox.mockResolvedValueOnce(undefined);
+      syncMessages.mockResolvedValueOnce({ scanned: 0, ingested: 0 });
+
+      const res = await request(app).get(
+        `/api/mailboxes/gmail/callback?code=abc&state=${'f'.repeat(64)}.user-42`
+      );
+
+      expect(res.status).toBe(302);
+      expect(handleCallback).toHaveBeenCalledWith('abc', { actorUserId: 'user-42' });
+    });
+
+    it('rejects a replayed / unknown state with 400 before exchanging the code', async () => {
+      mockPrisma.oAuthState.updateMany.mockResolvedValueOnce({ count: 0 });
+      const res = await request(app).get('/api/mailboxes/gmail/callback?code=abc&state=nope');
+      expect(res.status).toBe(400);
+      expect(handleCallback).not.toHaveBeenCalled();
+    });
+
+    it('surfaces a non-company account rejection as 403', async () => {
+      mockPrisma.oAuthState.updateMany.mockResolvedValueOnce({ count: 1 });
+      handleCallback.mockRejectedValueOnce(
+        Object.assign(new Error('Only @archive.com mailboxes can be connected'), { statusCode: 403 })
+      );
+      const res = await request(app).get(
+        `/api/mailboxes/gmail/callback?code=abc&state=${'f'.repeat(64)}.user-42`
+      );
+      expect(res.status).toBe(403);
+      expect(watchMailbox).not.toHaveBeenCalled();
     });
   });
 

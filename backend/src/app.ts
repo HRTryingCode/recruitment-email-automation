@@ -147,10 +147,11 @@ app.get(
       if (!state) {
         return next(createError('Missing OAuth state parameter', 400));
       }
-      if (!(await consumeOAuthState(state))) {
+      const consumed = await consumeOAuthState(state);
+      if (!consumed) {
         return next(createError('Invalid or expired OAuth state', 400));
       }
-      const mailbox = await handleCallback(code, state);
+      const mailbox = await handleCallback(code, { actorUserId: consumed.userId });
       try {
         await watchMailbox(mailbox.id);
       } catch (watchErr) {
