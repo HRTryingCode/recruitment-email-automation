@@ -12,6 +12,7 @@ vi.mock('../../src/lib/api', () => ({
   fetchCandidates: vi.fn(),
   fetchSyncHealth: vi.fn(),
   addGmailMailbox: vi.fn(),
+  fetchMailboxes: vi.fn().mockResolvedValue({ success: true, data: [] }),
 }));
 
 const fetchLookupMock = vi.mocked(api.fetchLookup);

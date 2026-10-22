@@ -10,7 +10,6 @@ import * as api from '../../src/lib/api';
 vi.mock('../../src/lib/api', () => ({
   getMe: vi.fn(),
   fetchMailboxes: vi.fn(),
-  fetchDrafts: vi.fn(),
   fetchInbox: vi.fn(),
   fetchSyncHealth: vi.fn(),
   fetchToday: vi.fn(),
@@ -124,7 +123,6 @@ describe('Inbox nav badge', () => {
   it('sums needs review + interested + not interested from the inbox counts', async () => {
     renderAt('/today');
     expect(await screen.findByLabelText('7 waiting')).toHaveTextContent('7');
-    expect(api.fetchDrafts).not.toHaveBeenCalled();
   });
 
   it('follows the mailbox filter', async () => {

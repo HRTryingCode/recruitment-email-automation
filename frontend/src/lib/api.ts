@@ -186,26 +186,6 @@ export interface DraftPresenceEntry {
   mode: PresenceMode;
 }
 
-export interface HealthStatus {
-  status: 'healthy' | 'degraded' | 'unhealthy';
-  database: { connected: boolean; latencyMs?: number };
-  claude: { available: boolean };
-  mailboxes: Array<{
-    id: string;
-    emailAddress: string;
-    provider: string;
-    isActive: boolean;
-    watchExpiry?: string;
-  }>;
-  recentLogs: Array<{
-    id: string;
-    event: string;
-    level: string;
-    createdAt: string;
-    details: unknown;
-  }>;
-}
-
 interface PaginatedResponse<T> {
   success: boolean;
   data: T[];
@@ -245,28 +225,6 @@ export async function fetchCandidates(filters?: {
 }): Promise<PaginatedResponse<Candidate>> {
   const res = await api.get('/candidates', { params: filters });
   return res.data as PaginatedResponse<Candidate>;
-}
-
-export interface CandidateCounts {
-  candidates: number;
-  awaitingReply: number;
-  needsReview: number;
-  pendingDrafts: number;
-  byMailbox: Array<{
-    mailboxId: string | null;
-    candidates: number;
-    awaitingReply: number;
-    needsReview: number;
-    pendingDrafts: number;
-  }>;
-}
-
-/** Server-side pipeline counts for the dashboard (M18). */
-export async function fetchCandidateCounts(filters?: {
-  mailboxId?: string;
-}): Promise<SingleResponse<CandidateCounts>> {
-  const res = await api.get('/candidates/counts', { params: filters });
-  return res.data as SingleResponse<CandidateCounts>;
 }
 
 export async function fetchCandidate(id: string): Promise<SingleResponse<Candidate>> {
@@ -342,37 +300,7 @@ export async function fetchMailboxSignatureHtml(id: string): Promise<{ signature
   return (res.data as { success: boolean; data: { signatureHtml: string | null } }).data;
 }
 
-// Threads
-export async function fetchThreads(filters?: {
-  mailboxId?: string;
-  candidateId?: string;
-  page?: number;
-  limit?: number;
-}): Promise<PaginatedResponse<EmailThread>> {
-  const res = await api.get('/emails/threads', { params: filters });
-  return res.data as PaginatedResponse<EmailThread>;
-}
-
-export async function fetchMessages(
-  threadId: string
-): Promise<SingleResponse<EmailThread>> {
-  const res = await api.get(`/emails/threads/${threadId}/messages`);
-  return res.data as SingleResponse<EmailThread>;
-}
-
 // Drafts
-export async function fetchDrafts(filters?: {
-  status?: string;
-  mailboxId?: string;
-  page?: number;
-  limit?: number;
-  includeReplied?: boolean;
-  expired?: boolean;
-}): Promise<PaginatedResponse<EmailDraft>> {
-  const res = await api.get('/drafts', { params: filters });
-  return res.data as PaginatedResponse<EmailDraft>;
-}
-
 export async function fetchDraft(id: string): Promise<SingleResponse<EmailDraft>> {
   const res = await api.get(`/drafts/${id}`);
   return res.data as SingleResponse<EmailDraft>;
@@ -404,22 +332,6 @@ export interface CcOption {
 export async function fetchDraftCcOptions(draftId?: string): Promise<{ success: boolean; data: CcOption[] }> {
   const res = await api.get('/drafts/cc-options', { params: draftId ? { draftId } : undefined });
   return res.data as { success: boolean; data: CcOption[] };
-}
-
-export async function approveDraft(id: string): Promise<{ success: boolean; message: string }> {
-  const res = await api.post(`/drafts/${id}/approve`);
-  return res.data as { success: boolean; message: string };
-}
-
-export async function discardDraft(id: string): Promise<{ success: boolean; message: string }> {
-  const res = await api.post(`/drafts/${id}/discard`);
-  return res.data as { success: boolean; message: string };
-}
-
-/** Legacy send of an APPROVED draft (deprecated with approveDraft; use scheduleSendDraft). */
-export async function sendDraft(id: string): Promise<{ success: boolean; message: string }> {
-  const res = await api.post(`/drafts/${id}/send`);
-  return res.data as { success: boolean; message: string };
 }
 
 /**
@@ -683,12 +595,6 @@ export async function generateDraftForThread(
   return res.data as SingleResponse<EmailDraft>;
 }
 
-// Health
-export async function fetchHealth(): Promise<SingleResponse<HealthStatus>> {
-  const res = await api.get('/health');
-  return res.data as SingleResponse<HealthStatus>;
-}
-
 // Sync-health (per-mailbox observability for dashboard / debug)
 export interface MailboxSyncHealth {
   mailboxId: string;
@@ -720,21 +626,6 @@ export interface MailboxSyncHealth {
 export async function fetchSyncHealth(): Promise<SingleResponse<MailboxSyncHealth[]>> {
   const res = await api.get('/internal/sync-health');  // maps to /api/internal/sync-health
   return res.data as SingleResponse<MailboxSyncHealth[]>;
-}
-
-export async function debugDrafts(): Promise<{ success: boolean; data: { total: number; byStatus: Record<string, unknown[]> } }> {
-  const res = await api.get('/internal/debug/drafts');
-  return res.data as { success: boolean; data: { total: number; byStatus: Record<string, unknown[]> } };
-}
-
-export async function debugMailbox(email: string): Promise<{ success: boolean; data: unknown }> {
-  const res = await api.get('/internal/debug/mailbox', { params: { email } });
-  return res.data as { success: boolean; data: unknown };
-}
-
-export async function debugCandidate(email: string): Promise<{ success: boolean; data: unknown }> {
-  const res = await api.get('/internal/debug/candidate', { params: { email } });
-  return res.data as { success: boolean; data: unknown };
 }
 
 // Auth

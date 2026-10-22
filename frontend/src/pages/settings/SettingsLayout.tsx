@@ -15,7 +15,7 @@ export default function SettingsLayout() {
   const [params] = useSearchParams();
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader title="Settings" description="Mailboxes and notifications, integrations and the team." />
+      <PageHeader heading="Settings" description="Mailboxes and notifications, integrations and the team." />
       <nav aria-label="Settings sections" className="flex flex-wrap gap-1">
         {SECTIONS.map(({ path, label, icon: Icon }) => {
           const active = pathname.startsWith(path);

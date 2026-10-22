@@ -31,7 +31,7 @@ export default function TodayPage() {
 
   return (
     <div className="flex min-w-0 flex-col gap-6">
-      <PageHeader title="Today" description="Replies waiting, what went out, and what's next for Lever." />
+      <PageHeader heading="Today" description="Replies waiting, what went out, and what's next for Lever." />
 
       {today.isError ? (
         <QueryError

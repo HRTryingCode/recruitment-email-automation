@@ -180,7 +180,7 @@ export default function CandidateTable({ mailboxId }: Props) {
 
   return (
     <div className="flex flex-col gap-4">
-      <PageHeader title="Candidates" description="Every candidate detected across connected mailboxes." />
+      <PageHeader heading="Candidates" description="Every candidate detected across connected mailboxes." />
 
       <SavedViewsBar filters={filters} viewId={url.viewId} onSelect={(v) => setFilters(v.filters, v.id)} />
       <FilterBar filters={filters} onChange={setFilters} total={total} />

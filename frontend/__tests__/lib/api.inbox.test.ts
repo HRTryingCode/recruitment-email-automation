@@ -42,11 +42,6 @@ describe('inbox API client (U0)', () => {
     expect(post).toHaveBeenLastCalledWith('/drafts/d1/unsnooze', {});
   });
 
-  it('legacy sendDraft still posts no body (APPROVED drafts)', async () => {
-    await client.sendDraft('d1');
-    expect(post).toHaveBeenLastCalledWith('/drafts/d1/send');
-  });
-
   it('presence heartbeat and clear', async () => {
     await client.heartbeatDraftPresence('d1', 'editing');
     expect(post).toHaveBeenLastCalledWith('/drafts/d1/presence', { mode: 'editing' });

@@ -7,14 +7,14 @@ import { Button } from '../../src/components/ui/button';
 
 describe('PageHeader', () => {
   it('renders the page h1, description and actions', () => {
-    render(<PageHeader title="Today" description="What is waiting." actions={<Button>Export</Button>} />);
+    render(<PageHeader heading="Today" description="What is waiting." actions={<Button>Export</Button>} />);
     expect(screen.getByRole('heading', { level: 1, name: 'Today' })).toBeVisible();
     expect(screen.getByText('What is waiting.')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Export' })).toBeVisible();
   });
 
   it('srOnly keeps the h1 for screen readers without showing a header', () => {
-    render(<PageHeader title="Inbox" srOnly />);
+    render(<PageHeader heading="Inbox" srOnly />);
     expect(screen.getByRole('heading', { level: 1, name: 'Inbox' })).toHaveClass('sr-only');
   });
 });
