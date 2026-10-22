@@ -20,7 +20,7 @@ export const AREAS = {
   R1: 'Shell — App, main, pages (Login, NotFound, route pages, settings), components/shell + settings, ThemeToggle, MailboxFilter, ProtectedRoute, lib, hooks',
   R2: 'Inbox — InboxPage, components/inbox/*, inbox hooks, DraftCcSelect, lib/inbox',
   R3: 'Candidates — CandidateTable, LookupBar, LookupIntegrations, LeverBadge, AddToLever*, JobCombobox, Gem*',
-  R4: 'Today — Dashboard, UnmonitoredSenders',
+  R4: 'Today — TodayPage, components/today/*, UnmonitoredSenders',
 };
 
 const AREA_BY_FILE = [
@@ -29,7 +29,9 @@ const AREA_BY_FILE = [
   [/^hooks\/(useInbox\w*|useDraftEditor|useDraftPresence)\.ts$/, 'R2'],
   [/^components\/DraftCcSelect\.tsx$/, 'R2'],
   [/^lib\/inbox\.ts$/, 'R2'],
-  [/^components\/(Dashboard|UnmonitoredSenders)\.tsx$/, 'R4'],
+  [/^pages\/TodayPage\.tsx$/, 'R4'],
+  [/^components\/today\//, 'R4'],
+  [/^components\/UnmonitoredSenders\.tsx$/, 'R4'],
   [/^components\/(CandidateTable|LookupBar|LookupIntegrations|LeverBadge|AddToLeverButton|AddToLeverDialog|GemConnect|GemReturnToast|JobCombobox)\.tsx$/, 'R3'],
   // Everything else (pages, App, main, shell components, lib, other hooks,
   // and any new file nobody claimed yet) belongs to the shell batch.
