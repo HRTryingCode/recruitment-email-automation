@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import IntegrationsSettings from '../../src/pages/settings/IntegrationsSettings';
 import TeamSettings from '../../src/pages/settings/TeamSettings';
@@ -28,10 +28,12 @@ describe('Settings → Integrations', () => {
       configured: true, createEnabled: false, appEmail: 'rae@archive.com', leverUser: { id: 'lu1', name: 'Rae R' },
     });
     wrap(<IntegrationsSettings />);
-    expect(await screen.findByText('Connected')).toHaveAttribute('data-status', 'OK');
-    expect(screen.getByRole('button', { name: 'Disconnect' })).toBeInTheDocument();
-    expect(await screen.findByText('Connected')).toBeInTheDocument();
-    expect(screen.getByText('Off')).toBeInTheDocument();
+    const gem = (await screen.findByText('Gem')).closest('[data-slot="card"]') as HTMLElement;
+    expect(await within(gem).findByText('Connected')).toHaveAttribute('data-status', 'OK');
+    expect(within(gem).getByRole('button', { name: 'Disconnect' })).toBeInTheDocument();
+    const lever = screen.getByText('Lever').closest('[data-slot="card"]') as HTMLElement;
+    expect(await within(lever).findByText('Connected')).toBeInTheDocument();
+    expect(within(lever).getByText('Off')).toBeInTheDocument();
     expect(screen.getByText('Rae R')).toBeInTheDocument();
   });
 
