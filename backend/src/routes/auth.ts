@@ -6,6 +6,7 @@ import { issueToken } from '../services/auth.service';
 import { requireAuth } from '../middleware/requireAuth';
 import { createError } from '../middleware/error';
 import { config } from '../config';
+import { checkLogin, isAdminEmail } from '../lib/accessPolicy';
 
 const router = Router();
 
@@ -70,25 +71,25 @@ router.post(
       }
 
       const email = payload.email.toLowerCase();
-      if (!email.endsWith('@archive.com')) {
-        return next(createError('Access restricted to @archive.com accounts', 403));
+      const decision = checkLogin(email, payload.hd);
+      if (!decision.allowed) {
+        return next(
+          createError(
+            decision.reason === 'domain'
+              ? 'Access restricted to @archive.com Google Workspace accounts'
+              : 'This account is not authorized to use the recruiting app',
+            403
+          )
+        );
       }
       const googleId = payload.sub;
       const name = payload.name ?? null;
       const avatarUrl = payload.picture ?? null;
 
-      // Belt-and-braces with the 6_user_role data migration: if the founding
-      // operator signs in on a fresh DB (where the migration's UPDATE was a
-      // no-op because the row didn't exist yet), make sure they land with the
-      // admin role rather than the default `recruiter`.
-      // ADMIN_EMAILS is a comma-separated list of emails that should always
-      // receive the admin role on login. Defaults to the original founding
-      // operator; expand as needed via the env var.
-      const adminEmails = (process.env.ADMIN_EMAILS ?? 'andriy@archive.com,sofia@archive.com')
-        .split(',')
-        .map((e) => e.trim().toLowerCase())
-        .filter(Boolean);
-      const isFoundingAdmin = adminEmails.includes(email);
+      // ADMIN_EMAILS (env, no default) promotes listed users to admin on
+      // sign-in. It never demotes: removing someone from the list leaves
+      // their DB role alone, so revoke admin in the DB as well.
+      const isConfiguredAdmin = isAdminEmail(email);
 
       const existing = await prisma.user.findUnique({ where: { email } });
       let user;
@@ -99,7 +100,7 @@ router.post(
             googleId: existing.googleId ?? googleId,
             avatarUrl: existing.avatarUrl ?? avatarUrl,
             name: existing.name ?? name,
-            ...(isFoundingAdmin && existing.role !== 'admin'
+            ...(isConfiguredAdmin && existing.role !== 'admin'
               ? { role: 'admin' }
               : {}),
           },
@@ -111,7 +112,7 @@ router.post(
             googleId,
             avatarUrl,
             name,
-            ...(isFoundingAdmin ? { role: 'admin' } : {}),
+            ...(isConfiguredAdmin ? { role: 'admin' } : {}),
           },
         });
       }
