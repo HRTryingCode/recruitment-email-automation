@@ -193,6 +193,15 @@ describe('/api/mailboxes', () => {
   });
 
   describe('POST /api/mailboxes/:id/resync', () => {
+    it('returns 403 for a non-admin (L5: re-ingest + Claude on every message)', async () => {
+      mockPrisma.user.findUnique.mockResolvedValueOnce({ id: 'test-user-1', role: 'recruiter' });
+      const res = await request(app)
+        .post('/api/mailboxes/mb-1/resync')
+        .set('Authorization', AUTH);
+      expect(res.status).toBe(403);
+      expect(syncMessages).not.toHaveBeenCalled();
+    });
+
     it('returns 401 without auth', async () => {
       const res = await request(app).post('/api/mailboxes/mb-1/resync');
       expect(res.status).toBe(401);
@@ -303,6 +312,15 @@ describe('/api/mailboxes', () => {
   });
 
   describe('POST /api/mailboxes/refresh-all-profiles', () => {
+    it('returns 403 for a non-admin (L5)', async () => {
+      mockPrisma.user.findUnique.mockResolvedValueOnce({ id: 'test-user-1', role: 'recruiter' });
+      const res = await request(app)
+        .post('/api/mailboxes/refresh-all-profiles')
+        .set('Authorization', AUTH);
+      expect(res.status).toBe(403);
+      expect(mockPrisma.mailbox.findMany).not.toHaveBeenCalled();
+    });
+
     it('returns 401 without auth', async () => {
       const res = await request(app).post('/api/mailboxes/refresh-all-profiles');
       expect(res.status).toBe(401);

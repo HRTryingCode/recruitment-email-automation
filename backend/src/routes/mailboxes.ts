@@ -60,7 +60,8 @@ router.post('/gmail/auth', async (_req: Request, res: Response, next: NextFuncti
 // requireAuth. The state-validation logic lives there as well.
 
 // POST /api/mailboxes/:id/resync
-router.post('/:id/resync', async (req: Request, res: Response, next: NextFunction) => {
+// Admin-only: a 30-day re-ingest that runs Claude on every new message.
+router.post('/:id/resync', requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = String(req.params.id);
     const mailbox = await prisma.mailbox.findUnique({ where: { id } });
@@ -201,6 +202,7 @@ router.post('/workspace/connect', requireAdmin, async (req: Request, res: Respon
 // timeout (we hit Google userinfo for each).
 router.post(
   '/refresh-all-profiles',
+  requireAdmin,
   async (_req: Request, res: Response, next: NextFunction) => {
     try {
       const mailboxes = await prisma.mailbox.findMany({
