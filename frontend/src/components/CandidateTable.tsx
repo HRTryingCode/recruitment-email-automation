@@ -54,6 +54,7 @@ import { Skeleton } from './ui/skeleton';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './ui/empty';
 import { CandidateLeverBadge } from './LeverBadge';
 import AddToLeverButton from './AddToLeverButton';
+import { prefetchAddToLever } from '@/lib/leverQueries';
 import { useLeverAutoRefresh } from '../lib/leverAutoRefresh';
 
 function ReplyStatusBadge({ candidate }: { candidate: Candidate }) {
@@ -559,11 +560,14 @@ export default function CandidateTable({ mailboxId }: Props) {
                       key={candidate.id}
                       candidate={candidate}
                       expanded={expandedId === candidate.id}
-                      onToggle={() =>
-                        setExpandedId(
-                          expandedId === candidate.id ? null : candidate.id
-                        )
-                      }
+                      onToggle={() => {
+                        const expanding = expandedId !== candidate.id;
+                        // Selecting a row warms Add to Lever (H5) when its button shows.
+                        if (expanding && candidate.leverState && candidate.leverState !== 'ERROR') {
+                          prefetchAddToLever(queryClient, { candidateId: candidate.id });
+                        }
+                        setExpandedId(expanding ? candidate.id : null);
+                      }}
                       onChangeStatus={(status) =>
                         // IGNORED must discard live drafts: same flow as the
                         // ignore button, not a bare status write (M20).

@@ -24,15 +24,13 @@ export interface LeverMe {
 
 export type GemLookupStatus = 'FOUND' | 'NOT_FOUND' | 'NOT_CONNECTED' | 'NEEDS_REAUTH' | 'UNAVAILABLE';
 
+/** App-side half of the Add to Lever payload (fast: no Gem). */
 export interface LeverPrefill {
   candidateId: string | null;
   name: string | null;
   email: string;
   headline: string | null;
-  location: string | null;
-  phone: string | null;
   linkedinUrl: string | null;
-  resume: { available: boolean; source: string | null; filename: string | null };
   suggestedPostingId: string | null;
   stageId: string | null;
   stageName: string;
@@ -42,8 +40,21 @@ export interface LeverPrefill {
   note: string;
   existing: LeverOpportunity[];
   existingState: LeverState;
-  gem: { status: GemLookupStatus; message?: string };
   createEnabled: boolean;
+}
+
+/** Gem half (H5): cached on the candidate server-side, live on a miss. */
+export interface LeverGemPrefill {
+  status: GemLookupStatus;
+  message?: string;
+  source: 'live' | 'cache' | 'cache_stale';
+  fetchedAt: string | null;
+  name: string | null;
+  headline: string | null;
+  location: string | null;
+  phone: string | null;
+  linkedinUrl: string | null;
+  resume: { available: boolean; source: string | null; filename: string | null };
 }
 
 export interface CreateLeverBody {
@@ -94,6 +105,14 @@ export async function fetchLeverPrefill(target: LeverTarget): Promise<LeverPrefi
       ? await api.get(`/candidates/${encodeURIComponent(target.candidateId)}/lever/prefill`)
       : await api.get('/lookup/lever-prefill', { params: { email: target.email } });
   return (res.data as Ok<LeverPrefill>).data;
+}
+
+export async function fetchLeverGemPrefill(target: LeverTarget): Promise<LeverGemPrefill> {
+  const res =
+    'candidateId' in target
+      ? await api.get(`/candidates/${encodeURIComponent(target.candidateId)}/lever/prefill/gem`)
+      : await api.get('/lookup/lever-prefill/gem', { params: { email: target.email } });
+  return (res.data as Ok<LeverGemPrefill>).data;
 }
 
 export async function createLeverOpportunity(target: LeverTarget, body: CreateLeverBody): Promise<CreateLeverResult> {

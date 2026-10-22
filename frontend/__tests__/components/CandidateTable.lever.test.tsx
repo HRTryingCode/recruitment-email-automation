@@ -29,7 +29,12 @@ vi.mock('../../src/lib/leverApi', () => ({
     appEmail: 'paul.b@archive.com',
     leverUser: { id: 'lu', name: 'Paul' },
   }),
+  // H5: selecting a row prefetches the Add to Lever dialog's data.
+  fetchLeverPrefill: vi.fn().mockReturnValue(new Promise(() => {})),
+  fetchLeverGemPrefill: vi.fn().mockReturnValue(new Promise(() => {})),
+  fetchLeverPostings: vi.fn().mockReturnValue(new Promise(() => {})),
 }));
+import * as leverApi from '../../src/lib/leverApi';
 
 const base = { mailboxId: 'mb-1', createdAt: '2026-05-19T10:00:00.000Z', updatedAt: '2026-05-20T10:00:00.000Z' };
 const CANDIDATES: Candidate[] = [
@@ -125,6 +130,20 @@ describe('<CandidateTable /> Lever badge (F2)', () => {
     expect(within(row1).getByRole('button', { name: 'Add to another job' })).toBeInTheDocument();
     const row3 = screen.getByText('Never Checked').closest('tr')!;
     expect(within(row3).queryByRole('button', { name: /Add to/ })).toBeNull();
+  });
+
+  it('H5: selecting a row with an Add to Lever button prefetches the dialog data; unchecked rows do not', async () => {
+    vi.mocked(api.fetchCandidates).mockResolvedValue({
+      success: true,
+      data: CANDIDATES,
+      meta: { total: CANDIDATES.length, page: 1, limit: 100 },
+    });
+    renderTable();
+    await userEvent.click(await screen.findByText('Never Checked'));
+    expect(leverApi.fetchLeverGemPrefill).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByText('Nobody Known'));
+    await waitFor(() => expect(leverApi.fetchLeverGemPrefill).toHaveBeenCalledWith({ candidateId: 'c2' }));
+    expect(leverApi.fetchLeverPrefill).toHaveBeenCalledWith({ candidateId: 'c2' });
   });
 
   it('auto-refreshes only never-checked rows, once, and swaps in the result (H1)', async () => {

@@ -12,10 +12,16 @@
 //   5. Lever must be reachable for a duplicate check, and the email must not
 //      already have an opportunity on that posting.
 // The résumé (if any) is streamed from Gem's presigned URL straight into the
-// multipart create; it is never stored. Only the LinkedIn URL is kept.
+// multipart create; it is never stored. Only the LinkedIn URL and the
+// gem* cache columns (gemEnrichment.service) are kept.
+//
+// Prefill is split (H5) so the dialog opens on app data in < 300ms:
+// buildPrefill = DB + cached Lever columns + postings/stages (no Gem);
+// buildGemPrefill = Gem only, served from the Candidate gem* cache when
+// fresh and refreshed in the background when stale.
 import { z } from 'zod';
 import { prisma } from '../db/client';
-import { LeverClient, leverOpportunityUrl, type LeverOpportunity, type LeverState } from './lever.service';
+import { LeverClient, leverOpportunityUrl, type LeverOpportunity, type LeverState, type LeverStatus } from './lever.service';
 import {
   LeverWriteClient,
   LeverWriteError,
@@ -23,7 +29,14 @@ import {
   type LeverStage,
   type LeverResumeFile,
 } from './leverWrite.service';
-import { appBaseUrl, lookupGemPerson, type GemLookup, type GemLookupStatus } from './gem.service';
+import {
+  appBaseUrl,
+  gemConnectionStatus,
+  lookupGemPerson,
+  type GemLookup,
+  type GemLookupStatus,
+} from './gem.service';
+import { gemCacheState, persistGemEnrichment, scheduleGemEnrichment } from './gemEnrichment.service';
 import { normalizeLinkedinUrl } from '../lib/linkedin';
 import { refreshCandidateLever } from './leverSync.service';
 import { logEvent } from './monitoring.service';
@@ -36,6 +49,8 @@ const IDEMPOTENCY_TTL_MS = 10 * 60 * 1000;
 const MAX_EXCERPT = 500;
 const MAX_RESUME_BYTES = 10 * 1024 * 1024;
 const RESUME_TIMEOUT_MS = 15_000;
+/** Cached Candidate.lever* columns younger than this stand in for a live Lever check in the prefill. */
+const LEVER_CACHE_FRESH_MS = 60 * 60 * 1000;
 
 type Writer = Pick<
   LeverWriteClient,
@@ -47,12 +62,12 @@ type Reader = Pick<LeverClient, 'configured' | 'findByEmail'>;
 export const addToLeverDeps: {
   writer: () => Writer;
   reader: () => Reader;
-  gemLookup: (userId: string, email: string) => Promise<GemLookup>;
+  gemLookup: (userId: string, email: string, opts?: { extId?: string | null }) => Promise<GemLookup>;
   fetchFn: typeof fetch;
 } = {
   writer: () => new LeverWriteClient(),
   reader: () => new LeverClient({ maxRetries: 1 }),
-  gemLookup: (userId, email) => lookupGemPerson(userId, email),
+  gemLookup: (userId, email, opts) => lookupGemPerson(userId, email, opts),
   fetchFn: (...args) => fetch(...args),
 };
 
@@ -225,15 +240,15 @@ export function buildNoteText(p: {
 
 // ── Prefill ────────────────────────────────────────────────────────────────
 
+/** App-side half of the Add to Lever payload (no Gem). */
 export interface LeverPrefill {
   candidateId: string | null;
   name: string | null;
   email: string;
+  /** From the candidate's app title/company; Gem's fills in only if this is empty. */
   headline: string | null;
-  location: string | null;
-  phone: string | null;
+  /** Stored on the candidate (typed earlier, or cached from Gem). */
   linkedinUrl: string | null;
-  resume: { available: boolean; source: string | null; filename: string | null };
   suggestedPostingId: string | null;
   stageId: string | null;
   stageName: string;
@@ -243,8 +258,32 @@ export interface LeverPrefill {
   note: string;
   existing: LeverOpportunity[];
   existingState: LeverState;
-  gem: { status: GemLookupStatus; message?: string };
   createEnabled: boolean;
+}
+
+export interface PrefillTimings {
+  dbMs: number;
+  leverExistingMs: number;
+  postingsMs: number;
+  totalMs: number;
+  /** Existing opportunities came from Candidate.lever* (no Lever call). */
+  leverCached: boolean;
+}
+
+export type GemPrefillSource = 'live' | 'cache' | 'cache_stale';
+
+/** Gem half of the payload. */
+export interface LeverGemPrefill {
+  status: GemLookupStatus;
+  message?: string;
+  source: GemPrefillSource;
+  fetchedAt: string | null;
+  name: string | null;
+  headline: string | null;
+  location: string | null;
+  phone: string | null;
+  linkedinUrl: string | null;
+  resume: { available: boolean; source: string | null; filename: string | null };
 }
 
 const candidateSelect = {
@@ -255,10 +294,22 @@ const candidateSelect = {
   title: true,
   company: true,
   linkedinUrl: true,
+  leverState: true,
+  leverOpportunityId: true,
+  leverPostingTitle: true,
+  leverStage: true,
+  leverArchivedReason: true,
+  leverCheckedAt: true,
+  gemPersonId: true,
+  gemTitle: true,
+  gemCompany: true,
+  gemLocation: true,
+  gemResumeAvailable: true,
+  gemFetchedAt: true,
   mailbox: { select: { emailAddress: true } },
 } as const;
 
-type CandidateForPrefill = {
+export type CandidateForPrefill = {
   id: string;
   name: string;
   email: string;
@@ -266,6 +317,18 @@ type CandidateForPrefill = {
   title: string | null;
   company: string | null;
   linkedinUrl: string | null;
+  leverState?: string | null;
+  leverOpportunityId?: string | null;
+  leverPostingTitle?: string | null;
+  leverStage?: string | null;
+  leverArchivedReason?: string | null;
+  leverCheckedAt?: Date | string | null;
+  gemPersonId?: string | null;
+  gemTitle?: string | null;
+  gemCompany?: string | null;
+  gemLocation?: string | null;
+  gemResumeAvailable?: boolean | null;
+  gemFetchedAt?: Date | string | null;
   mailbox: { emailAddress: string } | null;
 };
 
@@ -279,63 +342,84 @@ export async function findCandidateForPrefill(by: { id: string } | { email: stri
   })) as CandidateForPrefill | null;
 }
 
-const GEM_PREFILL_OUTCOME: Record<GemLookupStatus, string> = {
-  FOUND: 'found',
-  NOT_FOUND: 'not_found',
-  NOT_CONNECTED: 'not_connected',
-  NEEDS_REAUTH: 'needs_reauth',
-  UNAVAILABLE: 'error',
-};
+const CACHEABLE_LEVER_STATES = new Set<LeverState>(['ACTIVE', 'ARCHIVED', 'HIRED', 'NOT_FOUND']);
 
 /**
- * Gem lookup for a prefill, with one GEM_PREFILL SystemLog row per attempt
- * so a "Gem didn't fill anything" report can be diagnosed. Outcome, timing
- * and which fields came back only — never the values (candidate PII).
+ * Lever status from the candidate's cached columns when checked < 1h ago
+ * (cron, H2 create hook or webhook keep them fresh), else null. Only the
+ * primary opportunity is cached; its postingId is matched by title against
+ * the open postings so the "already on this job" check still works. The
+ * create path always re-checks Lever live.
  */
-async function timedGemLookup(userId: string, email: string): Promise<GemLookup> {
+export function cachedLeverStatus(c: CandidateForPrefill | null, postings: LeverPosting[], now = Date.now()): LeverStatus | null {
+  if (!c?.leverCheckedAt || !c.leverState) return null;
+  const state = c.leverState as LeverState;
+  if (!CACHEABLE_LEVER_STATES.has(state)) return null;
+  const checkedAt = new Date(c.leverCheckedAt);
+  if (now - checkedAt.getTime() >= LEVER_CACHE_FRESH_MS) return null;
+  let opportunities: LeverOpportunity[] = [];
+  if (state !== 'NOT_FOUND' && c.leverOpportunityId) {
+    const byTitle = c.leverPostingTitle ? postings.filter((p) => p.title === c.leverPostingTitle) : [];
+    opportunities = [
+      {
+        id: c.leverOpportunityId,
+        postingId: byTitle.length === 1 ? byTitle[0]!.id : null,
+        postingTitle: c.leverPostingTitle ?? null,
+        stage: c.leverStage ?? null,
+        archived: state === 'ARCHIVED' || state === 'HIRED',
+        hired: state === 'HIRED',
+        archivedReason: c.leverArchivedReason ?? null,
+        createdAt: null,
+        updatedAt: null,
+        leverUrl: leverOpportunityUrl(c.leverOpportunityId),
+      },
+    ];
+  }
+  return { state, primary: opportunities[0] ?? null, opportunities, checkedAt: checkedAt.toISOString() };
+}
+
+function timed<T>(p: Promise<T>): Promise<{ value: T; ms: number }> {
   const t0 = Date.now();
-  const gem = await addToLeverDeps.gemLookup(userId, email).catch((): GemLookup => ({ status: 'UNAVAILABLE' }));
-  const p = gem.status === 'FOUND' ? gem.person : undefined;
-  await logEvent(
-    'GEM_PREFILL',
-    {
-      userId,
-      outcome: GEM_PREFILL_OUTCOME[gem.status],
-      durationMs: Date.now() - t0,
-      ...(p && { fields: { linkedin: !!p.linkedinUrl, title: !!p.title, location: !!p.location, resume: !!p.resume } }),
-    },
-    gem.status === 'UNAVAILABLE' ? 'WARN' : 'INFO'
-  );
-  return gem;
+  return p.then((value) => ({ value, ms: Date.now() - t0 }));
 }
 
 export async function buildPrefill(args: {
   actorUserId: string;
   email: string;
   candidate: CandidateForPrefill | null;
-}): Promise<LeverPrefill> {
+}): Promise<{ prefill: LeverPrefill; timings: PrefillTimings }> {
+  const t0 = Date.now();
   const email = args.email.trim().toLowerCase();
-  const reader = addToLeverDeps.reader();
-  const [postings, stages, gem, status, actor, latest] = await Promise.all([
-    getOpenPostings(),
-    getStages(),
-    timedGemLookup(args.actorUserId, email),
-    reader.findByEmail(email),
-    actorEmail(args.actorUserId),
-    prisma.emailMessage.findFirst({
-      where: { fromAddress: { equals: email, mode: 'insensitive' } },
-      orderBy: { receivedAt: 'desc' },
-      select: {
-        bodyText: true,
-        receivedAt: true,
-        mailbox: { select: { emailAddress: true } },
-        thread: { select: { externalThreadId: true } },
-      },
-    }),
+  const [lever, db] = await Promise.all([
+    timed(
+      Promise.all([getOpenPostings(), getStages()]).then(async ([postings, stages]) => {
+        const postingsMs = Date.now() - t0;
+        const cached = cachedLeverStatus(args.candidate, postings);
+        const tl = Date.now();
+        const status = cached ?? (await addToLeverDeps.reader().findByEmail(email));
+        return { postings, stages, status, postingsMs, leverCached: !!cached, leverExistingMs: Date.now() - tl };
+      })
+    ),
+    timed(
+      Promise.all([
+        actorEmail(args.actorUserId),
+        prisma.emailMessage.findFirst({
+          where: { fromAddress: { equals: email, mode: 'insensitive' } },
+          orderBy: { receivedAt: 'desc' },
+          select: {
+            bodyText: true,
+            receivedAt: true,
+            mailbox: { select: { emailAddress: true } },
+            thread: { select: { externalThreadId: true } },
+          },
+        }),
+      ])
+    ),
   ]);
+  const { postings, stages, status } = lever.value;
+  const [actor, latest] = db.value;
 
   const c = args.candidate;
-  const person = gem.status === 'FOUND' ? gem.person : undefined;
   const mailbox = c?.mailbox?.emailAddress ?? latest?.mailbox?.emailAddress ?? null;
   const tag = mailboxTag(mailbox);
   const excerpt = replyExcerpt(latest?.bodyText);
@@ -345,19 +429,12 @@ export async function buildPrefill(args: {
       : null;
   const stage = defaultStage(stages);
 
-  return {
+  const prefill: LeverPrefill = {
     candidateId: c?.id ?? null,
-    name: c?.name?.trim() || person?.name || null,
+    name: c?.name?.trim() || null,
     email,
-    headline: buildHeadline(person?.title ?? c?.title, person?.company ?? c?.company),
-    location: person?.location ?? null,
-    phone: person?.phone ?? null,
-    linkedinUrl: normalizeLinkedinUrl(c?.linkedinUrl) ?? person?.linkedinUrl ?? null,
-    resume: {
-      available: !!person?.resume,
-      source: person?.resume?.source ?? null,
-      filename: person?.resume?.filename ?? null,
-    },
+    headline: buildHeadline(c?.title, c?.company),
+    linkedinUrl: normalizeLinkedinUrl(c?.linkedinUrl),
     suggestedPostingId: suggestPosting(c?.role, postings)?.id ?? null,
     stageId: stage?.id ?? null,
     stageName: stage?.text ?? DEFAULT_STAGE_NAME,
@@ -373,8 +450,142 @@ export async function buildPrefill(args: {
     }),
     existing: status.state === 'ERROR' ? [] : status.opportunities,
     existingState: status.state,
-    gem: { status: gem.status, ...(gem.message && { message: gem.message }) },
     createEnabled: isLeverCreateEnabled(),
+  };
+  return {
+    prefill,
+    timings: {
+      dbMs: db.ms,
+      leverExistingMs: lever.value.leverExistingMs,
+      postingsMs: lever.value.postingsMs,
+      totalMs: Date.now() - t0,
+      leverCached: lever.value.leverCached,
+    },
+  };
+}
+
+/** `Server-Timing` header value for a prefill response (visible in DevTools). */
+export function prefillServerTiming(t: PrefillTimings): string {
+  return [
+    `db;dur=${t.dbMs}`,
+    `lever;dur=${t.leverExistingMs};desc="${t.leverCached ? 'cached' : 'live'}"`,
+    `postings;dur=${t.postingsMs}`,
+    `total;dur=${t.totalMs}`,
+  ].join(', ');
+}
+
+const GEM_PREFILL_OUTCOME: Record<GemLookupStatus, string> = {
+  FOUND: 'found',
+  NOT_FOUND: 'not_found',
+  NOT_CONNECTED: 'not_connected',
+  NEEDS_REAUTH: 'needs_reauth',
+  UNAVAILABLE: 'error',
+};
+
+/**
+ * Gem lookup for a prefill, with one GEM_PREFILL SystemLog row per attempt
+ * so a "Gem didn't fill anything" report can be diagnosed. Outcome, source,
+ * step timings and which fields came back only — never the values
+ * (candidate PII).
+ */
+async function timedGemLookup(userId: string, email: string, extId: string | null): Promise<GemLookup> {
+  const t0 = Date.now();
+  const gem = await addToLeverDeps.gemLookup(userId, email, { extId }).catch((): GemLookup => ({ status: 'UNAVAILABLE' }));
+  const p = gem.status === 'FOUND' ? gem.person : undefined;
+  await logEvent(
+    'GEM_PREFILL',
+    {
+      userId,
+      outcome: GEM_PREFILL_OUTCOME[gem.status],
+      source: 'live',
+      durationMs: Date.now() - t0,
+      ...gem.timings,
+      ...(p && { fields: { linkedin: !!p.linkedinUrl, title: !!p.title, location: !!p.location, resume: !!p.resume } }),
+    },
+    gem.status === 'UNAVAILABLE' ? 'WARN' : 'INFO'
+  );
+  return gem;
+}
+
+function gemPrefillFromCache(
+  c: CandidateForPrefill,
+  connection: 'NOT_CONNECTED' | 'PENDING' | 'OK' | 'NEEDS_REAUTH',
+  source: GemPrefillSource
+): LeverGemPrefill {
+  const connected = connection === 'OK';
+  const status: GemLookupStatus = connected
+    ? c.gemPersonId
+      ? 'FOUND'
+      : 'NOT_FOUND'
+    : connection === 'NEEDS_REAUTH'
+      ? 'NEEDS_REAUTH'
+      : 'NOT_CONNECTED';
+  return {
+    status,
+    source,
+    fetchedAt: c.gemFetchedAt ? new Date(c.gemFetchedAt).toISOString() : null,
+    name: null,
+    headline: buildHeadline(c.gemTitle, c.gemCompany),
+    location: c.gemLocation ?? null,
+    phone: null,
+    linkedinUrl: c.gemPersonId ? normalizeLinkedinUrl(c.linkedinUrl) : null,
+    // The résumé itself is fetched at create time with the clicker's own Gem connection.
+    resume: { available: connected && !!c.gemResumeAvailable, source: null, filename: null },
+  };
+}
+
+/**
+ * Gem enrichment for the dialog. Known candidate: the gem* cache when
+ * fresh (FOUND < 7 days, NOT_FOUND < 24h), the stale cache plus a
+ * background refresh when older, else a live lookup that fills the cache.
+ * Unknown email: always live, nothing stored.
+ */
+export async function buildGemPrefill(args: {
+  actorUserId: string;
+  email: string;
+  candidate: CandidateForPrefill | null;
+}): Promise<LeverGemPrefill> {
+  const email = args.email.trim().toLowerCase();
+  const c = args.candidate;
+  const state = c ? gemCacheState({ gemPersonId: c.gemPersonId ?? null, gemFetchedAt: c.gemFetchedAt ?? null }) : 'missing';
+  if (c && state !== 'missing') {
+    const t0 = Date.now();
+    const { status: connection } = await gemConnectionStatus(args.actorUserId);
+    const source: GemPrefillSource = state === 'fresh' ? 'cache' : 'cache_stale';
+    if (state === 'stale' && connection === 'OK') scheduleGemEnrichment(c.id, 'stale', { userId: args.actorUserId });
+    const out = gemPrefillFromCache(c, connection, source);
+    await logEvent(
+      'GEM_PREFILL',
+      { userId: args.actorUserId, outcome: GEM_PREFILL_OUTCOME[out.status], source, durationMs: Date.now() - t0 },
+      'INFO'
+    );
+    return out;
+  }
+
+  const gem = await timedGemLookup(args.actorUserId, email, c?.gemPersonId ?? null);
+  if (c) {
+    try {
+      await persistGemEnrichment(c.id, gem);
+    } catch (err) {
+      console.warn('[AddToLever] Gem cache write failed:', safeError(err).message);
+    }
+  }
+  const person = gem.status === 'FOUND' ? gem.person : undefined;
+  return {
+    status: gem.status,
+    ...(gem.message && { message: gem.message }),
+    source: 'live',
+    fetchedAt: new Date().toISOString(),
+    name: person?.name ?? null,
+    headline: buildHeadline(person?.title, person?.company),
+    location: person?.location ?? null,
+    phone: person?.phone ?? null,
+    linkedinUrl: person?.linkedinUrl ?? null,
+    resume: {
+      available: !!person?.resume,
+      source: person?.resume?.source ?? null,
+      filename: person?.resume?.filename ?? null,
+    },
   };
 }
 
@@ -480,6 +691,7 @@ async function doCreate(args: {
   actorUserId: string;
   email: string;
   candidateId: string | null;
+  gemPersonId?: string | null;
   req: CreateRequest;
 }): Promise<CreateResult> {
   const { req } = args;
@@ -520,7 +732,9 @@ async function doCreate(args: {
 
   let resume: LeverResumeFile | null = null;
   if (req.includeResume) {
-    const gem = await addToLeverDeps.gemLookup(args.actorUserId, email).catch((): GemLookup => ({ status: 'UNAVAILABLE' }));
+    const gem = await addToLeverDeps
+      .gemLookup(args.actorUserId, email, { extId: args.gemPersonId ?? null })
+      .catch((): GemLookup => ({ status: 'UNAVAILABLE' }));
     if (gem.status === 'FOUND' && gem.person?.resume) {
       resume = await fetchResume(gem.person.resume.url, gem.person.resume.filename);
     }
@@ -598,6 +812,8 @@ export async function createInLever(args: {
   actorUserId: string;
   email: string;
   candidateId: string | null;
+  /** Cached Candidate.gemPersonId: the résumé lookup skips Gem's search. */
+  gemPersonId?: string | null;
   req: CreateRequest;
 }): Promise<CreateResult> {
   if (!isLeverCreateEnabled()) throw new AddToLeverError(403, 'Add to Lever is turned off');
