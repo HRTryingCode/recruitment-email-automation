@@ -961,6 +961,46 @@ async function createLiveDraft(
   }
 }
 
+/**
+ * True when the sender and every To/Cc recipient are on an internal domain
+ * (config.internalDomains; audit B6 / H8). Such mail on a thread with no candidate is internal
+ * correspondence: it is stored as metadata only and never sent to Claude.
+ * Recipient entries may be raw header fragments (`"Doe, Jane" <j@x>` split on
+ * commas), so fragments without an address are ignored.
+ */
+export function isInternalOnlyMessage(msg: {
+  fromAddress: string;
+  toAddresses: string[];
+  headers: { cc: string };
+}): boolean {
+  const isInternal = (addr: string) => isInternalAddress(addr, config.internalDomains);
+  if (!isInternal(msg.fromAddress)) return false;
+  const recipients = [...msg.toAddresses, msg.headers.cc]
+    .flatMap((entry) => entry.split(','))
+    .map((frag) => {
+      const angle = frag.match(/<([^>]+)>/);
+      return (angle ? angle[1] : frag).trim().toLowerCase();
+    })
+    .filter((addr) => addr.includes('@'));
+  return recipients.every(isInternal);
+}
+
+/**
+ * Drop the body of a just-classified message if its thread is still not
+ * linked to a candidate (H8): the message was judged non-recruiting, spam,
+ * no-role, or from an ignored sender. Subject/sender/headers are kept so
+ * threading and audit still work.
+ */
+async function scrubBodyIfUnlinked(threadId: string, externalMessageId: string): Promise<void> {
+  // One conditional write: only matches while the thread is still unlinked,
+  // so a concurrent classification that links it keeps the body.
+  await prisma.emailMessage.updateMany({
+    where: { externalMessageId, threadId, thread: { candidateId: null } },
+    data: { bodyText: null, bodyHtml: null },
+  });
+}
+
+/** @internal exported for tests */
 export async function fetchAndStoreMessage(
   gmail: ReturnType<typeof google.gmail>,
   mailbox: Mailbox,
@@ -1022,8 +1062,12 @@ export async function fetchAndStoreMessage(
       });
     }
 
+    // H8: internal-only mail on a thread with no candidate is stored as
+    // metadata only and skips classification.
+    const metadataOnly = !thread.candidateId && isInternalOnlyMessage(parsed);
+
     const tooOld = opts.classifyCutoff && parsed.receivedAt < opts.classifyCutoff;
-    const willClassify = !isOutbound && !opts.skipClassification && !tooOld;
+    const willClassify = !isOutbound && !metadataOnly && !opts.skipClassification && !tooOld;
 
     // Store message. A P2002 here means a concurrent run (webhook vs
     // reconcile) stored it between our pre-check and now — that's success.
@@ -1037,8 +1081,8 @@ export async function fetchAndStoreMessage(
           fromName: parsed.fromName,
           toAddresses: JSON.stringify(parsed.toAddresses),
           subject: parsed.subject,
-          bodyText: parsed.bodyText,
-          bodyHtml: parsed.bodyHtml,
+          bodyText: metadataOnly ? null : parsed.bodyText,
+          bodyHtml: metadataOnly ? null : parsed.bodyHtml,
           receivedAt: parsed.receivedAt,
           headers: JSON.stringify(parsed.headers),
           processingState: willClassify ? 'STORED' : isOutbound ? 'PROCESSED' : 'SKIPPED',
@@ -1094,14 +1138,18 @@ export async function fetchAndStoreMessage(
       return 'stored';
     }
 
+    if (metadataOnly) return 'stored';
+
     // Inbound: classify + maybe draft.
-    // Skipped for old messages during bulk resync (stored for context only).
+    // Skipped for old messages during bulk resync (stored for context only;
+    // orphan bodies left this way are purged by the retention job).
     if (willClassify) {
       await classifyAndDraft({ mailbox, thread, parsed });
       await prisma.emailMessage.update({
         where: { id: storedMessageId },
         data: { processingState: 'PROCESSED' },
       });
+      if (!thread.candidateId) await scrubBodyIfUnlinked(thread.id, externalMessageId);
     }
     return 'stored';
   } catch (err) {
@@ -2297,6 +2345,9 @@ export async function reclassifyOrphanedThreads(mailboxId: string): Promise<{ th
 
     const latest = inbound[0];
     if (!latest) continue;
+    // H8: a metadata-only message (body never stored, or scrubbed) can't be
+    // meaningfully re-classified — skip rather than classify a bare subject.
+    if (!thread.candidateId && !latest.bodyText && !latest.bodyHtml) continue;
 
     let toAddresses: string[] = [];
     let headers = { messageId: '', inReplyTo: '', references: '', cc: '' };
@@ -2417,6 +2468,7 @@ export async function sweepStuckMessages(
         where: { id: row.id },
         data: { processingState: 'PROCESSED' },
       });
+      if (!thread.candidateId) await scrubBodyIfUnlinked(thread.id, row.externalMessageId);
       processed += 1;
     } catch (err) {
       failed += 1;
