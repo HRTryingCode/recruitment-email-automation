@@ -34,6 +34,8 @@ interface Options {
   /** Keys of the items in the open view, in list order. */
   keys: string[];
   setItem: (key?: string) => void;
+  /** Our own action is about to put replies back (undo / restore): not "new replies". */
+  onLocalChange?: () => void;
 }
 
 /**
@@ -41,15 +43,18 @@ interface Options {
  * Each ends by auto-advancing to the next reply; a 423 stops and surfaces
  * a blocking LockState whose retry replays the action with override.
  */
-export function useInboxActions({ keys, setItem }: Options) {
+export function useInboxActions({ keys, setItem, onLocalChange }: Options) {
   const qc = useQueryClient();
   const [lock, setLock] = useState<LockState | null>(null);
   const [busy, setBusy] = useState<'send' | 'rewrite' | null>(null);
   const lastSend = useRef<{ id: string; name: string; until: number; toastId: string | number } | null>(null);
   const keysRef = useRef(keys);
+  const onLocalChangeRef = useRef(onLocalChange);
   useLayoutEffect(() => {
     keysRef.current = keys;
+    onLocalChangeRef.current = onLocalChange;
   });
+  const localChange = useCallback(() => onLocalChangeRef.current?.(), []);
 
   const refreshInbox = useCallback(() => qc.invalidateQueries({ queryKey: ['inbox'] }), [qc]);
   const advanceFrom = useCallback(
@@ -88,6 +93,7 @@ export function useInboxActions({ keys, setItem }: Options) {
     async (id: string) => {
       try {
         await undoSendDraft(id);
+        localChange();
         if (lastSend.current?.id === id) {
           dismissUndoToast(lastSend.current.toastId);
           lastSend.current = null;
@@ -101,7 +107,7 @@ export function useInboxActions({ keys, setItem }: Options) {
         else toastError('Could not undo', extractApiErrorMessage(err, 'Please try again.'));
       }
     },
-    [refreshInbox, setItem]
+    [refreshInbox, setItem, localChange]
   );
 
   const send = useCallback(
@@ -134,6 +140,7 @@ export function useInboxActions({ keys, setItem }: Options) {
     async (draftId: string) => {
       try {
         await undismissDraft(draftId);
+        localChange();
         toastSuccess('Back in the inbox');
         await refreshInbox();
         void qc.invalidateQueries({ queryKey: ['draft', draftId] });
@@ -142,7 +149,7 @@ export function useInboxActions({ keys, setItem }: Options) {
         toastError('Could not restore the reply', extractApiErrorMessage(err, 'Please try again.'));
       }
     },
-    [qc, refreshInbox, setItem]
+    [qc, refreshInbox, setItem, localChange]
   );
 
   const dismiss = useCallback(
@@ -161,6 +168,7 @@ export function useInboxActions({ keys, setItem }: Options) {
     async (draftId: string) => {
       try {
         await unsnoozeDraft(draftId);
+        localChange();
         toastSuccess('Back in the inbox');
         void refreshInbox();
         void qc.invalidateQueries({ queryKey: ['draft', draftId] });
@@ -168,7 +176,7 @@ export function useInboxActions({ keys, setItem }: Options) {
         toastError('Could not unsnooze', extractApiErrorMessage(err, 'Please try again.'));
       }
     },
-    [qc, refreshInbox]
+    [qc, refreshInbox, localChange]
   );
 
   const snooze = useCallback(
@@ -269,6 +277,7 @@ export function useInboxActions({ keys, setItem }: Options) {
             seconds: UNDO_SECONDS,
             onUndo: () => {
               void Promise.allSettled(scheduled.map((id) => undoSendDraft(id))).then((results) => {
+                localChange();
                 const failed = results.filter((r) => r.status === 'rejected').length;
                 if (failed) toastError(`${failed} already sent`, 'The undo window had passed for those.');
                 else toastSuccess('Sends cancelled', 'The replies are back in your inbox.');
@@ -284,7 +293,7 @@ export function useInboxActions({ keys, setItem }: Options) {
         return undefined;
       }
     },
-    [refreshInbox]
+    [refreshInbox, localChange]
   );
 
   return {

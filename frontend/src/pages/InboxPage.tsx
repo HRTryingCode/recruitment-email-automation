@@ -19,6 +19,7 @@ import { useDraftEditor } from '@/hooks/useDraftEditor';
 import { useDraftPresence } from '@/hooks/useDraftPresence';
 import { useInboxActions } from '@/hooks/useInboxActions';
 import { useInboxList } from '@/hooks/useInboxList';
+import { useNewReplyAlerts } from '@/hooks/useNewReplyAlerts';
 import { useInboxShortcuts } from '@/hooks/useInboxShortcuts';
 import { useInboxUrlState } from '@/hooks/useInboxUrlState';
 import { useTriageDraft, type TriageResult } from '@/hooks/useTriageDraft';
@@ -116,7 +117,8 @@ export default function InboxPage() {
   const draft = draftQ.data?.data;
   const editor = useDraftEditor(draft);
   const presence = useDraftPresence(draftId, editor.focused || editor.dirty ? 'editing' : 'viewing');
-  const actions = useInboxActions({ keys, setItem: openItem });
+  const alerts = useNewReplyAlerts(counts, `${mailboxId ?? ''}|${roles.join('\n')}`);
+  const actions = useInboxActions({ keys, setItem: openItem, onLocalChange: alerts.resync });
 
   const itemIdRef = useRef(itemId);
   const listViewRef = useRef(listView);

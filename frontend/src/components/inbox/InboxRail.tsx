@@ -8,6 +8,7 @@ import { Separator } from '@/components/ui/separator';
 import { fetchSavedViews, type InboxView } from '@/lib/api';
 import { VIEWS, isInboxView } from '@/lib/inbox';
 import { cn } from '@/lib/utils';
+import DesktopAlertsToggle from './DesktopAlertsToggle';
 
 /** ?view=…&mailboxId=… (item dropped) on top of the current search. */
 export function useViewHref() {
@@ -109,6 +110,8 @@ export default function InboxRail({ view, counts }: Props) {
           </nav>
         </>
       )}
+      <Separator />
+      <DesktopAlertsToggle />
     </div>
   );
 }
