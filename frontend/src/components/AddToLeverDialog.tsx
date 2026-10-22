@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, ExternalLink, FileText, Loader2, Sparkles } from 'lucide-react';
+import { AlertTriangle, ExternalLink, FileText, Sparkles } from 'lucide-react';
 import {
   createLeverOpportunity,
   newIdempotencyKey,
@@ -22,6 +22,7 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Badge } from './ui/badge';
 import { Alert, AlertAction, AlertDescription } from './ui/alert';
+import { Spinner } from './ui/spinner';
 import JobCombobox from './JobCombobox';
 
 interface Props {
@@ -65,8 +66,8 @@ function FilledFromGem() {
 /** Skeleton chip next to a field Gem may still fill. */
 function GemPending() {
   return (
-    <Badge variant="outline" className="ml-1.5 animate-pulse text-muted-foreground">
-      <Loader2 className="size-3 animate-spin" />
+    <Badge variant="outline" className="ml-1.5 text-muted-foreground">
+      <Spinner aria-hidden />
       Fetching from Gem…
     </Badge>
   );
@@ -87,7 +88,7 @@ export default function AddToLeverDialog({ open, onOpenChange, target, onCreated
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+      <DialogContent className="max-h-svh overflow-y-auto sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>Add to Lever</DialogTitle>
           <DialogDescription>
@@ -114,7 +115,7 @@ export default function AddToLeverDialog({ open, onOpenChange, target, onCreated
           />
         ) : (
           <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+            <Spinner aria-hidden /> Loading…
           </div>
         )}
       </DialogContent>
@@ -249,26 +250,22 @@ function AddToLeverForm({
       }}
     >
       {prefill.existing.length > 0 && (
-        <div
-          role="status"
-          aria-label="Already in Lever"
-          className="rounded-lg bg-amber-500/10 p-3 text-[12.5px] text-amber-800 ring-1 ring-inset ring-amber-500/20 dark:text-amber-200"
-        >
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <ul className="space-y-0.5">
+        <Alert variant="warning" role="status" aria-label="Already in Lever">
+          <AlertTriangle />
+          <AlertDescription>
+            <ul className="space-y-0.5 text-xs">
               {prefill.existing.map((o) => (
                 <li key={o.id}>
                   Already in Lever on {o.postingTitle ?? 'a job with no posting'}
                   {o.archived ? ` (archived${o.archivedReason ? `: ${o.archivedReason}` : ''})` : o.stage ? ` (${o.stage})` : ''}{' '}
                   <a href={o.leverUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 underline">
-                    open <ExternalLink className="h-2.5 w-2.5" />
+                    open <ExternalLink className="size-3" />
                   </a>
                 </li>
               ))}
             </ul>
-          </div>
-        </div>
+          </AlertDescription>
+        </Alert>
       )}
 
       {needsConnect && (
@@ -281,7 +278,7 @@ function AddToLeverForm({
           </AlertDescription>
           <AlertAction>
             <Button type="button" size="sm" variant="secondary" disabled={gemConnect.waiting} onClick={gemConnect.connect}>
-              {gemConnect.waiting && <Loader2 className="animate-spin" data-icon="inline-start" />}
+              {gemConnect.waiting && <Spinner data-icon="inline-start" aria-hidden />}
               {gemConnect.waiting ? 'Waiting for Gem…' : gemStatus === 'NEEDS_REAUTH' ? 'Reconnect Gem' : 'Connect Gem'}
             </Button>
           </AlertAction>
@@ -371,8 +368,8 @@ function AddToLeverForm({
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5">
-        <Badge variant="outline" className={gemLoading ? 'animate-pulse text-muted-foreground' : undefined}>
-          {gemLoading ? <Loader2 className="size-3 animate-spin" /> : <FileText className="size-3" />}
+        <Badge variant="outline" className={gemLoading ? 'text-muted-foreground' : undefined}>
+          {gemLoading ? <Spinner aria-hidden /> : <FileText />}
           {resumeLabel}
         </Badge>
         {prefill.sources.map((s) => (
@@ -391,7 +388,7 @@ function AddToLeverForm({
         <span className="text-xs font-medium text-muted-foreground">Note added to Lever</span>
         <pre
           data-testid="lever-note-preview"
-          className="max-h-32 overflow-y-auto whitespace-pre-wrap rounded-2xl bg-muted/50 p-3 font-sans text-xs text-foreground"
+          className="max-h-32 overflow-y-auto whitespace-pre-wrap border-l-2 border-border py-1 pl-3 font-sans text-xs text-foreground"
         >
           {prefill.note}
         </pre>
@@ -412,7 +409,7 @@ function AddToLeverForm({
           )
         )}
         <Button type="submit" disabled={!canSubmit}>
-          {mutation.isPending && <Loader2 className="animate-spin" data-icon="inline-start" />}
+          {mutation.isPending && <Spinner data-icon="inline-start" aria-hidden />}
           {confirmLabel}
         </Button>
       </DialogFooter>

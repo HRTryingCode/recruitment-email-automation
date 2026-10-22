@@ -21,11 +21,11 @@ export default function LookupIntegrations({ data, email, candidateId }: Props) 
       data-testid="lookup-integrations"
       aria-label="Integrations"
       hidden={!hasAny}
-      className="text-[13px]"
+      className="text-sm"
     >
       {data.lever && (
         <div className="flex min-w-0 gap-3 py-1">
-          <span className="w-24 flex-shrink-0 text-fg-muted">Lever</span>
+          <span className="w-24 flex-shrink-0 text-muted-foreground">Lever</span>
           <div className="min-w-0 space-y-1.5">
             <LeverLookupPanel integration={data.lever} />
             {email && data.lever.status !== 'ERROR' && (

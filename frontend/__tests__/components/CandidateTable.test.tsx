@@ -1,359 +1,378 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import CandidateTable from '../../src/components/CandidateTable';
-import { TooltipProvider } from '../../src/components/ui/tooltip';
-import type { Candidate } from '../../src/lib/api';
 import * as api from '../../src/lib/api';
+import * as leverApi from '../../src/lib/leverApi';
+import { resetLeverAutoRefreshForTests } from '../../src/lib/leverAutoRefresh';
+import { CANDIDATES, listResponse, makeCandidate, renderCandidates, search } from './candidates/harness';
 
 vi.mock('../../src/lib/api', () => ({
   fetchCandidates: vi.fn(),
-  fetchMessages: vi.fn(),
+  fetchCandidate: vi.fn(() => new Promise(() => {})),
   updateCandidate: vi.fn(),
   ignoreCandidate: vi.fn(),
   unignoreCandidate: vi.fn(),
+  clearRepliedAt: vi.fn(),
   generateDraftForThread: vi.fn(),
-  // H1 auto-refresh of never-checked Lever rows; never settles here.
+  bulkUpdateCandidates: vi.fn(),
+  fetchSavedViews: vi.fn(),
+  createSavedView: vi.fn(),
+  updateSavedView: vi.fn(),
+  deleteSavedView: vi.fn(),
   refreshCandidateLever: vi.fn(() => new Promise(() => {})),
 }));
 
-const fetchCandidatesMock = vi.mocked(api.fetchCandidates);
-const ignoreCandidateMock = vi.mocked(api.ignoreCandidate);
-const updateCandidateMock = vi.mocked(api.updateCandidate);
-const generateDraftMock = vi.mocked(api.generateDraftForThread);
-
-const STATUS_LABELS: Record<string, string> = {
-  INTERESTED: 'Interested',
-  NEEDS_REVIEW: 'Needs Review',
-  IGNORED: 'Ignored',
-  NOT_INTERESTED: 'Not Interested',
-  NEUTRAL: 'Neutral',
-};
-
-// Status badge color tokens. Chromatic statuses use a darker shade in light
-// mode (700) and the original soft shade in dark (300). Neutral/ignored use
-// theme-aware fg-* tokens so they flip automatically.
-const STATUS_TONE_CLASS: Record<string, RegExp> = {
-  INTERESTED: /text-emerald-700/,
-  NEEDS_REVIEW: /text-amber-700/,
-  IGNORED: /text-fg-muted/,
-  NOT_INTERESTED: /text-rose-700/,
-  NEUTRAL: /text-fg-default/,
-};
-
-function makeCandidate(
-  overrides: Partial<Candidate> & Pick<Candidate, 'id' | 'name' | 'email' | 'status'>
-): Candidate {
-  return {
-    company: 'Example Inc.',
-    mailboxId: 'mb-1',
-    createdAt: '2026-05-19T10:00:00.000Z',
-    updatedAt: '2026-05-20T10:00:00.000Z',
-    ...overrides,
-  };
-}
-
-const CANDIDATES: Candidate[] = [
-  makeCandidate({
-    id: 'c1',
-    name: 'Ada Lovelace',
-    email: 'ada@example.com',
-    status: 'INTERESTED',
+vi.mock('../../src/lib/leverApi', () => ({
+  fetchLeverMe: vi.fn().mockResolvedValue({
+    configured: true,
+    createEnabled: true,
+    appEmail: 'rae@archive.com',
+    leverUser: { id: 'lu', name: 'Rae' },
   }),
-  makeCandidate({
-    id: 'c2',
-    name: 'Grace Hopper',
-    email: 'grace@example.com',
-    status: 'NEEDS_REVIEW',
-    threads: [
-      {
-        id: 't2',
-        mailboxId: 'mb-1',
-        externalThreadId: 'ext-2',
-        subject: 'Re: role',
-        lastMessageAt: '2026-05-20T10:00:00.000Z',
-        createdAt: '2026-05-19T10:00:00.000Z',
-      },
-    ],
-  }),
-  makeCandidate({
-    id: 'c3',
-    name: 'Alan Turing',
-    email: 'alan@example.com',
-    status: 'IGNORED',
-  }),
-  makeCandidate({
-    id: 'c4',
-    name: 'Marie Curie',
-    email: 'marie@example.com',
-    status: 'NOT_INTERESTED',
-  }),
-  makeCandidate({
-    id: 'c5',
-    name: 'Linus Torvalds',
-    email: 'linus@example.com',
-    status: 'NEUTRAL',
-  }),
-];
+  fetchLeverPrefill: vi.fn().mockReturnValue(new Promise(() => {})),
+  fetchLeverGemPrefill: vi.fn().mockReturnValue(new Promise(() => {})),
+  fetchLeverPostings: vi.fn().mockReturnValue(new Promise(() => {})),
+}));
 
-function createClient() {
-  return new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-}
+const fetchCandidates = vi.mocked(api.fetchCandidates);
+const lastParams = () => fetchCandidates.mock.calls.at(-1)![0]!;
+const row = (name: string) => screen.getByText(name).closest('tr')!;
 
-function renderTable(initialEntry = '/') {
-  const client = createClient();
-  return render(
-    <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[initialEntry]}>
-        <TooltipProvider>
-          <CandidateTable />
-        </TooltipProvider>
-      </MemoryRouter>
-    </QueryClientProvider>
-  );
-}
+beforeEach(() => {
+  resetLeverAutoRefreshForTests();
+  fetchCandidates.mockResolvedValue(listResponse());
+  vi.mocked(api.fetchSavedViews).mockResolvedValue({ success: true, data: [] });
+  vi.mocked(api.updateCandidate).mockResolvedValue({ success: true, data: CANDIDATES[0]! });
+  vi.mocked(api.ignoreCandidate).mockResolvedValue({ success: true, data: CANDIDATES[0]! });
+  vi.mocked(api.generateDraftForThread).mockResolvedValue({ success: true, data: { id: 'd1' } } as never);
+  vi.mocked(api.bulkUpdateCandidates).mockResolvedValue({ success: true, data: { updated: 2, draftsDiscarded: 0 } });
+});
 
-describe('<CandidateTable />', () => {
-  beforeEach(() => {
-    fetchCandidatesMock.mockResolvedValue({
-      success: true,
-      data: CANDIDATES,
-      meta: { total: CANDIDATES.length, page: 1, limit: 100 },
-    });
-    ignoreCandidateMock.mockResolvedValue({
-      success: true,
-      data: { ...CANDIDATES[0], status: 'IGNORED' },
-    });
-  });
+afterEach(() => {
+  vi.clearAllMocks();
+});
 
-  afterEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('renders a row for each candidate fixture', async () => {
-    renderTable();
-    for (const c of CANDIDATES) {
-      expect(await screen.findByText(c.name)).toBeInTheDocument();
-      expect(screen.getByText(c.email)).toBeInTheDocument();
-    }
-  });
-
-  it('renders a status badge with the correct label + tone for each status', async () => {
-    renderTable();
+describe('<CandidateTable /> columns', () => {
+  it('has the approved columns in priority order — Status and Reply merged into one', async () => {
+    renderCandidates();
     await screen.findByText('Ada Lovelace');
+    const heads = screen.getAllByRole('columnheader').map((th) => th.textContent?.trim()).filter(Boolean);
+    expect(heads).toEqual(['Candidate', 'Reply', 'Lever', 'Role', 'Mailbox', 'Last activity', 'Actions']);
+  });
 
-    for (const c of CANDIDATES) {
-      const label = STATUS_LABELS[c.status];
-      // Each row contains both a StatusBadge <span> and an action <select>
-      // whose <option>s include every label. Scope to <span> to find the
-      // badge only.
-      const row = screen.getByText(c.name).closest('tr')!;
-      const badge = within(row).getByText(label, { selector: 'span' });
-      expect(badge).toBeInTheDocument();
-      expect(badge.className).toMatch(STATUS_TONE_CLASS[c.status]);
+  it('one row per candidate: name with email underneath, reply label in words, Lever chip, role, mailbox', async () => {
+    renderCandidates();
+    await screen.findByText('Ada Lovelace');
+    const ada = row('Ada Lovelace');
+    expect(within(ada).getByText('ada@example.com')).toBeInTheDocument();
+    expect(within(ada).getByTestId('reply-label')).toHaveTextContent('Interested');
+    expect(within(ada).getByTestId('lever-badge')).toHaveTextContent('Founding Engineer · Phone Screen');
+    expect(within(ada).getAllByText('Founding Engineer').length).toBeGreaterThan(0);
+    expect(within(ada).getByText('rae@archive.com')).toBeInTheDocument();
+    expect(within(ada).getByText('2h ago')).toBeInTheDocument();
+    expect(within(row('Grace Hopper')).getByTestId('reply-label')).toHaveTextContent('Unsure');
+    expect(within(row('Marie Curie')).getByTestId('reply-label')).toHaveTextContent('Not interested');
+    expect(within(row('Linus Torvalds')).getByTestId('lever-badge')).toHaveTextContent('Checking Lever…');
+  });
+
+  it('never shows more than two chips in a row', async () => {
+    renderCandidates();
+    await screen.findByText('Ada Lovelace');
+    for (const r of screen.getAllByTestId('candidate-row')) {
+      expect(r.querySelectorAll('[data-slot=badge]').length).toBeLessThanOrEqual(2);
     }
   });
 
-  it('clicking Ignore + confirming triggers the ignoreCandidate mutation with the right id', async () => {
+  it('last activity is the later of their message and ours, saying who', async () => {
+    renderCandidates();
+    await screen.findByText('Ada Lovelace');
+    expect(within(row('Ada Lovelace')).getByText(/· them/)).toBeInTheDocument();
+    expect(within(row('Marie Curie')).getByText('2d ago')).toBeInTheDocument();
+    expect(within(row('Marie Curie')).getByText(/· you/)).toBeInTheDocument();
+  });
+});
+
+describe('<CandidateTable /> server params, sort and URL state', () => {
+  it('asks for active candidates, newest activity first, 50 a page', async () => {
+    renderCandidates();
+    await screen.findByText('Ada Lovelace');
+    expect(lastParams()).toEqual({ page: 1, limit: 50, includeIgnored: false, sort: 'lastActivity', dir: 'desc' });
+  });
+
+  it('sorting a column puts sort/dir in the URL and asks the server (every visible column)', async () => {
     const user = userEvent.setup();
-    renderTable();
-
-    const adaRow = (await screen.findByText('Ada Lovelace')).closest('tr')!;
-    const ignoreTrigger = within(adaRow).getByLabelText(/ignore candidate/i);
-    await user.click(ignoreTrigger);
-
-    // The trigger and the confirm button share an accessible name; scope
-    // to the alertdialog Radix portals to <body>.
-    const dialog = await screen.findByRole('alertdialog');
-    const confirm = within(dialog).getByRole('button', {
-      name: /^ignore candidate$/i,
-    });
-    await user.click(confirm);
-
-    await waitFor(() => {
-      expect(ignoreCandidateMock).toHaveBeenCalledWith('c1');
-    });
-    expect(ignoreCandidateMock).toHaveBeenCalledTimes(1);
+    renderCandidates();
+    await screen.findByText('Ada Lovelace');
+    await user.click(screen.getByRole('button', { name: /^Role/ }));
+    await waitFor(() => expect(lastParams()).toMatchObject({ sort: 'role', dir: 'asc' }));
+    expect(search()).toMatchObject({ sort: 'role', dir: 'asc' });
+    await user.click(screen.getByRole('button', { name: /^Role/ }));
+    await waitFor(() => expect(lastParams()).toMatchObject({ sort: 'role', dir: 'desc' }));
+    for (const [label, key] of [
+      ['Candidate', 'name'],
+      ['Reply', 'status'],
+      ['Lever', 'lever'],
+      ['Mailbox', 'mailbox'],
+    ] as const) {
+      await user.click(screen.getByRole('button', { name: new RegExp(`^${label}`) }));
+      await waitFor(() => expect(lastParams()).toMatchObject({ sort: key, dir: 'asc' }));
+    }
+    // Back to the default (newest activity first): out of the URL, and the
+    // first page is answered from the cache.
+    await user.click(screen.getByRole('button', { name: /^Last activity/ }));
+    await waitFor(() => expect(search().sort).toBeUndefined());
+    expect(screen.getByRole('columnheader', { name: /Last activity/ })).toHaveAttribute('aria-sort', 'descending');
   });
 
-  it('renders a pagination footer when total exceeds the page limit (Phase AR bug #9)', async () => {
-    fetchCandidatesMock.mockResolvedValue({
-      success: true,
-      data: CANDIDATES,
-      // total deliberately greater than limit so the footer kicks in
-      meta: { total: 1500, page: 1, limit: 500 },
-    });
-
-    renderTable();
+  it('reads filters, sort and page from the URL', async () => {
+    fetchCandidates.mockResolvedValue(listResponse(CANDIDATES, 120));
+    renderCandidates('/candidates?status=INTERESTED&lever=NOT_IN&q=ada&sort=mailbox&dir=desc&page=2');
     await screen.findByText('Ada Lovelace');
+    expect(lastParams()).toEqual({
+      page: 2,
+      limit: 50,
+      status: 'INTERESTED',
+      lever: 'NOT_IN',
+      search: 'ada',
+      includeIgnored: false,
+      sort: 'mailbox',
+      dir: 'desc',
+    });
+  });
 
+  it('rewrites the Today page ?filter= pills to reply/status (M19)', async () => {
+    renderCandidates('/candidates?filter=AWAITING_REPLY');
+    await screen.findByText('Ada Lovelace');
+    await waitFor(() => expect(search()).toEqual({ reply: 'AWAITING_REPLY' }));
+    expect(lastParams()).toMatchObject({ replyStatus: 'AWAITING_REPLY' });
+  });
+
+  it('pagination footer pages through the server results', async () => {
+    const user = userEvent.setup();
+    fetchCandidates.mockResolvedValue(listResponse(CANDIDATES, 120));
+    renderCandidates();
     const footer = await screen.findByTestId('candidates-pagination-footer');
-    expect(footer).toBeInTheDocument();
-    expect(footer.textContent).toMatch(/Showing 1.{1,2}500 of 1500/);
-    // L16: the button pages forward; it never appended, so it no longer says "Load more".
-    expect(within(footer).getByRole('button', { name: /^next$/i })).toBeEnabled();
-    expect(within(footer).getByRole('button', { name: /previous/i })).toBeDisabled();
+    expect(footer).toHaveTextContent('Showing 1–50 of 120');
+    await user.click(within(footer).getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(lastParams()).toMatchObject({ page: 2 }));
+    expect(search().page).toBe('2');
   });
 
-  it('does NOT render the pagination footer when total fits on a single page', async () => {
-    // Default fixture has total=5, limit=100 → no footer expected.
-    renderTable();
+  it('no pagination footer when one page holds everything', async () => {
+    renderCandidates();
     await screen.findByText('Ada Lovelace');
-    expect(screen.queryByTestId('candidates-pagination-footer')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('candidates-pagination-footer')).toBeNull();
   });
+});
 
-  it('changing the status filter refetches with the new status param', async () => {
+describe('<CandidateTable /> filters and search', () => {
+  it('a filter shows up as a removable chip', async () => {
     const user = userEvent.setup();
-    renderTable();
-
+    renderCandidates();
     await screen.findByText('Ada Lovelace');
+    await user.click(screen.getByRole('combobox', { name: 'Status filter' }));
+    await user.click(await screen.findByRole('option', { name: 'Interested' }));
+    await waitFor(() => expect(lastParams()).toMatchObject({ status: 'INTERESTED' }));
+    expect(search().status).toBe('INTERESTED');
+    const chips = screen.getByTestId('active-filters');
+    await user.click(within(chips).getByRole('button', { name: 'Remove filter Status: Interested' }));
+    await waitFor(() => expect(search().status).toBeUndefined());
+    expect(screen.queryByTestId('active-filters')).toBeNull();
+  });
 
-    // Initial fetch: status is unset → apiStatus undefined
-    expect(fetchCandidatesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ status: undefined })
-    );
+  it('the Lever filter refetches with lever=IN / NOT_IN', async () => {
+    const user = userEvent.setup();
+    renderCandidates();
+    await screen.findByText('Ada Lovelace');
+    await user.click(screen.getByRole('combobox', { name: 'Lever filter' }));
+    await user.click(await screen.findByRole('option', { name: 'Not in Lever' }));
+    await waitFor(() => expect(lastParams()).toMatchObject({ lever: 'NOT_IN' }));
+  });
 
-    // Switch to "Interested" → re-fetch with status: 'INTERESTED'
-    const select = screen.getByDisplayValue(/active candidates/i);
-    await user.selectOptions(select, 'INTERESTED');
+  it('search no longer disables filters: both are sent and both show as chips', async () => {
+    const user = userEvent.setup();
+    renderCandidates('/candidates?status=INTERESTED');
+    await screen.findByText('Ada Lovelace');
+    const calls = fetchCandidates.mock.calls.length;
+    await user.type(screen.getByRole('textbox', { name: 'Search candidates' }), 'ada');
+    await waitFor(() => expect(lastParams()).toMatchObject({ search: 'ada', status: 'INTERESTED' }));
+    // Debounced: one request for the whole word, not one per keystroke.
+    expect(fetchCandidates.mock.calls.length).toBe(calls + 1);
+    expect(screen.getByRole('combobox', { name: 'Status filter' })).toBeEnabled();
+    const chips = screen.getByTestId('active-filters');
+    expect(within(chips).getByText('Status: Interested')).toBeInTheDocument();
+    expect(within(chips).getByText('Search: “ada”')).toBeInTheDocument();
+    await user.click(within(chips).getByRole('button', { name: 'Clear filters' }));
+    await waitFor(() => expect(search()).toEqual({}));
+    expect(screen.getByRole('textbox', { name: 'Search candidates' })).toHaveValue('');
+  });
 
-    await waitFor(() => {
-      expect(fetchCandidatesMock).toHaveBeenCalledWith(
-        expect.objectContaining({ status: 'INTERESTED' })
-      );
+  it('seeds the search from ?q= (old lookup links)', async () => {
+    renderCandidates('/candidates?q=grace%40example.com');
+    await screen.findByText('Ada Lovelace');
+    expect(screen.getByRole('textbox', { name: 'Search candidates' })).toHaveValue('grace@example.com');
+    expect(lastParams()).toMatchObject({ search: 'grace@example.com' });
+  });
+});
+
+describe('<CandidateTable /> row actions', () => {
+  it('every row has Open, Copy email and a ⋯ menu; Add to Lever where Lever was checked', async () => {
+    renderCandidates();
+    await screen.findByText('Ada Lovelace');
+    const marie = row('Marie Curie');
+    expect(within(marie).getByRole('button', { name: 'Open' })).toBeInTheDocument();
+    expect(within(marie).getByRole('button', { name: 'Copy marie@example.com' })).toBeInTheDocument();
+    expect(within(marie).getByRole('button', { name: 'More actions for Marie Curie' })).toBeInTheDocument();
+    expect(await within(marie).findByRole('button', { name: 'Add to Lever' })).toBeInTheDocument();
+    expect(within(row('Ada Lovelace')).getByRole('button', { name: 'Add to another job' })).toBeInTheDocument();
+    expect(within(row('Linus Torvalds')).queryByRole('button', { name: /Add to/ })).toBeNull();
+  });
+
+  it('⋯ → Change status writes the status', async () => {
+    const user = userEvent.setup();
+    renderCandidates();
+    await screen.findByText('Ada Lovelace');
+    await user.click(within(row('Marie Curie')).getByRole('button', { name: 'More actions for Marie Curie' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Change status' }));
+    // jsdom: a pointer move onto a submenu item reads as leaving the 0×0
+    // submenu (Radix grace area) and closes it, so click the item directly.
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Unsure' }));
+    await waitFor(() => expect(api.updateCandidate).toHaveBeenCalledWith('c3', { status: 'NEUTRAL' }));
+  });
+
+  it('⋯ → Ignore… asks first, then goes through the ignore flow (M20)', async () => {
+    const user = userEvent.setup();
+    renderCandidates();
+    await screen.findByText('Ada Lovelace');
+    await user.click(within(row('Marie Curie')).getByRole('button', { name: 'More actions for Marie Curie' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Ignore…' }));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog).toHaveTextContent('Ignore Marie Curie?');
+    await user.click(within(dialog).getByRole('button', { name: 'Ignore' }));
+    await waitFor(() => expect(api.ignoreCandidate).toHaveBeenCalledWith('c3'));
+    expect(api.updateCandidate).not.toHaveBeenCalled();
+  });
+
+  it('ignored rows offer Restore instead', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.unignoreCandidate).mockResolvedValue({ success: true, data: CANDIDATES[0]! });
+    fetchCandidates.mockResolvedValue(listResponse([makeCandidate({ id: 'c9', name: 'Alan Turing', email: 'alan@example.com', status: 'IGNORED' })]));
+    renderCandidates('/candidates?status=IGNORED');
+    await screen.findByText('Alan Turing');
+    expect(within(row('Alan Turing')).getByTestId('reply-label')).toHaveTextContent('Ignored');
+    await user.click(screen.getByRole('button', { name: 'More actions for Alan Turing' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Restore' }));
+    await waitFor(() => expect(api.unignoreCandidate).toHaveBeenCalledWith('c9'));
+  });
+
+  it('NEEDS_REVIEW triage: "Interested + draft reply" sets the status and drafts (M17)', async () => {
+    const user = userEvent.setup();
+    renderCandidates();
+    await screen.findByText('Ada Lovelace');
+    await user.click(within(row('Grace Hopper')).getByRole('button', { name: 'More actions for Grace Hopper' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Interested + draft reply' }));
+    await waitFor(() => expect(api.generateDraftForThread).toHaveBeenCalledWith('t2', 'INTERESTED'));
+    expect(api.updateCandidate).toHaveBeenCalledWith('c2', { status: 'INTERESTED' });
+  });
+
+  it('triage items only appear for NEEDS_REVIEW', async () => {
+    const user = userEvent.setup();
+    renderCandidates();
+    await screen.findByText('Ada Lovelace');
+    await user.click(within(row('Ada Lovelace')).getByRole('button', { name: 'More actions for Ada Lovelace' }));
+    await screen.findByRole('menuitem', { name: 'Change status' });
+    expect(screen.queryByRole('menuitem', { name: 'Interested + draft reply' })).toBeNull();
+  });
+});
+
+describe('<CandidateTable /> bulk select', () => {
+  it('checking rows shows the bulk bar; change status updates all of them at once', async () => {
+    const user = userEvent.setup();
+    renderCandidates();
+    await screen.findByText('Ada Lovelace');
+    expect(screen.queryByRole('toolbar', { name: 'Bulk actions' })).toBeNull();
+    await user.click(screen.getByRole('checkbox', { name: 'Select Ada Lovelace' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Select Marie Curie' }));
+    const bar = screen.getByRole('toolbar', { name: 'Bulk actions' });
+    expect(bar).toHaveTextContent('2 selected');
+    expect(within(bar).queryByRole('button', { name: /Add to Lever/ })).toBeNull();
+    await user.click(within(bar).getByRole('combobox', { name: 'Change status of selected' }));
+    await user.click(await screen.findByRole('option', { name: 'Not interested' }));
+    await waitFor(() => expect(api.bulkUpdateCandidates).toHaveBeenCalledWith(['c1', 'c3'], 'NOT_INTERESTED'));
+    await waitFor(() => expect(screen.queryByRole('toolbar', { name: 'Bulk actions' })).toBeNull());
+  });
+
+  it('bulk Ignore confirms, then ignores every selected candidate in one call', async () => {
+    const user = userEvent.setup();
+    renderCandidates();
+    await screen.findByText('Ada Lovelace');
+    await user.click(screen.getByRole('checkbox', { name: 'Select all on this page' }));
+    const bar = screen.getByRole('toolbar', { name: 'Bulk actions' });
+    expect(bar).toHaveTextContent('4 selected');
+    await user.click(within(bar).getByRole('button', { name: 'Ignore' }));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog).toHaveTextContent('Ignore 4 candidates?');
+    await user.click(within(dialog).getByRole('button', { name: 'Ignore' }));
+    await waitFor(() => expect(api.bulkUpdateCandidates).toHaveBeenCalledWith(['c1', 'c2', 'c3', 'c4'], 'IGNORED'));
+  });
+
+  it('the header checkbox goes indeterminate for a partial selection', async () => {
+    const user = userEvent.setup();
+    renderCandidates();
+    await screen.findByText('Ada Lovelace');
+    await user.click(screen.getByRole('checkbox', { name: 'Select Grace Hopper' }));
+    expect(screen.getByRole('checkbox', { name: 'Select all on this page' })).toHaveAttribute('data-state', 'indeterminate');
+  });
+});
+
+describe('<CandidateTable /> side panel + keyboard', () => {
+  it('clicking a name opens the side panel and puts the candidate in the URL', async () => {
+    const user = userEvent.setup();
+    renderCandidates();
+    await user.click(await screen.findByRole('button', { name: 'Grace Hopper' }));
+    expect(search().candidate).toBe('c2');
+    const sheet = await screen.findByRole('dialog');
+    expect(within(sheet).getByRole('heading', { name: 'Grace Hopper' })).toBeInTheDocument();
+  });
+
+  it('?candidate= opens the panel on load', async () => {
+    renderCandidates('/candidates?candidate=c3');
+    const sheet = await screen.findByRole('dialog');
+    // The list row fills the header while the full record loads.
+    expect(await within(sheet).findByText('marie@example.com')).toBeInTheDocument();
+  });
+
+  it('opening a row warms Add to Lever (H5); rows Lever never checked do not', async () => {
+    const user = userEvent.setup();
+    renderCandidates();
+    await user.click(await screen.findByRole('button', { name: 'Linus Torvalds' }));
+    expect(leverApi.fetchLeverGemPrefill).not.toHaveBeenCalled();
+    await user.keyboard('{Escape}');
+    await user.click(screen.getByRole('button', { name: 'Marie Curie' }));
+    await waitFor(() => expect(leverApi.fetchLeverPrefill).toHaveBeenCalledWith({ candidateId: 'c3' }));
+  });
+
+  it('↑/↓ move the cursor, x toggles its checkbox, ↵ opens it, Esc closes', async () => {
+    renderCandidates();
+    await screen.findByText('Ada Lovelace');
+    const rows = () => screen.getAllByTestId('candidate-row');
+    expect(rows()[0]).toHaveAttribute('data-active', 'true');
+    act(() => {
+      fireEvent.keyDown(window, { key: 'ArrowDown' });
+      fireEvent.keyDown(window, { key: 'ArrowDown' });
+      fireEvent.keyDown(window, { key: 'ArrowUp' });
     });
-
-    // Switch to "Ignored" → re-fetch with status: 'IGNORED' AND includeIgnored
-    await user.selectOptions(select, 'IGNORED');
-    await waitFor(() => {
-      expect(fetchCandidatesMock).toHaveBeenCalledWith(
-        expect.objectContaining({ status: 'IGNORED', includeIgnored: true })
-      );
+    expect(rows()[1]).toHaveAttribute('data-active', 'true');
+    act(() => {
+      fireEvent.keyDown(window, { key: 'x' });
     });
-  });
-
-  it('applies the dashboard ?filter=AWAITING_REPLY as a server-side replyStatus filter (M19)', async () => {
-    renderTable('/?tab=candidates&filter=AWAITING_REPLY');
-    await screen.findByText('Ada Lovelace');
-    expect(fetchCandidatesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ replyStatus: 'AWAITING_REPLY', status: undefined })
-    );
-    expect(screen.getByDisplayValue(/awaiting reply/i)).toBeInTheDocument();
-  });
-
-  it('applies ?filter=NEEDS_REVIEW as a status filter (M19)', async () => {
-    renderTable('/?tab=candidates&filter=NEEDS_REVIEW');
-    await screen.findByText('Ada Lovelace');
-    expect(fetchCandidatesMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'NEEDS_REVIEW' }));
-  });
-
-  it('choosing Ignored in a row dropdown goes through the ignore flow (M20)', async () => {
-    const user = userEvent.setup();
-    renderTable();
-    const row = (await screen.findByText('Ada Lovelace')).closest('tr')!;
-    await user.selectOptions(within(row).getByRole('combobox'), 'IGNORED');
-    await waitFor(() => expect(ignoreCandidateMock).toHaveBeenCalledWith('c1'));
-    expect(updateCandidateMock).not.toHaveBeenCalled();
-  });
-
-  it('sorting asks the server to sort, across all pages (L16)', async () => {
-    const user = userEvent.setup();
-    renderTable();
-    await screen.findByText('Ada Lovelace');
-    await user.click(screen.getByRole('button', { name: /^name$/i }));
-    await waitFor(() =>
-      expect(fetchCandidatesMock).toHaveBeenCalledWith(expect.objectContaining({ sort: 'name', dir: 'asc' }))
-    );
-  });
-
-  it('debounces search so typing does not fire a request per keystroke (L16)', async () => {
-    const user = userEvent.setup();
-    renderTable();
-    await screen.findByText('Ada Lovelace');
-    await user.type(screen.getByPlaceholderText(/search by name or email/i), 'ada');
-    await waitFor(() =>
-      expect(fetchCandidatesMock).toHaveBeenCalledWith(expect.objectContaining({ search: 'ada' }))
-    );
-    const searches = fetchCandidatesMock.mock.calls.map((c) => c[0]?.search).filter(Boolean);
-    expect(searches).not.toContain('a');
-    expect(searches).not.toContain('ad');
-  });
-
-  it('seeds the search from ?q= (F1 lookup "Open conversation" deep link)', async () => {
-    renderTable('/?tab=candidates&q=ada%40example.com');
-    expect(screen.getByPlaceholderText(/search by name or email/i)).toHaveValue('ada@example.com');
-    await waitFor(() =>
-      expect(fetchCandidatesMock).toHaveBeenCalledWith(
-        expect.objectContaining({ search: 'ada@example.com' })
-      )
-    );
-  });
-
-  it('NEEDS_REVIEW triage: "Interested + draft" sets the status and generates a draft (M17)', async () => {
-    const user = userEvent.setup();
-    updateCandidateMock.mockResolvedValue({ success: true, data: { ...CANDIDATES[1], status: 'INTERESTED' } });
-    generateDraftMock.mockResolvedValue({ success: true, data: {} as never });
-    renderTable();
-    const row = (await screen.findByText('Grace Hopper')).closest('tr')!;
-    await user.click(within(row).getByRole('button', { name: /interested \+ draft/i }));
-    await waitFor(() => expect(generateDraftMock).toHaveBeenCalledWith('t2', 'INTERESTED'));
-    expect(updateCandidateMock).toHaveBeenCalledWith('c2', { status: 'INTERESTED' });
-  });
-
-  it('NEEDS_REVIEW triage: "Not interested" sets the status without drafting (M17)', async () => {
-    const user = userEvent.setup();
-    updateCandidateMock.mockResolvedValue({ success: true, data: { ...CANDIDATES[1], status: 'NOT_INTERESTED' } });
-    renderTable();
-    const row = (await screen.findByText('Grace Hopper')).closest('tr')!;
-    await user.click(within(row).getByRole('button', { name: /^not interested$/i }));
-    await waitFor(() => expect(updateCandidateMock).toHaveBeenCalledWith('c2', { status: 'NOT_INTERESTED' }));
-    expect(generateDraftMock).not.toHaveBeenCalled();
-  });
-
-  it('triage buttons only appear on NEEDS_REVIEW rows', async () => {
-    renderTable();
-    const row = (await screen.findByText('Ada Lovelace')).closest('tr')!;
-    expect(within(row).queryByRole('button', { name: /interested \+ draft/i })).not.toBeInTheDocument();
-  });
-
-  describe('layout (H1: Actions column clipped at ~1000px)', () => {
-    it('scrolls horizontally inside the table wrapper, keeping the rounded border on an outer element', async () => {
-      renderTable();
-      await screen.findByText('Ada Lovelace');
-      const scroller = screen.getByTestId('candidates-table-scroll');
-      expect(scroller).toHaveClass('overflow-x-auto');
-      expect(scroller).not.toHaveClass('overflow-hidden');
-      expect(scroller.parentElement).toHaveClass('rounded-xl', 'border', 'overflow-hidden');
-      expect(within(scroller).getByRole('table')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Select Grace Hopper' })).toHaveAttribute('data-state', 'checked');
+    act(() => {
+      fireEvent.keyDown(window, { key: 'Enter' });
     });
-
-    it('never wraps or truncates the Actions header and cells', async () => {
-      renderTable();
-      const row = (await screen.findByText('Grace Hopper')).closest('tr')!;
-      const header = screen.getByRole('columnheader', { name: 'Actions' });
-      expect(header).toHaveClass('whitespace-nowrap', 'sticky', 'right-0', 'bg-surface-raised');
-      const actions = within(row).getByTestId('candidate-actions');
-      // Pinned to the right edge with an opaque surface token so it stays
-      // visible (and legible) while the rest of the row scrolls under it.
-      expect(actions).toHaveClass('whitespace-nowrap', 'sticky', 'right-0', 'bg-surface-raised');
-      expect(within(actions).getByRole('button', { name: 'Interested + draft' })).toHaveTextContent(
-        'Interested + draft'
-      );
-      expect(within(actions).getByRole('button', { name: 'Not interested' })).toHaveTextContent('Not interested');
-      expect(actions.querySelector('.truncate')).toBeNull();
-    });
-
-    it('puts the role and Lever pills on one wrapping row instead of stacking them', async () => {
-      renderTable();
-      const row = (await screen.findByText('Ada Lovelace')).closest('tr')!;
-      const pills = within(row).getByTestId('candidate-pills');
-      expect(pills).toHaveClass('flex', 'flex-wrap');
-      expect(within(pills).getByTestId('lever-badge')).toBeInTheDocument();
-      expect(within(pills).getByText('Role not detected')).toBeInTheDocument();
-    });
+    await waitFor(() => expect(search().candidate).toBe('c2'));
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    await waitFor(() => expect(search().candidate).toBeUndefined());
   });
 });

@@ -1,22 +1,13 @@
 // Design-system lint (see docs/DESIGN-SYSTEM.md). Scope is deliberately
 // narrow: it only enforces "use src/components/ui, not hand-rolled UI".
 //
-// "error" for the whole app since R4 (the last batch): `npm run lint:ds`
-// fails CI on any hand-rolled UI. __tests__/design-system/eslint-guard.test.ts
-// pins this.
-//
-// TODO(orchestrator): R3 (Candidates) was not merged when R4 flipped the
-// rules, so R3_FILES stay at "warn". Once R3 lands with zero findings, delete
-// R3_FILES and the override block below, add 'R3' to STRICT_AREAS in
-// __tests__/design-system/hotspots.test.ts, and update eslint-guard.test.ts.
+// "error" for the whole app since R4, and for R3's Candidates files since R3
+// landed at zero findings: `npm run lint:ds` fails CI on any hand-rolled UI.
+// __tests__/design-system/eslint-guard.test.ts pins this.
 import tseslint from 'typescript-eslint';
 import reactHooks from 'eslint-plugin-react-hooks';
 
 const DS_SEVERITY = 'error';
-
-const R3_FILES = [
-  'src/components/{CandidateTable,LookupBar,LookupIntegrations,LeverBadge,AddToLeverButton,AddToLeverDialog,GemConnect,GemReturnToast,JobCombobox}.tsx',
-];
 
 const RAW_ELEMENTS = [
   ['button', 'Button'],
@@ -55,8 +46,7 @@ export default tseslint.config(
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
     rules: dsRules(DS_SEVERITY),
-  },
-  { files: R3_FILES, rules: dsRules('warn') }
+  }
 );
 
 function dsRules(severity) {

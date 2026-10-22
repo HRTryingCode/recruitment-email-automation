@@ -6,7 +6,7 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/react
 import userEvent from '@testing-library/user-event';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { setupServer } from 'msw/node';
-import LeverSection, { type LeverFields } from '../../../src/components/inbox/LeverSection';
+import LeverSection, { type LeverFields } from '../../../src/components/lever/LeverSection';
 import * as toast from '../../../src/lib/toast';
 import { TooltipProvider } from '../../../src/components/ui/tooltip';
 

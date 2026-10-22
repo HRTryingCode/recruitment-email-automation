@@ -1,7 +1,18 @@
-import { render, screen } from '@testing-library/react';
+import { render as rtlRender, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import type { ReactElement } from 'react';
 import { describe, expect, it } from 'vitest';
+import { TooltipProvider } from '../../src/components/ui/tooltip';
 import LeverBadge, { CandidateLeverBadge, LeverLookupPanel } from '../../src/components/LeverBadge';
 import type { LeverLookupIntegration } from '../../src/lib/api';
+
+const render = (ui: ReactElement) => rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
+
+/** R3: the detail moved from title= to a ui/tooltip; hover to read it. */
+async function tooltipText(): Promise<string> {
+  await userEvent.hover(screen.getByTestId('lever-badge'));
+  return (await screen.findByRole('tooltip')).textContent ?? '';
+}
 
 describe('LeverBadge', () => {
   it('ACTIVE: shows posting · stage and links to the opportunity in Lever', () => {
@@ -41,34 +52,31 @@ describe('LeverBadge', () => {
     expect(screen.queryByRole('link')).toBeNull();
   });
 
-  it('ERROR: muted Unknown with the reason in the tooltip', () => {
+  it('ERROR: muted Unknown with the reason in the tooltip', async () => {
     render(<LeverBadge state="ERROR" error="http_503" />);
     const badge = screen.getByTestId('lever-badge');
     expect(badge).toHaveTextContent('Lever unknown');
-    expect(badge).toHaveAttribute('title', expect.stringContaining('http_503'));
+    expect(await tooltipText()).toContain('http_503');
     expect(badge).toHaveAttribute('data-state', 'ERROR');
   });
 
-  it('ERROR: tooltip translates known reason codes', () => {
+  it('ERROR: tooltip translates known reason codes', async () => {
     render(<LeverBadge state="ERROR" error="http_401" />);
-    expect(screen.getByTestId('lever-badge')).toHaveAttribute(
-      'title',
-      expect.stringContaining('Lever rejected the API key (http_401)')
-    );
+    expect(await tooltipText()).toContain('Lever rejected the API key (http_401)');
   });
 
-  it('ERROR: tooltip explains it could not be checked', () => {
+  it('ERROR: tooltip explains it could not be checked', async () => {
     render(<LeverBadge state="ERROR" />);
-    expect(screen.getByTestId('lever-badge')).toHaveAttribute('title', expect.stringMatching(/could not check lever/i));
+    expect(await tooltipText()).toMatch(/could not check lever/i);
   });
 
-  it('never checked: muted "Checking Lever…", never "unknown"', () => {
+  it('never checked: muted "Checking Lever…", never "unknown"', async () => {
     render(<LeverBadge state={null} />);
     const badge = screen.getByTestId('lever-badge');
     expect(badge).toHaveTextContent('Checking Lever…');
     expect(badge).not.toHaveTextContent(/unknown/i);
     expect(badge).toHaveAttribute('data-state', 'CHECKING');
-    expect(badge).toHaveAttribute('title', expect.stringMatching(/not checked yet/i));
+    expect(await tooltipText()).toMatch(/not checked yet/i);
   });
 
   it('undefined state is treated as never checked too', () => {
@@ -131,7 +139,7 @@ describe('LeverLookupPanel', () => {
     expect(screen.getByText(/Timing/)).toBeInTheDocument();
   });
 
-  it('shows ERROR from the lookup as muted Unknown', () => {
+  it('shows ERROR from the lookup as muted Unknown', async () => {
     render(
       <LeverLookupPanel
         integration={{
@@ -145,6 +153,6 @@ describe('LeverLookupPanel', () => {
         }}
       />
     );
-    expect(screen.getByTestId('lever-badge')).toHaveAttribute('title', expect.stringContaining('timeout'));
+    expect(await tooltipText()).toContain('timeout');
   });
 });

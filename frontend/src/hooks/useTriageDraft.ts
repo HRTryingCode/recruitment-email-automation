@@ -57,6 +57,8 @@ export function useTriageDraft({ currentKey, onDrafted, onOpen }: Options) {
         moveInCache(qc, job.item, view);
         void qc.invalidateQueries({ queryKey: ['inbox'] });
         void qc.invalidateQueries({ queryKey: ['candidate', candidateId] });
+        // Triage also set the candidate's status server-side (R3).
+        void qc.invalidateQueries({ queryKey: ['candidates'] });
         setJobs(({ [key]: _done, ...rest }) => rest);
         const label = VIEWS.find((v) => v.id === view)!.label;
         toastSuccess(`Draft created for ${result.name} in ${label}`, undefined, {

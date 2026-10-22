@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react';
-import { ChevronDownIcon } from 'lucide-react';
 import type { LeverPosting } from '@/lib/leverApi';
 import { cn } from '@/lib/utils';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from './ui/command';
-import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
+import { Popover, PopoverTrigger } from './ui/popover';
+import { ComboboxContent, ComboboxTrigger } from './ui/combobox';
 import { Badge } from './ui/badge';
 
 interface Props {
@@ -65,27 +65,16 @@ export default function JobCombobox({ postings, value, onChange, suggestedId, in
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
-          type="button"
-          role="combobox"
-          aria-label="Job"
-          aria-expanded={open}
-          aria-invalid={invalid || undefined}
-          // Same look as SelectTrigger so Job and Stage read as one form.
-          className={cn(
-            'flex h-9 w-full items-center justify-between gap-1.5 rounded-3xl border border-transparent bg-input/50 px-3 py-2 text-left text-sm whitespace-nowrap transition-[color,box-shadow,background-color] outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20',
-            !selected && 'text-muted-foreground'
-          )}
-        >
+        {/* Radix sets aria-expanded / aria-controls on the trigger. */}
+        <ComboboxTrigger aria-label="Job" aria-invalid={invalid || undefined} className={cn(!selected && 'text-muted-foreground')}>
           <span className="flex min-w-0 items-center gap-1.5">
             <span className="truncate">{selected?.title ?? 'Pick a job'}</span>
             {selected && selected.id === suggestedId && <Badge variant="secondary">Suggested</Badge>}
             {selected && meta(selected) && <span className="truncate text-xs text-muted-foreground">{meta(selected)}</span>}
           </span>
-          <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
-        </button>
+        </ComboboxTrigger>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-[--radix-popover-trigger-width] p-0">
+      <ComboboxContent align="start">
         <Command filter={jobFilter}>
           {/* bg-transparent: the raw cmdk input otherwise paints the UA white box in light mode. */}
           <CommandInput aria-label="Search jobs" placeholder="Search jobs…" className="bg-transparent" />
@@ -99,7 +88,7 @@ export default function JobCombobox({ postings, value, onChange, suggestedId, in
             ))}
           </CommandList>
         </Command>
-      </PopoverContent>
+      </ComboboxContent>
     </Popover>
   );
 }

@@ -212,7 +212,59 @@ describe('POST /api/emails/threads/:id/draft — triage + metadata (M17, M14)', 
     });
     mockPrisma.mailbox.findUnique.mockResolvedValue({ displayName: 'Sofia Delgado' });
     mockPrisma.emailDraft.create.mockImplementation(async ({ data }: { data: unknown }) => ({ id: 'draft-new', ...(data as object) }));
+    mockPrisma.candidate.update.mockImplementation(async ({ data }: { data: unknown }) => ({ ...candidate, ...(data as object) }));
+    mockPrisma.$transaction.mockImplementation(async (ops: Promise<unknown>[]) => Promise.all(ops));
     app = await loadApp();
+  });
+
+  it.each(['INTERESTED', 'NOT_INTERESTED'] as const)(
+    'triage %s also sets the candidate status in the draft transaction and logs CANDIDATE_TRIAGED',
+    async (decision) => {
+      generateHandoffDraftReply.mockResolvedValue({ subject: 'Re: opportunity', bodyText: 'Hi', bodyHtml: '<div>Hi</div>' });
+      generateDraftReply.mockResolvedValue({ subject: 'Re: opportunity', bodyText: 'Thanks', bodyHtml: '<div>Thanks</div>' });
+
+      await request(app)
+        .post('/api/emails/threads/thread-1/draft')
+        .set('Authorization', AUTH)
+        .send({ classification: decision })
+        .expect(201);
+
+      expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(mockPrisma.candidate.update).toHaveBeenCalledWith({ where: { id: 'cand-1' }, data: { status: decision } });
+      const triaged = loggedEvents().find((e) => e.event === 'CANDIDATE_TRIAGED');
+      expect(triaged?.details).toEqual({ actorUserId: 'test-user-1', candidateId: 'cand-1', classification: decision });
+    }
+  );
+
+  it('triage on an IGNORED candidate is refused with 409 and writes nothing', async () => {
+    mockPrisma.emailThread.findUnique.mockResolvedValueOnce({
+      id: 'thread-1',
+      subject: 'opportunity',
+      externalThreadId: 'ext-1',
+      messages: [outbound, inbound],
+      candidate: { ...candidate, status: 'IGNORED' },
+      mailbox: handoffMailbox,
+      drafts: [],
+    });
+    const res = await request(app)
+      .post('/api/emails/threads/thread-1/draft')
+      .set('Authorization', AUTH)
+      .send({ classification: 'INTERESTED' });
+    expect(res.status).toBe(409);
+    expect(mockPrisma.emailDraft.create).not.toHaveBeenCalled();
+    expect(mockPrisma.candidate.update).not.toHaveBeenCalled();
+  });
+
+  it('triage NEUTRAL drafts but leaves the candidate status alone', async () => {
+    generateDraftReply.mockResolvedValueOnce({ subject: 'Re: opportunity', bodyText: 'Thanks', bodyHtml: '<div>Thanks</div>' });
+    await request(app)
+      .post('/api/emails/threads/thread-1/draft')
+      .set('Authorization', AUTH)
+      .send({ classification: 'NEUTRAL' })
+      .expect(201);
+    expect(mockPrisma.emailDraft.create).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.candidate.update).not.toHaveBeenCalled();
+    expect(loggedEvents().some((e) => e.event === 'CANDIDATE_TRIAGED')).toBe(false);
   });
 
   it("uses the recruiter's triage decision instead of re-classifying", async () => {

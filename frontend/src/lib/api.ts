@@ -224,7 +224,10 @@ export type CandidateSortColumn =
   | 'status'
   | 'createdAt'
   | 'updatedAt'
-  | 'lastInboundAt';
+  | 'lastInboundAt'
+  | 'mailbox'
+  | 'lever'
+  | 'lastActivity';
 
 export async function fetchCandidates(filters?: {
   status?: string;
@@ -290,6 +293,15 @@ export async function ignoreCandidate(id: string): Promise<SingleResponse<Candid
 export async function unignoreCandidate(id: string): Promise<SingleResponse<Candidate>> {
   const res = await api.post(`/candidates/${id}/unignore`);
   return res.data as SingleResponse<Candidate>;
+}
+
+/** R3 bulk status change; IGNORED also discards live drafts server-side. */
+export async function bulkUpdateCandidates(
+  ids: string[],
+  status: Candidate['status']
+): Promise<SingleResponse<{ updated: number; draftsDiscarded: number }>> {
+  const res = await api.post('/candidates/bulk', { ids, status });
+  return res.data as SingleResponse<{ updated: number; draftsDiscarded: number }>;
 }
 
 // Mailboxes

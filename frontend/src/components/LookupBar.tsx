@@ -11,6 +11,7 @@ import {
 } from '../lib/api';
 import { startGmailReconnect } from '../lib/reconnect';
 import { currentTheme, isTypingTarget, openShortcuts } from '../lib/shortcuts';
+import { LIVE_DRAFT_STATUSES } from '../lib/candidates';
 import { bannerIssues } from '../lib/statusBanner';
 import { setTheme } from '../lib/theme';
 import { viewHref } from '../lib/urlState';
@@ -221,10 +222,12 @@ export default function LookupBar() {
     navigate(viewHref(path, params, extra));
   };
 
+  // A live draft (same set as the Inbox) opens there; otherwise the
+  // candidate's side panel on Candidates.
   const openConversation = (result: LookupResult) => {
     const latest = result.drafts.latest;
-    if (latest && latest.status === 'PENDING') go('/inbox', { draftId: latest.id });
-    else go('/candidates', { q: result.email });
+    if (latest && LIVE_DRAFT_STATUSES.has(latest.status)) go('/inbox', { item: latest.id });
+    else if (result.candidate) go('/candidates', { candidate: result.candidate.id });
   };
 
   const commands: Array<{ heading: string; items: PaletteCommand[] }> = [
@@ -330,7 +333,7 @@ export default function LookupBar() {
             {options.length > 0 && (
               <CommandGroup heading="Matching candidates">
                 {options.map((c) => (
-                  <CommandItem key={c.id} value={`candidate-${c.id}`} onSelect={() => setInput(c.email)}>
+                  <CommandItem key={c.id} value={`candidate-${c.id}`} onSelect={() => go('/candidates', { candidate: c.id })}>
                     <UserRound />
                     <div className="flex min-w-0 flex-col">
                       <span>{c.name}</span>

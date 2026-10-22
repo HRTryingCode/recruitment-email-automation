@@ -25,13 +25,14 @@ import { fetchCandidate, fetchDraft, fetchInbox, type InboxView } from '@/lib/ap
 import { fetchLeverMe } from '@/lib/leverApi';
 import { prefetchAddToLever } from '@/lib/leverQueries';
 import { toastWarning } from '@/lib/toast';
+import { LIVE_DRAFT_STATUSES } from '@/lib/candidates';
 import { VIEWS, groupByRole, isInboxView, nextItemId } from '@/lib/inbox';
 import { cn } from '@/lib/utils';
 
 export const INBOX_POLL_MS = 15_000;
 
 /** Draft statuses a legacy ?candidateId= link can land on. */
-const LIVE_STATUSES = new Set(['PENDING', 'APPROVED', 'FAILED', 'SCHEDULED', 'SENDING']);
+const LIVE_STATUSES = LIVE_DRAFT_STATUSES;
 
 /** How long a row that just arrived in a view stays highlighted. */
 const HIGHLIGHT_MS = 4000;

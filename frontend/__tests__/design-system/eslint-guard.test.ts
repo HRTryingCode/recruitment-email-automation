@@ -4,8 +4,7 @@ import { ESLint } from 'eslint';
 
 /**
  * R4 flipped the design-system ESLint rules (eslint.config.mjs) to "error"
- * for the whole app. R3's files stay at "warn" until R3 merges — see the
- * TODO in eslint.config.mjs.
+ * for the whole app; R3 removed the last warn-only override (Candidates).
  */
 const ROOT = path.resolve(__dirname, '../..');
 const eslint = new ESLint({ cwd: ROOT });
@@ -18,7 +17,15 @@ async function severities(file: string): Promise<number[]> {
 }
 
 describe('design-system ESLint guard', () => {
-  it.each(['src/pages/TodayPage.tsx', 'src/components/today/New.tsx', 'src/components/inbox/New.tsx', 'src/components/Brand.tsx'])(
+  it.each([
+    'src/pages/TodayPage.tsx',
+    'src/components/today/New.tsx',
+    'src/components/inbox/New.tsx',
+    'src/components/Brand.tsx',
+    'src/components/CandidateTable.tsx',
+    'src/components/candidates/New.tsx',
+    'src/components/LeverBadge.tsx',
+  ])(
     'hand-rolled UI is an error in %s',
     async (file) => {
       const s = await severities(file);
@@ -26,10 +33,6 @@ describe('design-system ESLint guard', () => {
       expect(s.every((x) => x === 2)).toBe(true);
     }
   );
-
-  it('R3 files are still warn-only (TODO: flip after R3 merges)', async () => {
-    expect(await severities('src/components/CandidateTable.tsx')).toEqual([1, 1]);
-  });
 
   it('the app has zero design-system lint errors', async () => {
     const results = await eslint.lintFiles(['src']);

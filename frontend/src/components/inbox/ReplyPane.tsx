@@ -24,7 +24,7 @@ import type { DraftEditorState } from '@/hooks/useDraftEditor';
 import { LabelChip, PresenceChip, RoleChip, firstName } from './chips';
 import DraftEditor from './DraftEditor';
 import EvidenceMessage from './EvidenceMessage';
-import LeverSection, { type LeverFields } from './LeverSection';
+import LeverSection, { type LeverFields } from '@/components/lever/LeverSection';
 
 export interface LockState {
   name: string;
