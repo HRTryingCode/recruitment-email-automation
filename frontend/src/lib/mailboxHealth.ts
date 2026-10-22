@@ -71,3 +71,18 @@ export function summarizeHealth(data: MailboxSyncHealth[], now: number = Date.no
   }
   return { tone: 'emerald', label: 'All mailboxes healthy', unhealthy: false };
 }
+
+/** Compact "watch expires in" label: −3h, < 1h, 12h, 5d, or "no watch". */
+export function formatWatchExpiry(h: number | null): string {
+  if (h === null) return 'no watch';
+  if (h < 0) return `−${Math.abs(Math.round(h))}h`;
+  if (h < 1) return `< 1h`;
+  if (h < 48) return `${Math.round(h)}h`;
+  return `${Math.round(h / 24)}d`;
+}
+
+/** Local part + "@" for compact copy: "aaronrampersad@archive.com" → "aaronrampersad@". */
+export function shortAddress(email: string): string {
+  const at = email.indexOf('@');
+  return at === -1 ? email : email.slice(0, at + 1);
+}

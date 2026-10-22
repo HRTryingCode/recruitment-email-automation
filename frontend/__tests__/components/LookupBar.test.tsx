@@ -10,6 +10,8 @@ import * as api from '../../src/lib/api';
 vi.mock('../../src/lib/api', () => ({
   fetchLookup: vi.fn(),
   fetchCandidates: vi.fn(),
+  fetchSyncHealth: vi.fn(),
+  addGmailMailbox: vi.fn(),
 }));
 
 const fetchLookupMock = vi.mocked(api.fetchLookup);
@@ -50,7 +52,7 @@ function renderBar() {
       <MemoryRouter initialEntries={['/']}>
         <Routes>
           <Route
-            path="/"
+            path="*"
             element={
               <>
                 <input aria-label="Other field" />
@@ -78,6 +80,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   fetchLookupMock.mockResolvedValue({ success: true, data: base({}) });
   fetchCandidatesMock.mockResolvedValue({ success: true, data: [], meta: { total: 0, page: 1, limit: 5 } });
+  vi.mocked(api.fetchSyncHealth).mockResolvedValue({ success: true, data: [] });
 });
 
 describe('<LookupBar /> shortcuts', () => {
@@ -198,11 +201,11 @@ describe('<LookupBar /> lookup', () => {
     expect(screen.getByTestId('lookup-integrations')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /open conversation/i }));
-    expect(screen.getByTestId('location')).toHaveTextContent('/?tab=drafts&draftId=d-9');
+    expect(screen.getByTestId('location')).toHaveTextContent('/inbox?draftId=d-9');
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
-  it('opens the candidates tab filtered by email when there is no pending draft', async () => {
+  it('opens Candidates filtered by email when there is no pending draft', async () => {
     fetchLookupMock.mockResolvedValue({
       success: true,
       data: base({
@@ -217,7 +220,7 @@ describe('<LookupBar /> lookup', () => {
     });
     const { user } = await openAndType('bob@x.com');
     await user.click(await screen.findByRole('button', { name: /open conversation/i }));
-    expect(screen.getByTestId('location')).toHaveTextContent('/?tab=candidates&q=bob%40x.com');
+    expect(screen.getByTestId('location')).toHaveTextContent('/candidates?q=bob%40x.com');
   });
 
   it.each([
