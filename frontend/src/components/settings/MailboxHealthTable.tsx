@@ -61,9 +61,10 @@ function StatusCell({ row }: { row: MailboxSyncHealth }) {
         </p>
       )}
       {state === 'failing' && (
-        <p className="max-w-xs text-xs text-muted-foreground" title={row.lastReconcileError?.slice(0, 200) ?? undefined}>
+        <p className="max-w-xs text-xs text-muted-foreground">
           Catch-up sync failed {row.consecutiveReconcileFailures} time{row.consecutiveReconcileFailures === 1 ? '' : 's'} in a row. Try Resync; if it
           keeps failing, ask an admin to check the server logs.
+          {row.lastReconcileError && <span className="block font-mono">Details: {row.lastReconcileError.slice(0, 80)}</span>}
         </p>
       )}
     </div>
@@ -156,9 +157,7 @@ export default function MailboxHealthTable({ data }: { data: MailboxSyncHealth[]
                 <TableCell className={cn('whitespace-normal', row.webhookErrorsLast24h >= 10 && 'text-destructive')}>
                   <span className="font-mono tabular-nums">{row.webhookErrorsLast24h}</span>
                   {row.lastWebhookError && (
-                    <p className="max-w-48 truncate text-xs text-muted-foreground" title={row.lastWebhookError.slice(0, 200)}>
-                      Latest error details on hover
-                    </p>
+                    <p className="max-w-48 truncate font-mono text-xs text-muted-foreground">Details: {row.lastWebhookError.slice(0, 80)}</p>
                   )}
                 </TableCell>
                 <TableCell>

@@ -15,12 +15,8 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 }
 
 /** Plain-language "what this means and who can fix it" under a status row. */
-function Note({ children, title }: { children: React.ReactNode; title?: string }) {
-  return (
-    <p className="pb-1.5 text-sm text-muted-foreground" title={title}>
-      {children}
-    </p>
-  );
+function Note({ children }: { children: React.ReactNode }) {
+  return <p className="pb-1.5 text-sm text-muted-foreground">{children}</p>;
 }
 
 export default function IntegrationsSettings() {
@@ -59,7 +55,7 @@ export default function IntegrationsSettings() {
                 <Badge variant={me.createEnabled ? 'success' : 'secondary'}>{me.createEnabled ? 'On' : 'Off'}</Badge>
               </Row>
               {me.configured && !me.createEnabled && (
-                <Note title="Vercel setting: LEVER_CREATE_ENABLED">
+                <Note>
                   The Add to Lever button is hidden for everyone. An admin needs to turn it on in Vercel.
                 </Note>
               )}
