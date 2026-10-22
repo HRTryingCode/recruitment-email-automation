@@ -138,16 +138,20 @@ describe('today summary SQL (R4)', () => {
     return (await db.query<T>(sql.text, sql.values as unknown[])).rows;
   };
   let all: TodaySummary;
+  // Snapshot of `calls` for the unscoped summary alone: later tests reuse
+  // `query`, and tests may run in any order (CI uses --sequence.shuffle).
+  let summaryQueries: number;
 
   beforeAll(async () => {
     db = await migratedDb();
     await seed(db);
     calls = 0;
     all = await getTodaySummary({}, NOW, query);
+    summaryQueries = calls;
   }, 60_000);
 
   it('runs at most four queries', () => {
-    expect(calls).toBeLessThanOrEqual(4);
+    expect(summaryQueries).toBeLessThanOrEqual(4);
   });
 
   it('counts replies waiting per Inbox view, including snooze-expired drafts', () => {
