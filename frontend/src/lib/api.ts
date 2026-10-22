@@ -17,22 +17,25 @@ api.interceptors.request.use((config) => {
 });
 
 // On 401, clear auth state and bounce to /login — but skip /auth/* routes
-// because login/signup pages display their own error messages.
-api.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    const status = error?.response?.status;
-    const url: string | undefined = error?.config?.url;
-    if (status === 401 && url && !url.startsWith('/auth/')) {
-      clearToken();
-      clearUser();
-      if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
-        window.location.assign('/login');
-      }
+// because login/signup pages display their own error messages. The current
+// page rides along as ?next= so the recruiter lands back where they were;
+// unsaved draft edits survive in sessionStorage (DraftReviewPane).
+export function handleAuthError(error: unknown): Promise<never> {
+  const err = error as { response?: { status?: number }; config?: { url?: string } } | null;
+  const status = err?.response?.status;
+  const url: string | undefined = err?.config?.url;
+  if (status === 401 && url && !url.startsWith('/auth/')) {
+    clearToken();
+    clearUser();
+    if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+      const here = `${window.location.pathname}${window.location.search}`;
+      window.location.assign(`/login?next=${encodeURIComponent(here)}`);
     }
-    return Promise.reject(error);
   }
-);
+  return Promise.reject(error);
+}
+
+api.interceptors.response.use((response) => response, handleAuthError);
 
 export type { User };
 
@@ -134,6 +137,10 @@ export interface EmailDraft {
   createdAt: string;
   updatedAt: string;
   originalMessage?: OriginalMessage | null;
+  /** Address createDraft will CC (null when none) — served by the API. */
+  ccAddress?: string | null;
+  /** PENDING drafts move to the Expired bucket after this (createdAt + 21d). */
+  expiresAt?: string;
 }
 
 export interface HealthStatus {
@@ -269,6 +276,7 @@ export async function fetchDrafts(filters?: {
   page?: number;
   limit?: number;
   includeReplied?: boolean;
+  expired?: boolean;
 }): Promise<PaginatedResponse<EmailDraft>> {
   const res = await api.get('/drafts', { params: filters });
   return res.data as PaginatedResponse<EmailDraft>;

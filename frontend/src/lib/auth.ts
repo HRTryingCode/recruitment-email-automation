@@ -70,3 +70,13 @@ export function clearUser(): void {
     // ignore
   }
 }
+
+/**
+ * The post-login destination from a `?next=` query string, restricted to a
+ * same-origin path so it can't be abused as an open redirect.
+ */
+export function safeNextPath(search: string): string {
+  const next = new URLSearchParams(search).get('next');
+  if (!next || !next.startsWith('/') || next.startsWith('//') || next.startsWith('/\\')) return '/';
+  return next;
+}

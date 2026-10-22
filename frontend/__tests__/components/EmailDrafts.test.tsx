@@ -27,6 +27,7 @@ const fetchDraftsMock = vi.mocked(api.fetchDrafts);
 const approveDraftMock = vi.mocked(api.approveDraft);
 const discardDraftMock = vi.mocked(api.discardDraft);
 const regenerateDraftMock = vi.mocked(api.regenerateDraft);
+const updateDraftMock = vi.mocked(api.updateDraft);
 
 function makeDraft(overrides: Partial<EmailDraft> = {}): EmailDraft {
   return {
@@ -114,17 +115,19 @@ function createClient() {
   });
 }
 
-function renderDrafts() {
+function renderDrafts(props: { mailboxId?: string } = {}) {
   const client = createClient();
-  return render(
+  const tree = (p: { mailboxId?: string }) => (
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={['/']}>
         <TooltipProvider>
-          <EmailDrafts />
+          <EmailDrafts {...p} />
         </TooltipProvider>
       </MemoryRouter>
     </QueryClientProvider>
   );
+  const utils = render(tree(props));
+  return { ...utils, rerenderWith: (p: { mailboxId?: string }) => utils.rerender(tree(p)) };
 }
 
 async function openFirstDraft() {
@@ -157,6 +160,7 @@ describe('<EmailDrafts />', () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    window.sessionStorage.clear();
   });
 
   it('renders a flat list row for each draft fixture', async () => {
@@ -334,5 +338,126 @@ describe('<EmailDrafts />', () => {
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
+  });
+
+  // --- Audit B5 -----------------------------------------------------------
+
+  it('saving an edit sends the edited text (with signature) and the preview shows the saved HTML (C1)', async () => {
+    const SIG = 'Aaron Rampersad\nArchive';
+    const withSig = makeDraft({
+      bodyText: `Hi Ada,\n\nOriginal AI text.\n\nBest,\n${SIG}`,
+      bodyHtml: '<div>Original AI text.</div><div class="sig">Aaron Rampersad</div>',
+    });
+    // Server state: the list refetch after save returns whatever PATCH stored.
+    let serverDraft: EmailDraft = withSig;
+    fetchDraftsMock.mockImplementation(async () => ({
+      success: true,
+      data: [serverDraft],
+      meta: { total: 1, page: 1, limit: 50 },
+    }));
+    updateDraftMock.mockImplementation(async () => {
+      serverDraft = {
+        ...withSig,
+        bodyText: `Hi Ada,\n\nRecruiter edit.\n\nBest,\n${SIG}`,
+        bodyHtml: '<div>Recruiter edit.</div><div class="sig">Aaron Rampersad</div>',
+        updatedAt: '2026-05-20T12:00:00.000Z',
+      };
+      return { success: true, data: serverDraft };
+    });
+    const user = userEvent.setup();
+    renderDrafts();
+    const pane = await openFirstDraft();
+
+    await user.click(within(pane).getByRole('button', { name: /edit/i }));
+    const textarea = within(pane).getByRole('textbox');
+    await user.clear(textarea);
+    await user.type(textarea, `Hi Ada,{enter}{enter}Recruiter edit.{enter}{enter}Best,{enter}Aaron Rampersad{enter}Archive`);
+    await user.click(within(pane).getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(updateDraftMock).toHaveBeenCalled());
+    expect(updateDraftMock).toHaveBeenCalledWith('draft-1', {
+      bodyText: `Hi Ada,\n\nRecruiter edit.\n\nBest,\n${SIG}`,
+    });
+    await waitFor(() => {
+      const iframe = within(getPane()).getByTitle('Draft preview') as HTMLIFrameElement;
+      expect(iframe.getAttribute('srcdoc')).toContain('Recruiter edit.');
+      expect(iframe.getAttribute('srcdoc')).toContain('class="sig"');
+    });
+  });
+
+  it('pressing Enter on a focused button activates that button, not the open-draft shortcut (M21)', async () => {
+    renderDrafts();
+    await screen.findByText('Ada Lovelace');
+    const helpBtn = screen.getByRole('button', { name: /show keyboard shortcuts/i });
+    helpBtn.focus();
+    fireEvent.keyDown(helpBtn, { key: 'Enter' });
+    expect(screen.queryByRole('dialog', { name: /draft for/i })).not.toBeInTheDocument();
+  });
+
+  it('pressing "a" with the pane closed does not approve anything (M21)', async () => {
+    renderDrafts();
+    await screen.findByText('Ada Lovelace');
+    fireEvent.keyDown(window, { key: 'a' });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(approveDraftMock).not.toHaveBeenCalled();
+  });
+
+  it('refetches with the selected mailbox and resets to page 1 when it changes (M22)', async () => {
+    const { rerenderWith } = renderDrafts({ mailboxId: 'mb-1' });
+    await screen.findByText('Ada Lovelace');
+    expect(fetchDraftsMock).toHaveBeenCalledWith(expect.objectContaining({ mailboxId: 'mb-1', page: 1 }));
+    rerenderWith({ mailboxId: 'mb-2' });
+    await waitFor(() =>
+      expect(fetchDraftsMock).toHaveBeenCalledWith(expect.objectContaining({ mailboxId: 'mb-2', page: 1 }))
+    );
+  });
+
+  it('paginates: Next loads page 2 when there are more drafts than one page (M22)', async () => {
+    fetchDraftsMock.mockResolvedValue({ success: true, data: DRAFTS, meta: { total: 120, page: 1, limit: 50 } });
+    const user = userEvent.setup();
+    renderDrafts();
+    await screen.findByText('Ada Lovelace');
+    await user.click(screen.getByRole('button', { name: /next page/i }));
+    await waitFor(() =>
+      expect(fetchDraftsMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'PENDING', page: 2 }))
+    );
+  });
+
+  it('the Expired tab lists PENDING drafts older than the expiry window (M16)', async () => {
+    const user = userEvent.setup();
+    renderDrafts();
+    await screen.findByText('Ada Lovelace');
+    await user.click(screen.getByRole('button', { name: /^expired$/i }));
+    await waitFor(() =>
+      expect(fetchDraftsMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'PENDING', expired: true }))
+    );
+  });
+
+  it('shows the CC address served by the API instead of a hardcoded one (L17)', async () => {
+    fetchDraftsMock.mockResolvedValue({
+      success: true,
+      data: [makeDraft({ ccAddress: 'maria@archive.com' })],
+      meta: { total: 1, page: 1, limit: 50 },
+    });
+    renderDrafts();
+    const pane = await openFirstDraft();
+    expect(within(pane).getByText('maria@archive.com')).toBeInTheDocument();
+    expect(within(pane).queryByText('sofia@archive.com')).not.toBeInTheDocument();
+  });
+
+  it('restores unsaved edits after the pane is closed and reopened (L17)', async () => {
+    const user = userEvent.setup();
+    renderDrafts();
+    let pane = await openFirstDraft();
+    await user.click(within(pane).getByRole('button', { name: /edit/i }));
+    const textarea = within(pane).getByRole('textbox');
+    await user.clear(textarea);
+    await user.type(textarea, 'Half-written reply');
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    pane = await openFirstDraft();
+    expect(within(pane).getByRole('textbox')).toHaveValue('Half-written reply');
   });
 });

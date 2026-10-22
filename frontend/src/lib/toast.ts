@@ -43,7 +43,11 @@ export function extractApiErrorMessage(err: unknown, fallback: string): string {
 // a softer "already resolved" success rather than a scary error toast.
 export function isAlreadyResolvedError(err: unknown): boolean {
   if (!axios.isAxiosError(err)) return false;
-  if (err.response?.status !== 400) return false;
+  // 409 = the draft changed state under us (double approve/send/discard);
+  // 400 kept for older backends.
+  const status = err.response?.status;
+  if (status === 409) return true;
+  if (status !== 400) return false;
   const data = err.response?.data as
     | { error?: string; message?: string }
     | undefined;

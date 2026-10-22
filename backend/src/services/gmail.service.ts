@@ -2,7 +2,7 @@ import { google } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 import { config } from '../config';
 import { prisma } from '../db/client';
-import { classifyReply, generateDraftReply, generateHandoffDraftReply, getHandoffType, type ExampleReply } from './claude.service';
+import { classifyReply, generateDraftReply, generateHandoffDraftReply, getHandoffType, type ExampleReply, type Classification, type HandoffType } from './claude.service';
 import { logEvent } from './monitoring.service';
 import { decrypt, encrypt } from '../lib/crypto';
 import { safeError, isAuthRevokedError, MailboxNeedsReauthError } from '../lib/safeError';
@@ -15,6 +15,7 @@ import {
 } from '../lib/senderIdentity';
 import { COMPANY_DOMAIN, isCompanyEmail } from '../lib/accessPolicy';
 import { createError } from '../middleware/error';
+import { composeDraftHtml, encodeHeaderValue, escapeHtml, isRfcMessageId, sanitizeReferences, stripHeaderBreaks } from '../lib/draftBody';
 import type { Mailbox, EmailThread } from '@prisma/client';
 
 /**
@@ -462,6 +463,25 @@ export function pickHeadTail<T>(messagesAsc: T[], head: number, tail: number): T
  * Errors are swallowed (logged) so a bad message can't kill the rest of the
  * sync. The message itself is always already saved before this is called.
  */
+/**
+ * The draft that should stop classifyAndDraft from creating another one on
+ * this thread, if any. A live (PENDING/APPROVED) draft always blocks. On a
+ * hand-off inbox a SENT draft blocks too: once the candidate has been looped
+ * in to the CC recipient, their next reply-all must not produce a second
+ * "looping in Sofia" draft (M23).
+ */
+export async function findBlockingDraft(
+  threadId: string,
+  isHandoffInbox: boolean
+): Promise<{ id: string; status: string } | null> {
+  const statuses = isHandoffInbox ? ['PENDING', 'APPROVED', 'SENT'] : ['PENDING', 'APPROVED'];
+  return prisma.emailDraft.findFirst({
+    where: { threadId, status: { in: statuses } },
+    select: { id: true, status: true },
+    orderBy: { createdAt: 'desc' },
+  });
+}
+
 async function classifyAndDraft(opts: {
   mailbox: Mailbox;
   thread: EmailThread;
@@ -534,9 +554,9 @@ async function classifyAndDraft(opts: {
 
   // Existing draft check happens BEFORE we burn Claude tokens — if there is
   // already a PENDING/APPROVED draft on this thread, we just log + bail.
-  const existingDraft = await prisma.emailDraft.findFirst({
-    where: { threadId: thread.id, status: { in: ['PENDING', 'APPROVED'] } },
-  });
+  const isHandoffInbox =
+    mailbox.emailAddress.toLowerCase() !== config.draftCcEmail.toLowerCase();
+  const existingDraft = await findBlockingDraft(thread.id, isHandoffInbox);
 
   let classificationResult;
   try {
@@ -685,6 +705,7 @@ async function classifyAndDraft(opts: {
         candidateId: candidate.id,
         threadId: thread.id,
         existingDraftId: existingDraft.id,
+        existingStatus: existingDraft.status,
       },
       'INFO'
     );
@@ -735,8 +756,6 @@ async function classifyAndDraft(opts: {
   // 5. Only auto-draft for INTERESTED candidates.
   if (classification !== 'INTERESTED') return;
 
-  const ccEmail = config.draftCcEmail.toLowerCase();
-  const isHandoffInbox = mailbox.emailAddress.toLowerCase() !== ccEmail;
 
   // 6. For non-Sofia inboxes, use Claude to generate a tailored handoff reply
   //    that addresses anything specific the candidate said, then loops in Sofia.
@@ -748,46 +767,17 @@ async function classifyAndDraft(opts: {
       ? `${existingRefs} ${inReplyToMessageId ?? ''}`.trim()
       : inReplyToMessageId;
 
-    // Use first name only for the CC person so drafts say "Sofia" not "Sofia Delgado".
-    const ccDisplayName = await prisma.mailbox
-      .findUnique({ where: { emailAddress: ccEmail }, select: { displayName: true } })
-      .then((mb) => (mb?.displayName ?? 'Sofia').split(/\s+/)[0]);
-
-    let content: { subject: string; bodyText: string; bodyHtml: string };
-    try {
-      const draftReply = await generateHandoffDraftReply(
-        {
-          subject: thread.subject,
-          messages: allMessages.map((m) => ({
-            fromAddress: m.fromAddress,
-            fromName: m.fromName,
-            bodyText: m.bodyText,
-            receivedAt: m.receivedAt,
-          })),
-          candidateName: candidate.name,
-          classification,
-          signatureHtml,
-          ccName: ccDisplayName,
-          ccEmail,
-          handoffType: getHandoffType(mailbox.emailAddress, candidate.role ?? null),
-        },
-        { email: mailbox.emailAddress, displayName: mailbox.displayName }
-      );
-      if (signatureHtml) {
-        draftReply.bodyText = `${draftReply.bodyText}\n${htmlSignatureToPlainText(signatureHtml)}`;
-        draftReply.bodyHtml = `${draftReply.bodyHtml ?? ''}${signatureHtml}`;
-      }
-      content = draftReply;
-    } catch {
-      // Fall back to static template if Claude fails
-      content = buildHandoffDraftContent(
-        candidate.name,
-        mailbox.displayName,
-        mailbox.emailAddress,
-        thread.subject,
-        signatureHtml
-      );
-    }
+    const content = await composeHandoffDraftContent({
+      mailbox,
+      candidateName: candidate.name,
+      candidateRole: candidate.role ?? null,
+      threadId: thread.id,
+      threadSubject: thread.subject,
+      messages: allMessages,
+      classification,
+      signatureHtml,
+      via: 'auto',
+    });
 
     const createdHandoff = await createLiveDraft(
       {
@@ -807,7 +797,7 @@ async function classifyAndDraft(opts: {
 
     await logEvent(
       'DRAFT_CREATED',
-      { mailboxId: mailbox.id, candidateId: candidate.id, threadId: thread.id, messageType, confidence, via: 'handoff_claude' },
+      { mailboxId: mailbox.id, candidateId: candidate.id, threadId: thread.id, messageType, confidence, via: content.template },
       'INFO'
     );
     return;
@@ -1725,6 +1715,17 @@ export async function createServiceAccountClient(emailToImpersonate: string) {
   return google.gmail({ version: 'v1', auth: authClient as Parameters<typeof google.gmail>[0]['auth'] });
 }
 
+/**
+ * The address createDraft CCs on a draft sent from `ownerEmail`, or null when
+ * there is none (no CC configured, or the owner *is* the CC inbox). Exposed so
+ * the UI shows the real CC instead of a hardcoded address (L17).
+ */
+export function draftCcAddressFor(ownerEmail: string): string | null {
+  const ccAddress = config.draftCcEmail.trim();
+  if (!ccAddress) return null;
+  return ccAddress.toLowerCase() === ownerEmail.trim().toLowerCase() ? null : ccAddress;
+}
+
 export async function createDraft(
   mailboxId: string,
   draft: {
@@ -1744,7 +1745,9 @@ export async function createDraft(
   const gmail = await getGmailClient(mailbox);
 
   // Build RFC 2822 email with proper threading headers
-  const headers: string[] = [`To: ${draft.toAddress}`];
+  // Every header value is CR/LF-stripped (and Subject RFC 2047-encoded) so
+  // model- or user-supplied text can never inject extra headers (M10).
+  const headers: string[] = [`To: ${stripHeaderBreaks(draft.toAddress)}`];
 
   // CC the configured address on every AI-drafted email (e.g. sofia@archive.com)
   // so she stays in the loop on outbound recruiting traffic. Skip if the CC
@@ -1758,18 +1761,22 @@ export async function createDraft(
       'INFO'
     );
   } else if (ccAddress) {
-    headers.push(`Cc: ${ccAddress}`);
+    headers.push(`Cc: ${stripHeaderBreaks(ccAddress)}`);
   }
 
-  headers.push(`Subject: ${draft.subject}`);
+  headers.push(`Subject: ${encodeHeaderValue(draft.subject)}`);
   headers.push('MIME-Version: 1.0');
 
   // CRITICAL: Set In-Reply-To and References for Superhuman threading
-  if (draft.inReplyToMessageId) {
-    headers.push(`In-Reply-To: ${draft.inReplyToMessageId}`);
+  // Only RFC Message-IDs (<id@host>) are valid here. Older manual drafts
+  // stored the Gmail API message id, which mail clients can't thread on (M13);
+  // Gmail still threads those via threadId below.
+  if (isRfcMessageId(draft.inReplyToMessageId)) {
+    headers.push(`In-Reply-To: ${draft.inReplyToMessageId.trim()}`);
   }
-  if (draft.referencesHeader) {
-    headers.push(`References: ${draft.referencesHeader}`);
+  const references = sanitizeReferences(draft.referencesHeader);
+  if (references) {
+    headers.push(`References: ${references}`);
   }
 
   let rawEmail: string;
@@ -1815,6 +1822,15 @@ export async function sendDraft(mailboxId: string, externalDraftId: string): Pro
       id: externalDraftId,
     },
   });
+}
+
+export async function deleteDraft(mailboxId: string, externalDraftId: string): Promise<void> {
+  const mailbox = await prisma.mailbox.findUnique({ where: { id: mailboxId } });
+  if (!mailbox) throw new Error('Mailbox not found');
+
+  const gmail = await getGmailClient(mailbox);
+
+  await gmail.users.drafts.delete({ userId: 'me', id: externalDraftId });
 }
 
 const SOFIA_EMAIL = 'sofia@archive.com';
@@ -2134,8 +2150,9 @@ export function htmlSignatureToPlainText(html: string): string {
 }
 
 /**
- * Build the fixed handoff reply used for Aaron/Paul/Ethan's inboxes.
- * "I'm looping in Sofia…" — no Claude needed, consistent every time.
+ * Static hand-off reply ("I'm looping in <CC>…") used when Claude can't
+ * produce one. The CC first name and hand-off type are passed through so the
+ * fallback says the same thing the Claude prompt would (L12).
  * Pass signatureHtml (from fetchMailboxSignature) to include the real signature.
  */
 export function buildHandoffDraftContent(
@@ -2143,7 +2160,8 @@ export function buildHandoffDraftContent(
   recruiterDisplayName: string | null,
   recruiterEmail: string,
   threadSubject: string,
-  signatureHtml: string | null = null
+  signatureHtml: string | null = null,
+  opts: { ccName?: string; handoffType?: HandoffType } = {}
 ): { subject: string; bodyText: string; bodyHtml: string } {
   const firstName = candidateName.split(/\s+/)[0] ?? candidateName;
   const displaySeed = (recruiterDisplayName ?? '').trim();
@@ -2152,30 +2170,120 @@ export function buildHandoffDraftContent(
     displaySeed.length > 0 && !looksLikeEmail
       ? (displaySeed.split(/\s+/)[0] ?? displaySeed)
       : ((recruiterEmail.split('@')[0] ?? '').split(/[._-]/)[0] ?? 'there');
+  const ccName = opts.ccName?.trim() || 'Sofia';
 
-  const subject = threadSubject.startsWith('Re:') ? threadSubject : `Re: ${threadSubject}`;
+  const subject = /^re:/i.test(threadSubject) ? stripHeaderBreaks(threadSubject) : `Re: ${stripHeaderBreaks(threadSubject)}`;
+
+  const loopIn = (() => {
+    switch (opts.handoffType ?? 'coordinator') {
+      case 'sofia_interviews':
+        return `I'm looping in ${ccName} from the recruitment team here — she'll be interviewing you and will get some time on the calendar.`;
+      case 'ethan_interviews_sofia_schedules':
+        return `I'm looping in ${ccName} from the recruitment team here to coordinate timing for the interview.`;
+      default:
+        return `I'm looping in ${ccName} from the recruitment team here to schedule time with you and share more about the position.`;
+    }
+  })();
 
   const sigPlainText = signatureHtml ? '\n' + htmlSignatureToPlainText(signatureHtml) : '\n' + recruiterFirst;
   const sigHtmlBlock = signatureHtml
     ? `<div style="margin-top:8px">${signatureHtml}</div>`
-    : `<span>${recruiterFirst}</span>`;
+    : `<span>${escapeHtml(recruiterFirst)}</span>`;
 
   const bodyText =
-    `Hi ${firstName},\n\nI hope you're doing well.\n\nI'm looping in Sofia from the recruitment team here to schedule time with you and share more about the position.\n\nBest,${sigPlainText}`;
+    `Hi ${firstName},\n\nI hope you're doing well.\n\n${loopIn}\n\nBest,${sigPlainText}`;
 
   // Use a simple inline-style layout that renders consistently across Gmail,
   // Superhuman, Outlook, and Apple Mail — no external CSS, no block elements
   // that add unwanted spacing. Line-height and margin on <p> kept minimal so
   // the email looks like a real person wrote it, not a newsletter.
   const bodyHtml = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;font-size:14px;line-height:1.5;color:#1a1a1a">` +
-    `<p style="margin:0 0 14px 0">Hi ${firstName},</p>` +
+    `<p style="margin:0 0 14px 0">Hi ${escapeHtml(firstName)},</p>` +
     `<p style="margin:0 0 14px 0">I hope you're doing well.</p>` +
-    `<p style="margin:0 0 14px 0">I'm looping in Sofia from the recruitment team here to schedule time with you and share more about the position.</p>` +
+    `<p style="margin:0 0 14px 0">${escapeHtml(loopIn)}</p>` +
     `<p style="margin:0 0 6px 0">Best,</p>` +
     sigHtmlBlock +
     `</div>`;
 
   return { subject, bodyText, bodyHtml };
+}
+
+/**
+ * Generate the hand-off ("looping in <CC>") reply for a non-CC inbox: Claude
+ * first, falling back to the static template. Shared by auto-drafting, manual
+ * generate and regenerate so all three behave and log the same way.
+ * The fallback is logged as DRAFT_FALLBACK_TEMPLATE (WARN) and reported via
+ * `template`, so it is never mistaken for Claude output (L12).
+ */
+export async function composeHandoffDraftContent(opts: {
+  mailbox: Pick<Mailbox, 'id' | 'emailAddress' | 'displayName'>;
+  candidateName: string;
+  candidateRole: string | null;
+  threadId: string;
+  threadSubject: string;
+  messages: Array<{ fromAddress: string; fromName?: string | null; bodyText?: string | null; receivedAt: Date }>;
+  classification: Classification;
+  signatureHtml: string | null;
+  via: string;
+}): Promise<{ subject: string; bodyText: string; bodyHtml: string; template: 'handoff_claude' | 'handoff_fallback_template' }> {
+  const { mailbox, signatureHtml } = opts;
+  const ccEmail = config.draftCcEmail.toLowerCase();
+  // First name only for the CC person so drafts say "Sofia" not "Sofia Delgado".
+  const ccMailbox = await prisma.mailbox.findUnique({
+    where: { emailAddress: ccEmail },
+    select: { displayName: true },
+  });
+  const ccName = (ccMailbox?.displayName ?? 'Sofia').split(/\s+/)[0] || 'Sofia';
+  const handoffType = getHandoffType(mailbox.emailAddress, opts.candidateRole);
+  const sigPlain = signatureHtml ? htmlSignatureToPlainText(signatureHtml) : null;
+
+  try {
+    const reply = await generateHandoffDraftReply(
+      {
+        subject: opts.threadSubject,
+        messages: opts.messages.map((m) => ({
+          fromAddress: m.fromAddress,
+          fromName: m.fromName,
+          bodyText: m.bodyText,
+          receivedAt: m.receivedAt,
+        })),
+        candidateName: opts.candidateName,
+        classification: opts.classification,
+        signatureHtml,
+        ccName,
+        ccEmail,
+        handoffType,
+      },
+      { email: mailbox.emailAddress, displayName: mailbox.displayName }
+    );
+    const bodyText = sigPlain ? `${reply.bodyText}\n${sigPlain}` : reply.bodyText;
+    return {
+      subject: reply.subject,
+      bodyText,
+      bodyHtml: composeDraftHtml(bodyText, signatureHtml, sigPlain),
+      template: 'handoff_claude',
+    };
+  } catch (err) {
+    await logEvent(
+      'DRAFT_FALLBACK_TEMPLATE',
+      {
+        mailboxId: mailbox.id,
+        threadId: opts.threadId,
+        via: opts.via,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      'WARN'
+    );
+    const content = buildHandoffDraftContent(
+      opts.candidateName,
+      mailbox.displayName,
+      mailbox.emailAddress,
+      opts.threadSubject,
+      signatureHtml,
+      { ccName, handoffType }
+    );
+    return { ...content, template: 'handoff_fallback_template' };
+  }
 }
 
 export async function fetchExamplesForMailbox(

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { Sparkles } from 'lucide-react';
 import { loginWithGoogle } from '../lib/api';
-import { setToken, setUser } from '../lib/auth';
+import { safeNextPath, setToken, setUser } from '../lib/auth';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Alert, AlertDescription } from '../components/ui/alert';
 
@@ -32,7 +32,7 @@ export default function Login() {
             const { token, user } = await loginWithGoogle(credential);
             setToken(token);
             setUser(user);
-            navigate('/', { replace: true });
+            navigate(safeNextPath(window.location.search), { replace: true });
           } catch (err) {
             let message = 'Google sign-in failed. Please try again.';
             if (axios.isAxiosError(err)) {
