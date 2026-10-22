@@ -41,7 +41,10 @@ smoke` (or `./scripts/smoke-test.sh <base-url>`) and confirm 7/7 PASS.
   - [ ] `ALLOWED_ORIGINS` — comma-separated list of origins permitted by
         CORS (include any preview domains you actively use).
   - [ ] `PUBSUB_AUDIENCE` *(optional)* — expected `aud` claim on Pub/Sub push
-        JWTs; defaults to the webhook URL.
+        JWTs (the webhook URL). Set only after the subscription sends OIDC.
+  - [ ] `PUBSUB_SERVICE_ACCOUNT_EMAIL` — the push subscription's service
+        account; required `email` claim when `PUBSUB_AUDIENCE` is set.
+  - [ ] `ADMIN_EMAILS` / `ALLOWED_USERS` — sign-in policy (no defaults).
 - [ ] **Google Cloud OAuth client configured** with:
   - [ ] Redirect URI matching `GMAIL_REDIRECT_URI`.
   - [ ] Authorized JavaScript origin matching `FRONTEND_URL`.

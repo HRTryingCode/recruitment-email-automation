@@ -299,7 +299,11 @@ Set under **Project Settings → Environment Variables** (Production scope).
 | `GMAIL_REDIRECT_URI` | Must be `https://<prod-domain>/api/mailboxes/gmail/callback` and must be registered in Google Cloud Console under the OAuth client. |
 | `GMAIL_PUBSUB_TOPIC` | Fully-qualified Pub/Sub topic name. |
 | `JWT_SECRET` | 32+ random bytes for JWT signing. |
-| `ENCRYPTION_KEY` | 32 random bytes, base64. Used by `lib/crypto`. Rotating this **invalidates every stored mailbox credential** — don't rotate without a re-OAuth plan. |
+| `ENCRYPTION_KEY` | Exactly 32 random bytes, base64. Used by `lib/crypto`; new ciphertext is tagged `v<ENCRYPTION_KEY_VERSION>:`. To rotate: move the old key to `ENCRYPTION_KEY_PREVIOUS`, set the new `ENCRYPTION_KEY`, bump `ENCRYPTION_KEY_VERSION` (default `1`). Old rows keep decrypting and are re-encrypted on next write. |
+| `ALLOWED_USERS` | Optional sign-in allowlist (comma-separated). Unset = any `@archive.com` Workspace account (`hd` claim checked). |
+| `ADMIN_EMAILS` | Comma-separated; promoted to `admin` on sign-in, never demoted, always allowed to sign in. No default. |
+| `PUBSUB_SERVICE_ACCOUNT_EMAIL` | Push subscription's service account; required `email` claim on webhook JWTs when `PUBSUB_AUDIENCE` is set. |
+| `ORPHAN_BODY_RETENTION_DAYS` | Optional, destructive. Enables the daily orphan-body purge (integer ≥ 7). Unset = no-op. |
 | `CRON_SECRET` | Bearer secret for `/api/internal/cron/*`. |
 | `SLACK_ALERT_WEBHOOK_URL` | Slack incoming-webhook URL for watchdog alerts. Optional — unset = alerting disabled (no-op, warned once). See [Alerting](#alerting). |
 | `DRAFT_CC_EMAIL` | Optional — defaults to `sofia@archive.com`. |
@@ -463,13 +467,17 @@ explicit decision in the PR description.
 `POST /api/webhooks/gmail` is publicly reachable (Google needs to POST to it).
 When `PUBSUB_AUDIENCE` is set, the handler verifies the OIDC token in the
 `Authorization: Bearer …` header against that audience and rejects anything
-unsigned. **On Vercel, `PUBSUB_AUDIENCE` is required at boot** — the config
-validator in `backend/src/config.ts` refuses to start the server if it's
-missing on a Vercel deployment. Locally, leaving it unset is allowed (the
-verifier becomes a no-op) so dev boxes can curl test payloads.
+unsigned. When `PUBSUB_SERVICE_ACCOUNT_EMAIL` is also set, the token's
+verified `email` claim must equal it — set both, since any GCP principal can
+mint a Google-signed token for an arbitrary audience. With `PUBSUB_AUDIENCE`
+unset the handler stays fail-open and logs a sampled console warning (so a
+deploy can never drop pushes before GCP is configured). Rejections write at
+most one `WEBHOOK_AUTH_REJECTED` row per minute per instance.
 
 To configure: in GCP, set the push subscription's authentication service
 account and OIDC token audience to the URL of the webhook (e.g.
 `https://recruiting-email-automation-api.vercel.app/api/webhooks/gmail`),
-then set `PUBSUB_AUDIENCE` to that same URL in Vercel.
+then set `PUBSUB_AUDIENCE` to that same URL and `PUBSUB_SERVICE_ACCOUNT_EMAIL`
+to the subscription's service account in Vercel. Confirm pushes still land
+(sync-health, no `WEBHOOK_AUTH_REJECTED` rows) before relying on it.
 

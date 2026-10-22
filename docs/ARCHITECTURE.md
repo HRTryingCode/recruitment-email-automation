@@ -57,7 +57,7 @@ Stateless modules; the route layer is thin and delegates here.
 
 ### `backend/src/lib/*`
 
-- **`crypto.ts`** — `encrypt(plaintext)` and `decrypt(ciphertext)`. AES-256-GCM with a 12-byte random IV and the 16-byte auth tag, all base64-packed into a single `iv:tag:ciphertext` string. Key is `process.env.ENCRYPTION_KEY` (base64, 32 bytes).
+- **`crypto.ts`** — `encrypt(plaintext)` and `decrypt(ciphertext)`. AES-256-GCM with a 12-byte random IV and the 16-byte auth tag, all base64-packed into a single `v<N>:iv:tag:ciphertext` string (legacy rows have no `v<N>:` prefix and still decrypt). Key is `process.env.ENCRYPTION_KEY` (base64, exactly 32 bytes); `ENCRYPTION_KEY_PREVIOUS` decrypts older versions during rotation.
 - **`oauthState.ts`** — in-memory CSRF nonce store for the Gmail OAuth handshake. `storeOAuthState(state)` before redirecting the user; `consumeOAuthState(state)` in the callback. Entries expire on a short TTL.
 
 ### `backend/src/middleware/*`
