@@ -87,26 +87,54 @@ jobs:
   # itself (see e2e/playwright.config.ts) against a throwaway Postgres.
   # Every secret below is a CI-only dummy; nothing here talks to Gmail,
   # Anthropic, Supabase or Vercel.
+  #
+  # Runs inside the official Playwright image so Chromium and its OS deps
+  # are preinstalled (installing them per run cost 20s–10min of apt-get).
+  # The image tag must match the installed @playwright/test version, so
+  # it's read from package-lock.json rather than hardcoded — Dependabot
+  # bumps keep working with no manual edit. Only waits on that tiny
+  # lookup job; it builds its own stack, so it runs in parallel with
+  # backend/frontend.
+  playwright-version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: package-lock.json
+          sparse-checkout-cone-mode: false
+      - id: v
+        run: |
+          v=$(jq -r '.packages["node_modules/@playwright/test"].version // empty' package-lock.json)
+          [ -n "$v" ] || { echo "::error::@playwright/test not found in package-lock.json"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
   e2e:
     runs-on: ubuntu-latest
-    needs: [backend, frontend]
+    needs: [playwright-version]
+    timeout-minutes: 10
+    container:
+      image: mcr.microsoft.com/playwright:v${{ needs.playwright-version.outputs.version }}-noble
     services:
+      # Reached as host `postgres` from inside the job container.
       postgres:
         image: postgres:16
         env:
           POSTGRES_USER: ci
           POSTGRES_PASSWORD: ci
           POSTGRES_DB: ci
-        ports:
-          - 5432:5432
         options: >-
           --health-cmd "pg_isready -U ci"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
     env:
-      POSTGRES_PRISMA_URL: postgresql://ci:ci@localhost:5432/ci?schema=public
-      POSTGRES_URL_NON_POOLING: postgresql://ci:ci@localhost:5432/ci?schema=public
+      # Playwright's image expects HOME=/root when running as root.
+      HOME: /root
+      POSTGRES_PRISMA_URL: postgresql://ci:ci@postgres:5432/ci?schema=public
+      POSTGRES_URL_NON_POOLING: postgresql://ci:ci@postgres:5432/ci?schema=public
       NODE_ENV: test
       PORT: '3001'
       ALLOWED_ORIGINS: http://localhost:4173
@@ -130,6 +158,5 @@ jobs:
         run: cd backend && npx prisma migrate deploy
       - name: Build frontend
         run: cd frontend && npm run build
-      - run: cd e2e && npx playwright install chromium --with-deps
       - name: Run e2e against the local stack
         run: cd e2e && npm test
