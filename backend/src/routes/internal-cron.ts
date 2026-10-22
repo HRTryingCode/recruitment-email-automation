@@ -13,6 +13,7 @@ import { logEvent, runWatchdog } from '../services/monitoring.service';
 import { markMailboxNeedsReauth, AUTH_STATUS_NEEDS_REAUTH } from '../services/mailboxAuth.service';
 import { safeError, isAuthRevokedError, MailboxNeedsReauthError } from '../lib/safeError';
 import { purgeOrphanBodies, retentionDaysFromEnv } from '../services/retention.service';
+import { syncStaleLever } from '../services/leverSync.service';
 
 const router = Router();
 
@@ -383,6 +384,29 @@ router.get(
         deadline: Date.now() + 45_000,
       });
       await logEvent('ORPHAN_BODIES_PURGED', { retentionDays: days, ...result }, 'INFO');
+      res.status(200).json({ success: true, data: result });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// GET /api/internal/cron/lever-sync
+// NOTE: Vercel cron jobs invoke via GET — must not be POST.
+// Every 3h (F2): refreshes the read-only Lever status of candidates never
+// checked or checked more than 3h ago, oldest first. Deadline 240s keeps the
+// run inside maxDuration 300. One LEVER_SYNC_RUN row per run, counts only.
+// Skipped (WARN) when LEVER_API_KEY is unset.
+router.get(
+  '/lever-sync',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!isAuthorized(req)) {
+        res.status(401).json({ success: false, error: 'Unauthorized' });
+        return;
+      }
+      const result = await syncStaleLever({ deadline: Date.now() + 240_000 });
+      await logEvent('LEVER_SYNC_RUN', { ...result }, result.skipped || result.aborted ? 'WARN' : 'INFO');
       res.status(200).json({ success: true, data: result });
     } catch (err) {
       next(err);

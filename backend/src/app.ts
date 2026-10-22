@@ -7,6 +7,7 @@ import { errorHandler } from './middleware/error';
 import { requireAuth } from './middleware/requireAuth';
 import mailboxesRouter from './routes/mailboxes';
 import candidatesRouter from './routes/candidates';
+import candidateLeverRouter from './routes/candidate-lever';
 import emailsRouter from './routes/emails';
 import draftsRouter from './routes/drafts';
 import webhooksRouter from './routes/webhooks';
@@ -184,7 +185,7 @@ app.get(
 
 // ── Authenticated API routes ─────────────────────────────────────────────
 app.use('/api/mailboxes', requireAuth, mailboxesRouter);
-app.use('/api/candidates', requireAuth, candidatesRouter);
+app.use('/api/candidates', requireAuth, candidatesRouter, candidateLeverRouter);
 app.use('/api/emails', requireAuth, emailsRouter);
 app.use('/api/drafts', requireAuth, draftsRouter);
 app.use('/api/coverage', requireAuth, coverageRouter);

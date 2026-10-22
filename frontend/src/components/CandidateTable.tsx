@@ -52,6 +52,7 @@ import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Skeleton } from './ui/skeleton';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './ui/empty';
+import { CandidateLeverBadge } from './LeverBadge';
 
 function ReplyStatusBadge({ candidate }: { candidate: Candidate }) {
   const derived: NonNullable<Candidate['replyStatus']> =
@@ -275,6 +276,7 @@ export default function CandidateTable({ mailboxId }: Props) {
     const t = setTimeout(() => setSearch(searchInput.trim()), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [searchInput]);
+  const [leverFilter, setLeverFilter] = useState<'' | 'IN' | 'NOT_IN'>('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<{ column: SortColumn; dir: SortDir }>({
@@ -299,15 +301,16 @@ export default function CandidateTable({ mailboxId }: Props) {
   // land on a page that no longer exists in the filtered view.
   useEffect(() => {
     setPage(1);
-  }, [mailboxId, statusFilter, search, sort]);
+  }, [mailboxId, statusFilter, leverFilter, search, sort]);
 
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ['candidates', { mailboxId, status: statusFilter, page, search, sort }],
+    queryKey: ['candidates', { mailboxId, status: statusFilter, lever: leverFilter, page, search, sort }],
     queryFn: () =>
       fetchCandidates({
         mailboxId,
         status: search ? undefined : apiStatus,
         replyStatus: search ? undefined : replyStatus,
+        lever: search || !leverFilter ? undefined : leverFilter,
         includeIgnored: search ? true : includeIgnored,
         page,
         limit: PAGE_SIZE,
@@ -461,6 +464,20 @@ export default function CandidateTable({ mailboxId }: Props) {
             <option value="REPLIED">Replied (legacy)</option>
             <option value="NEEDS_REVIEW">Needs Review</option>
             <option value="IGNORED">Ignored</option>
+          </select>
+          <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg-muted" />
+        </div>
+        <div className="relative">
+          <select
+            aria-label="Lever filter"
+            value={leverFilter}
+            onChange={(e) => setLeverFilter(e.target.value as '' | 'IN' | 'NOT_IN')}
+            disabled={!!search}
+            className="appearance-none rounded-lg border border-line bg-surface-raised/70 py-1.5 pl-3 pr-9 text-[13px] text-fg-default transition-colors hover:border-line-strong focus:border-accent-400 focus:outline-none disabled:opacity-40"
+          >
+            <option value="">Any Lever status</option>
+            <option value="IN">In Lever</option>
+            <option value="NOT_IN">Not in Lever</option>
           </select>
           <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg-muted" />
         </div>
@@ -716,6 +733,7 @@ function CandidateRow({
                   </span>
                 )}
               </div>
+              <div className="mt-1"><CandidateLeverBadge candidate={candidate} /></div>
             </div>
           </div>
         </td>

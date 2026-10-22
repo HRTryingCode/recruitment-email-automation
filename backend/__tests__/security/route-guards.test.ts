@@ -33,6 +33,7 @@ const MANIFEST: Record<string, Guard> = {
   'GET /api/internal/cron/sweep-stuck-messages': 'cron',
   'GET /api/internal/cron/systemlog-retention': 'cron',
   'GET /api/internal/cron/coverage-summary': 'cron',
+  'GET /api/internal/cron/lever-sync': 'cron',
   'GET /api/mailboxes/gmail/callback': 'oauth',
 
   'GET /api/mailboxes/': 'auth',
@@ -53,6 +54,7 @@ const MANIFEST: Record<string, Guard> = {
   'POST /api/candidates/:id/ignore': 'auth',
   'POST /api/candidates/:id/unignore': 'auth',
   'POST /api/candidates/backfill-roles': 'admin',
+  'POST /api/candidates/:id/lever/refresh': 'auth',
 
   'GET /api/emails/threads': 'auth',
   'GET /api/emails/threads/:id/messages': 'auth',

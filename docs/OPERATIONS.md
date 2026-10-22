@@ -107,6 +107,37 @@ Gem sequences are often sent from executive send-aliases (e.g. `ethan@`, `p.beni
 - **Weekly Slack summary**: `GET /api/internal/cron/coverage-summary` (Mondays 14:00 UTC) refreshes sendAs for healthy mailboxes, then posts via `alert.service` (no-op without `SLACK_ALERT_WEBHOOK_URL`) and logs `SENDER_COVERAGE_SUMMARY` (counts only).
 - **Fixing a gap**: connect the mailbox, add the alias as a Gmail send-as on a connected mailbox (it is picked up on the next refresh), or route replies to a connected mailbox. Then remove or deactivate the entry if it should no longer be expected.
 
+## Lever status (read-only)
+
+Every candidate shows whether they are in Lever (badge in the Candidates table; live in `GET /api/lookup` under `integrations.lever`). The app **only reads** Lever: `services/lever.service.ts` issues GET requests to `https://api.lever.co/v1` and nothing else.
+
+- **Env var**: `LEVER_API_KEY` (Vercel, Production). Bearer auth. Never logged. Unset = the cron logs `LEVER_SYNC_RUN` as `skipped: unconfigured` (WARN) and leaves candidate rows untouched, and the lookup omits `integrations.lever`.
+- **Cached columns** on `Candidate`: `leverState` (`ACTIVE` | `ARCHIVED` | `HIRED` | `NOT_FOUND` | `ERROR`), `leverOpportunityId`, `leverPostingTitle`, `leverStage`, `leverArchivedReason`, `leverCheckedAt`, `leverError` (short reason code like `http_503`, `timeout`). Primary opportunity = most recently updated active one, else most recently updated archived one. `HIRED` = archived with a hired-type archive reason.
+- **Cron**: `GET /api/internal/cron/lever-sync` at `20 */3 * * *` (CRON_SECRET). Refreshes candidates with `leverCheckedAt` null or older than 3h, oldest first, stops starting new ones after 240s (maxDuration 300), and stops early after 5 consecutive errors (`aborted: true`, WARN). One `LEVER_SYNC_RUN` SystemLog row per run with counts only (`candidates`, `checked`, `errors`, `byState`, `deadlineReached`, `aborted`, `elapsedMs`).
+- **On demand**: `POST /api/candidates/:id/lever/refresh` (any signed-in user) re-checks one candidate and returns `{ candidate, lever }`.
+- **Rate limits**: Lever allows ~10 req/s (bursts of 20). The client caps itself at 8 req/s per function instance, retries 429/5xx up to 3 times (honouring `Retry-After`, else 0.5s→1s→2s), and times each request out after 10s. Lookups retry once and give up after 8s so the page never hangs on Lever.
+
+Run once by hand and check the distribution:
+
+```bash
+curl -H "Authorization: Bearer ${CRON_SECRET}" \
+  https://recruiting-email-automation-api.vercel.app/api/internal/cron/lever-sync
+```
+
+```sql
+SELECT "leverState", COUNT(*) FROM "Candidate" GROUP BY 1 ORDER BY 2 DESC;
+SELECT "leverError", COUNT(*) FROM "Candidate" WHERE "leverState" = 'ERROR' GROUP BY 1;
+```
+
+Failure modes:
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Every row `ERROR` / `leverError = http_401`, runs `aborted` | Key revoked or rotated | Issue a new read key in Lever (Settings → Integrations → API), update `LEVER_API_KEY`, redeploy, run the cron by hand. |
+| `leverError = http_429` on many rows | Another integration is sharing the Lever rate budget | Rows retry automatically after 3h; if persistent, lower the cron frequency. |
+| `deadlineReached: true` every run | More stale candidates than one run can check | Fine — the oldest are checked first, so all rows rotate through. |
+| Badge says "Lever unknown" with "not checked yet" | Candidate created since the last run | Wait for the next run or use the refresh endpoint. |
+
 ## Common incidents
 
 ### Mailbox needs reconnect (`NEEDS_REAUTH` / `invalid_grant`)
@@ -281,7 +312,7 @@ generally safe.
 | `outputDirectory: "frontend/dist"` | What Vercel serves as static. |
 | `functions["api/index.ts"].includeFiles` | Bundles `backend/**` into the serverless function so the Express app can import its own modules at runtime. |
 | `rewrites` | `/api/:path*` → `/api/index` (the Express app); everything else → `/index.html` (SPA fallback), except the literal `/assets/` prefix used by Vite-built bundles. |
-| `crons` | `0 */6 * * *` → `/api/internal/cron/renew-watches`; `0 * * * *` → `/api/internal/cron/reconcile`; `*/15 * * * *` → `/api/internal/cron/watchdog`. All are **GET**. Vercel sends `Authorization: Bearer <CRON_SECRET>` on each call (requires the `CRON_SECRET` env var); the handler accepts only that header and compares it in constant time. |
+| `crons` | `0 */6 * * *` → `/api/internal/cron/renew-watches`; `0 * * * *` → `/api/internal/cron/reconcile`; `*/15 * * * *` → `/api/internal/cron/watchdog`; `20 */3 * * *` → `/api/internal/cron/lever-sync`. All are **GET**. Vercel sends `Authorization: Bearer <CRON_SECRET>` on each call (requires the `CRON_SECRET` env var); the handler accepts only that header and compares it in constant time. |
 
 ## Required Vercel env vars
 
@@ -305,6 +336,7 @@ Set under **Project Settings → Environment Variables** (Production scope).
 | `PUBSUB_SERVICE_ACCOUNT_EMAIL` | Push subscription's service account; required `email` claim on webhook JWTs when `PUBSUB_AUDIENCE` is set. |
 | `ORPHAN_BODY_RETENTION_DAYS` | Optional, destructive. Enables the daily orphan-body purge (integer ≥ 7). Unset = no-op. |
 | `CRON_SECRET` | Bearer secret for `/api/internal/cron/*`. |
+| `LEVER_API_KEY` | Lever API key (read-only use, Bearer). Optional — unset = Lever status disabled. See [Lever status](#lever-status-read-only). |
 | `SLACK_ALERT_WEBHOOK_URL` | Slack incoming-webhook URL for watchdog alerts. Optional — unset = alerting disabled (no-op, warned once). See [Alerting](#alerting). |
 | `DRAFT_CC_EMAIL` | Optional — defaults to `sofia@archive.com`. |
 | `FRONTEND_URL` | Not used in production (same-origin) but Express CORS config reads it — set to the prod domain to be safe. |
