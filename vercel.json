@@ -1,5 +1,5 @@
 {
-  "buildCommand": "npm run vercel-build --workspace=backend && npm run build --workspace=frontend",
+  "buildCommand": "npm run build --workspace=frontend && npm run vercel-build --workspace=backend",
   "outputDirectory": "frontend/dist",
   "installCommand": "npm install",
   "framework": null,

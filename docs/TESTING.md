@@ -103,25 +103,44 @@ backend test:
 
 For HTTP routes, prefer `supertest` against the Express app from `src/app.ts`
 with a mocked Prisma — that lets you exercise the middleware + router + error
-handler in one shot. There aren't route-level tests yet; the existing files
-under `__tests__/lib/`, `__tests__/middleware/`, and `__tests__/services/` are
-the closest patterns to crib from in the meantime.
+handler in one shot. Route tests live in `__tests__/routes/` (see `internal-cron.test.ts` or
+`health.test.ts`). When a handler makes several Prisma calls, key the mock on
+the query's `where` arguments with `mockImplementation` rather than stacking
+`mockResolvedValueOnce` in call order (see `internal-status.test.ts`) — order-
+based mocks silently hand one query another query's fixture after a refactor.
+
+Call routes with the HTTP method production actually uses. Vercel Cron issues
+**GET**, so the cron tests use `.get()`; a `.post()` there falls through to the
+JWT-gated internal-status router and returns 401 for the wrong reason.
 
 ## CI
 
 `.github/workflows/test.yml` runs on every PR against the production branch.
-It installs the workspace, generates the Prisma client, then runs:
+It has three jobs:
 
-```bash
-cd backend && npm run typecheck && npm test
-```
+- **backend**: validates the Prisma schema, checks schema/migration drift
+  against a throwaway Postgres, type-checks, then runs
+  `npm run test:coverage` (fails below the coverage floor).
+- **frontend**: `npm run build` (type-check + bundle), then
+  `npm run test:coverage` (fails below the coverage floor).
+- **e2e**: applies migrations to a CI Postgres service, builds the SPA and runs
+  the Playwright suite against a local stack started from this commit. It never
+  targets production.
 
-A red check blocks merge. The job is fast (~30–60s) because no external
-service is contacted.
+No job contacts Gmail, Anthropic, Supabase or Vercel; all secrets in the
+workflow are CI-only dummies. A red check should block merge — the repo owner
+needs to mark `tests` as a required check in branch protection, because Vercel
+otherwise deploys whatever is pushed.
 
 ## Coverage
 
-Goals, not enforced gates:
+Both packages enforce a **ratchet floor** in `vitest.config.ts`
+(`coverage.thresholds`), set just below the measured baseline. `npm run
+test:coverage` fails if coverage drops under it. Raise the floor when coverage
+improves; never lower it to make a PR pass. `gmail.service.ts` is the biggest
+gap (route tests mock it), so service-level tests there are the priority.
+
+Longer-term goals beyond the floor:
 
 - **`lib/`** (crypto, oauthState): aim for **>90%**. These are small,
   deterministic, and security-relevant — any new branch deserves a test.
@@ -137,8 +156,9 @@ a corresponding test in `__tests__/services/` should get a review comment.
 
 ## End-to-end
 
-There is currently **no automated E2E suite.** The manual smoke test before a
-significant deploy is:
+The automated Playwright suite in `e2e/` covers health, auth gates and SPA
+routing against a local stack (see the README). It cannot exercise Gmail or
+Claude, so before a significant deploy also run this manual smoke test:
 
 1. Sign in to the production dashboard with an `@archive.com` Google account.
 2. Connect a test Gmail mailbox via the OAuth flow.

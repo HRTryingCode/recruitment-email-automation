@@ -100,8 +100,10 @@ Single Vercel project. The GitHub App auto-deploys on push to
 `claude/email-automation-system-OEgcU` (the production branch on
 `sofiadelgado17/recruitment-email-automation`).
 
-- `npm run vercel-build --workspace=backend` runs `prisma generate && prisma migrate deploy` — pending migrations are applied automatically as part of every deploy.
-- `npm run build --workspace=frontend` builds the React app into `frontend/dist`, which Vercel serves as static assets.
+- `npm run build --workspace=frontend` builds the React app into `frontend/dist`, which Vercel serves as static assets. It runs **first** so a frontend type/build error aborts the deploy before any migration touches the database.
+- `npm run vercel-build --workspace=backend` then runs `prisma generate && prisma migrate deploy` — pending migrations are applied automatically as part of every deploy, **against the production database**. Treat merging a PR that adds a migration as applying that migration to prod.
+- Vercel deploys whatever lands on the branch. The `tests` GitHub workflow is the gate: it must be green before merging (enable it as a required check in branch protection and turn on Vercel's "wait for checks").
+
 - The API entrypoint is `api/index.ts`, which re-exports the Express app from `backend/src/app.ts`. Vercel wraps it as a serverless function via the `functions` block in `vercel.json`.
 - `vercel.json` also registers the cron jobs and SPA rewrites — see [docs/OPERATIONS.md](docs/OPERATIONS.md#vercel-config).
 
@@ -115,8 +117,10 @@ npx prisma migrate dev       # generates a new migration when schema.prisma chan
 ```
 
 In production, the `vercel-build` script runs `prisma migrate deploy` on every
-deploy — there is no separate migration step. If a migration is malformed, the
-Vercel build fails and the previous deploy stays live.
+deploy — there is no separate migration step, so **merging a migration PR
+applies it to prod**. Get explicit sign-off on any PR that adds a migration
+before merging it. If a migration is malformed, the Vercel build fails and the
+previous deploy stays live (but any statements that already ran stay applied).
 
 ## Reliability
 
@@ -125,8 +129,8 @@ Inbound ingestion has two paths so a single failure can't lose messages:
 | Path | Cadence | Endpoint | Purpose |
 |---|---|---|---|
 | Pub/Sub push (primary) | Real-time, ~5–30s latency | `POST /api/webhooks/gmail` | Each connected mailbox publishes to a Pub/Sub topic; Google pushes to our webhook on every change. |
-| Watch renewal cron | Every 6 hours | `POST /api/internal/cron/renew-watches` | Gmail watches expire after 7 days. The cron re-issues `users.watch` before they lapse. |
-| Reconciliation cron | Every hour | `POST /api/internal/cron/reconcile` | Walks each mailbox's recent `historyId` and ingests any messages the webhook missed (e.g. during a Vercel cold start, a 5xx, or a dropped Pub/Sub delivery). |
+| Watch renewal cron | Every 6 hours | `GET /api/internal/cron/renew-watches` | Gmail watches expire after 7 days. The cron re-issues `users.watch` before they lapse. |
+| Reconciliation cron | Every hour | `GET /api/internal/cron/reconcile` | Walks each mailbox's recent `historyId` and ingests any messages the webhook missed (e.g. during a Vercel cold start, a 5xx, or a dropped Pub/Sub delivery). |
 
 The current sync state of every mailbox is exposed at
 `GET /api/internal/sync-health` (JWT-protected). See
@@ -164,21 +168,24 @@ npm run build
 
 ## End-to-end tests
 
-Playwright smoke tests live in [`e2e/`](e2e/) and run against a deployed
-environment (production by default). To run them locally:
+Playwright smoke tests live in [`e2e/`](e2e/). By default they run against a
+**local stack** that Playwright starts itself: the backend on `:3001` and
+`vite preview` of the built SPA on `:4173` (which proxies `/api`). They never
+target production unless you ask them to.
 
 ```bash
+# needs a throwaway Postgres with migrations applied, plus the backend env vars
+npm run build --workspace=frontend
 cd e2e
-npm install
 npx playwright install chromium
 npm test
 
-# Optional: point at a different environment
-E2E_BASE_URL=https://staging.example.com npm test
+# Smoke-test a deployed environment instead (no local servers are started)
+E2E_BASE_URL=https://<preview-or-prod-url> npm test
 ```
 
-The same suite runs automatically in CI after the backend and frontend jobs
-(see `.github/workflows/test.yml`).
+CI runs the same suite after the backend and frontend jobs against a Postgres
+service container with CI-only dummy secrets (see `.github/workflows/test.yml`).
 
 ## Further reading
 

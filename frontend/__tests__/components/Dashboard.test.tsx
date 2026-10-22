@@ -42,6 +42,7 @@ const CANDIDATES: Candidate[] = [
     name: 'Ada Lovelace',
     email: 'ada@example.com',
     status: 'INTERESTED',
+    role: 'Senior Engineer',
     mailboxId: MAILBOX.id,
     replyStatus: 'AWAITING_REPLY',
     threads: [
@@ -237,6 +238,34 @@ describe('<Dashboard />', () => {
     const reviewPill = screen.getByTestId('action-pill-review');
     expect(within(reviewPill).getByText('1')).toBeInTheDocument();
     expect(within(reviewPill).getByText(/needs review/i)).toBeInTheDocument();
+  });
+
+  it('excludes candidates with no detected role from the awaiting-reply count', async () => {
+    fetchCandidatesMock.mockResolvedValue({
+      success: true,
+      data: [
+        ...CANDIDATES,
+        {
+          id: 'cand-no-role',
+          name: 'No Role',
+          email: 'norole@example.com',
+          status: 'NEUTRAL',
+          role: null,
+          mailboxId: MAILBOX.id,
+          replyStatus: 'AWAITING_REPLY',
+          createdAt: '2026-05-19T10:00:00.000Z',
+          updatedAt: '2026-05-19T11:00:00.000Z',
+        },
+      ],
+      meta: { total: CANDIDATES.length + 1, page: 1, limit: 1000 },
+    });
+    renderDashboard();
+    await screen.findByText('Ada Lovelace');
+
+    const awaitingPill = screen.getByTestId('action-pill-awaiting');
+    await waitFor(() => {
+      expect(within(awaitingPill).getByText('1')).toBeInTheDocument();
+    });
   });
 
   it('the quick triage panel shows pending drafts and approves on one click', async () => {

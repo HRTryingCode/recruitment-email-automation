@@ -41,7 +41,7 @@ routers are mounted behind `requireAuth`.
 | `emails.ts` | `/api/emails` | JWT | List threads and messages — paginated, filter by mailbox or candidate. |
 | `drafts.ts` | `/api/drafts` | JWT | List/get pending drafts, edit body, **regenerate** (per-draft + bulk), **approve** (creates Gmail draft with CC), **send**, **discard**. |
 | `webhooks.ts` | `/api/webhooks` | Public | `POST /gmail` — Pub/Sub push target. Acknowledges 200 immediately and processes asynchronously. |
-| `internal-cron.ts` | `/api/internal/cron` | `CRON_SECRET` | `POST /renew-watches` (every 6h) and `POST /reconcile` (every hour). |
+| `internal-cron.ts` | `/api/internal/cron` | `CRON_SECRET` | `GET /renew-watches` (every 6h) and `GET /reconcile` (every hour). Vercel Cron only issues GET, authenticated with `Authorization: Bearer $CRON_SECRET`; a POST to these paths never runs a job. |
 | `internal-status.ts` | `/api/internal/sync-health` | JWT | Per-mailbox sync-health snapshot — watch expiry, last synced message, pending drafts, reconciliation results. |
 | `health.ts` | `/api/health` | Public | `GET /` — DB connectivity probe used as Vercel/uptime check. Returns 503 if unhealthy. |
 

@@ -52,9 +52,9 @@ describe('/api/internal/cron', () => {
     }
   });
 
-  describe('POST /api/internal/cron/renew-watches', () => {
+  describe('GET /api/internal/cron/renew-watches', () => {
     it('returns 401 without a CRON_SECRET bearer header', async () => {
-      const res = await request(app).post('/api/internal/cron/renew-watches');
+      const res = await request(app).get('/api/internal/cron/renew-watches');
       expect(res.status).toBe(401);
       expect(res.body.success).toBe(false);
       expect(renewGmailWatches).not.toHaveBeenCalled();
@@ -62,7 +62,7 @@ describe('/api/internal/cron', () => {
 
     it('returns 401 when the bearer secret does not match', async () => {
       const res = await request(app)
-        .post('/api/internal/cron/renew-watches')
+        .get('/api/internal/cron/renew-watches')
         .set('Authorization', 'Bearer wrong-secret');
       expect(res.status).toBe(401);
       expect(renewGmailWatches).not.toHaveBeenCalled();
@@ -72,7 +72,7 @@ describe('/api/internal/cron', () => {
       renewGmailWatches.mockResolvedValueOnce(4);
 
       const res = await request(app)
-        .post('/api/internal/cron/renew-watches')
+        .get('/api/internal/cron/renew-watches')
         .set('Authorization', `Bearer ${CRON_SECRET}`);
 
       expect(res.status).toBe(200);
@@ -82,9 +82,9 @@ describe('/api/internal/cron', () => {
     });
   });
 
-  describe('POST /api/internal/cron/reconcile', () => {
+  describe('GET /api/internal/cron/reconcile', () => {
     it('returns 401 without a CRON_SECRET bearer header', async () => {
-      const res = await request(app).post('/api/internal/cron/reconcile');
+      const res = await request(app).get('/api/internal/cron/reconcile');
       expect(res.status).toBe(401);
       expect(reconcileMailbox).not.toHaveBeenCalled();
     });
@@ -121,7 +121,7 @@ describe('/api/internal/cron', () => {
       });
 
       const res = await request(app)
-        .post('/api/internal/cron/reconcile')
+        .get('/api/internal/cron/reconcile')
         .set('Authorization', `Bearer ${CRON_SECRET}`);
 
       expect(res.status).toBe(200);
@@ -153,7 +153,7 @@ describe('/api/internal/cron', () => {
       mockPrisma.mailbox.findMany.mockResolvedValueOnce([]);
 
       const res = await request(app)
-        .post('/api/internal/cron/reconcile')
+        .get('/api/internal/cron/reconcile')
         .set('x-vercel-cron-signature', CRON_SECRET);
 
       expect(res.status).toBe(200);
@@ -187,7 +187,7 @@ describe('/api/internal/cron', () => {
       });
 
       const res = await request(app)
-        .post('/api/internal/cron/reconcile')
+        .get('/api/internal/cron/reconcile')
         .set('Authorization', `Bearer ${CRON_SECRET}`);
 
       expect(res.status).toBe(200);
@@ -199,5 +199,27 @@ describe('/api/internal/cron', () => {
       // The second mailbox should have been processed despite the first failing.
       expect(reconcileMailbox).toHaveBeenCalledTimes(2);
     });
+  });
+
+  // Vercel Cron only issues GET. A POST must never trigger a job, even with
+  // a valid CRON_SECRET — otherwise the "401" tests above could pass for the
+  // wrong reason (falling through to the JWT-guarded internal-status router).
+  describe('POST is not a cron entry point', () => {
+    it.each(['/api/internal/cron/renew-watches', '/api/internal/cron/reconcile'])(
+      'POST %s with a valid bearer secret does not run the job',
+      async (path) => {
+        mockPrisma.mailbox.findMany.mockResolvedValue([]);
+
+        const res = await request(app)
+          .post(path)
+          .set('Authorization', `Bearer ${CRON_SECRET}`);
+
+        expect(res.status).not.toBe(200);
+        expect(res.body?.success).not.toBe(true);
+        expect(renewGmailWatches).not.toHaveBeenCalled();
+        expect(reconcileMailbox).not.toHaveBeenCalled();
+        expect(mockPrisma.mailbox.findMany).not.toHaveBeenCalled();
+      }
+    );
   });
 });
