@@ -422,13 +422,23 @@ describe('keyboard navigation', () => {
     await waitFor(() => expect(search().get('item')).toBeNull());
   });
 
-  it('↓ then ↵ opens from the list', async () => {
+  it('the first reply is focused from the start, so ↵ opens it', async () => {
+    installInbox(ITEMS);
+    renderInbox('/inbox?view=interested');
+    const first = await screen.findByRole('button', { name: /Ada Example/ });
+    expect(first).toHaveAttribute('data-focused', 'true');
+    fireEvent.keyDown(document.body, { key: 'Enter' });
+    expect(await openPane('Ada Example')).toBeInTheDocument();
+  });
+
+  it('↓ then ↵ opens the second reply', async () => {
     installInbox(ITEMS);
     renderInbox('/inbox?view=interested');
     await screen.findByRole('button', { name: /Ada Example/ });
     fireEvent.keyDown(document.body, { key: 'ArrowDown' });
+    expect(screen.getByRole('button', { name: /Ben Sample/ })).toHaveAttribute('data-focused', 'true');
     fireEvent.keyDown(document.body, { key: 'Enter' });
-    expect(await openPane('Ada Example')).toBeInTheDocument();
+    expect(await openPane('Ben Sample')).toBeInTheDocument();
   });
 
   it('E focuses the reply editor', async () => {

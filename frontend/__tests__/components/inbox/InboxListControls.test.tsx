@@ -96,8 +96,8 @@ describe('Inbox list controls', () => {
   it('↓ moves through items across groups in visual order', async () => {
     installInbox(ITEMS);
     renderInbox('/inbox?view=interested&group=role');
-    await screen.findByRole('button', { name: /Ada Example/ });
-    fireEvent.keyDown(document.body, { key: 'ArrowDown' });
+    // The first row in visual order starts focused (U1b).
+    expect(await screen.findByRole('button', { name: /Ada Example/ })).toHaveAttribute('data-focused', 'true');
     fireEvent.keyDown(document.body, { key: 'ArrowDown' });
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /Cy Placeholder/ })).toHaveAttribute('data-focused', 'true')

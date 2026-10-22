@@ -217,10 +217,12 @@ export default function InboxPage() {
   const name = draft?.thread?.candidate?.name ?? current?.candidate?.name ?? 'candidate';
   const sendable = isSendable(draft) && draft?.id === draftId;
 
+  // With nothing picked yet the first reply is the cursor, so ↵ works at once.
+  const listCursor = cursor && keys.includes(cursor) ? cursor : keys[0];
   const go = (key: string) => (itemId ? openItem(key) : setCursor(key));
   const move = (delta: number) => {
     if (keys.length === 0) return;
-    const base = itemId ?? cursor;
+    const base = itemId ?? listCursor;
     const at = base ? keys.indexOf(base) : -1;
     // ↓ past the last loaded reply: load the next page, then step into it.
     if (delta > 0 && at === keys.length - 1 && list.hasNextPage) {
@@ -251,7 +253,7 @@ export default function InboxPage() {
     next: () => move(1),
     prev: () => move(-1),
     open: () => {
-      if (!itemId && cursor) openItem(cursor);
+      if (!itemId && listCursor) openItem(listCursor);
     },
     undo: actions.undoLast,
     dismiss: () => {
@@ -338,7 +340,7 @@ export default function InboxPage() {
           loadingMore={list.isFetchingNextPage}
           onLoadMore={loadMore}
           selectedKey={itemId}
-          focusedKey={itemId ? undefined : cursor}
+          focusedKey={itemId ? undefined : listCursor}
           highlightKey={highlight}
           onOpen={openItem}
           checked={checked}
