@@ -78,6 +78,13 @@ describe('POST /api/webhooks/lever', () => {
     expect(res.status).toBe(401);
   });
 
+  it('malformed JSON is a 4xx, never 500', async () => {
+    const res = await request(app).post('/api/webhooks/lever').set('Content-Type', 'application/json').send('{"token":');
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
+    expect(waitUntil).not.toHaveBeenCalled();
+  });
+
   it('acks an unknown event type with 200 and ignores it', async () => {
     const res = await request(app).post('/api/webhooks/lever').send(payload('interviewCreated'));
     expect(res.status).toBe(200);
