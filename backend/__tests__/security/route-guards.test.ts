@@ -70,6 +70,9 @@ const MANIFEST: Record<string, Guard> = {
 
   'GET /api/internal/sync-health': 'auth',
 
+  // F1 global lookup: "do we know this email?" — metadata only.
+  'GET /api/lookup/': 'auth',
+
   // B3 sender coverage: summary for any user; expected-sender registry is admin-managed.
   'GET /api/coverage/': 'auth',
   'GET /api/coverage/expected-senders': 'admin',

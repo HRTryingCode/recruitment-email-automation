@@ -10,6 +10,7 @@ import Dashboard from '../components/Dashboard';
 import EmailDrafts from '../components/EmailDrafts';
 import CandidateTable from '../components/CandidateTable';
 import MailboxFilter from '../components/MailboxFilter';
+import LookupBar from '../components/LookupBar';
 import ThemeToggle from '../components/ThemeToggle';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -260,6 +261,7 @@ export default function Index() {
           </Link>
 
           <div className="flex items-center gap-2 sm:gap-3">
+            <LookupBar />
             <MailboxFilter
               mailboxes={mailboxes}
               selectedId={selectedMailboxId}

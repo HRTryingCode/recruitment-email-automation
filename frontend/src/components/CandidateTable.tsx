@@ -264,7 +264,12 @@ export default function CandidateTable({ mailboxId }: Props) {
   useEffect(() => {
     if (URL_FILTERS.has(urlFilter)) setStatusFilter(urlFilter);
   }, [urlFilter]);
-  const [searchInput, setSearchInput] = useState('');
+  // ?q= seeds the search (F1 lookup bar's "Open conversation").
+  const urlQuery = searchParams.get('q') ?? '';
+  const [searchInput, setSearchInput] = useState(urlQuery);
+  useEffect(() => {
+    if (urlQuery) setSearchInput(urlQuery);
+  }, [urlQuery]);
   const [search, setSearch] = useState('');
   useEffect(() => {
     const t = setTimeout(() => setSearch(searchInput.trim()), SEARCH_DEBOUNCE_MS);

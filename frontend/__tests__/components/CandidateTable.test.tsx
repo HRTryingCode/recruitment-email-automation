@@ -281,6 +281,16 @@ describe('<CandidateTable />', () => {
     expect(searches).not.toContain('ad');
   });
 
+  it('seeds the search from ?q= (F1 lookup "Open conversation" deep link)', async () => {
+    renderTable('/?tab=candidates&q=ada%40example.com');
+    expect(screen.getByPlaceholderText(/search by name or email/i)).toHaveValue('ada@example.com');
+    await waitFor(() =>
+      expect(fetchCandidatesMock).toHaveBeenCalledWith(
+        expect.objectContaining({ search: 'ada@example.com' })
+      )
+    );
+  });
+
   it('NEEDS_REVIEW triage: "Interested + draft" sets the status and generates a draft (M17)', async () => {
     const user = userEvent.setup();
     updateCandidateMock.mockResolvedValue({ success: true, data: { ...CANDIDATES[1], status: 'INTERESTED' } });
