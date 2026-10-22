@@ -383,7 +383,7 @@ describe('/api/drafts', () => {
       mockPrisma.emailDraft.updateMany.mockResolvedValueOnce({ count: 1 });
       mockPrisma.candidate.update.mockResolvedValueOnce({
         id: 'cand-1',
-        status: 'REPLIED',
+        status: 'INTERESTED',
       });
 
       const res = await request(app)
@@ -401,10 +401,11 @@ describe('/api/drafts', () => {
         where: { id: 'draft-1', status: 'APPROVED' },
         data: { status: 'SENT', sentAt: expect.any(Date) },
       });
-      // Candidate transitions to REPLIED after a successful send.
+      // Send records conversation state but keeps the interest
+      // classification: status is no longer overwritten with REPLIED (H6).
       expect(mockPrisma.candidate.update).toHaveBeenCalledWith({
         where: { id: 'cand-1' },
-        data: { status: 'REPLIED', repliedAt: expect.any(Date) },
+        data: { repliedAt: expect.any(Date), lastOutboundAt: expect.any(Date) },
       });
       expect(loggedDetails('DRAFT_SENT')).toMatchObject({
         draftId: 'draft-1',

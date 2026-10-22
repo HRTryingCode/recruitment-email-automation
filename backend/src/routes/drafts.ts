@@ -2,8 +2,8 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db/client';
 import { createError } from '../middleware/error';
-import { createDraft, sendDraft as gmailSendDraft, deleteDraft as gmailDeleteDraft, fetchExamplesForMailbox, composeHandoffDraftContent, draftCcAddressFor, fetchMailboxSignature, htmlSignatureToPlainText } from '../services/gmail.service';
-import { classifyReply, generateDraftReply, rewriteDraftWithNotes } from '../services/claude.service';
+import { createDraft, sendDraft as gmailSendDraft, deleteDraft as gmailDeleteDraft, fetchExamplesForMailbox, composeHandoffDraftContent, draftCcAddressFor, draftMetaColumns, fetchMailboxSignature, htmlSignatureToPlainText } from '../services/gmail.service';
+import { classifyReply, generateDraftReply, rewriteDraftWithNotes, type DraftGenerationMeta } from '../services/claude.service';
 import { config } from '../config';
 import { logEvent } from '../services/monitoring.service';
 import { serializeEmailMessages } from '../lib/emailMessageSerializer';
@@ -506,6 +506,7 @@ async function regenerateDraftById(
   let replySubject: string;
   let replyBodyText: string;
   let replyBodyHtml: string;
+  let replyMeta: DraftGenerationMeta | undefined;
 
   if (isHandoffInbox && classificationResult.classification === 'INTERESTED') {
     const signatureHtml = await fetchMailboxSignature(mailbox.id);
@@ -523,6 +524,7 @@ async function regenerateDraftById(
     replySubject = content.subject;
     replyBodyText = content.bodyText;
     replyBodyHtml = content.bodyHtml;
+    replyMeta = content.meta;
   } else {
     const [examples, signatureHtml] = await Promise.all([
       fetchExamplesForMailbox(
@@ -551,6 +553,7 @@ async function regenerateDraftById(
     replySubject = draftReply.subject;
     replyBodyText = sigPlain ? `${draftReply.bodyText}\n${sigPlain}` : draftReply.bodyText;
     replyBodyHtml = composeDraftHtml(replyBodyText, signatureHtml, sigPlain);
+    replyMeta = draftReply.meta;
   }
 
   const updated = await prisma.emailDraft.update({
@@ -561,6 +564,7 @@ async function regenerateDraftById(
       bodyHtml: replyBodyHtml,
       classification: classificationResult.classification,
       confidence: classificationResult.confidence,
+      ...draftMetaColumns(replyMeta),
     },
   });
 
@@ -709,6 +713,7 @@ router.post('/:id/dictate', async (req: Request, res: Response, next: NextFuncti
       data: {
         bodyText: newBodyText,
         bodyHtml: composeDraftHtml(newBodyText, sig.html, sig.plain),
+        ...draftMetaColumns(rewritten.meta),
       },
       include: draftWithThreadInclude,
     });
@@ -925,9 +930,12 @@ router.post('/:id/send', async (req: Request, res: Response, next: NextFunction)
     }
 
     if (candidate) {
+      // Conversation state only: the interest classification is left alone
+      // so a later reply can still be read against it (H6).
+      const sentAt = new Date();
       await prisma.candidate.update({
         where: { id: candidate.id },
-        data: { status: 'REPLIED', repliedAt: new Date() },
+        data: { repliedAt: sentAt, lastOutboundAt: sentAt },
       });
     }
 

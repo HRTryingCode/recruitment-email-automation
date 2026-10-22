@@ -5,6 +5,9 @@ import { logEvent } from '../services/monitoring.service';
 import { serializeEmailMessages } from '../lib/emailMessageSerializer';
 import { classifyReply } from '../services/claude.service';
 import { requireAdmin } from '../middleware/requireAdmin';
+import { deriveReplyStatus, normalizeEmail } from '../lib/candidateState';
+import { DRAFT_EXPIRY_DAYS } from './drafts';
+import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 
 const router = Router();
@@ -27,6 +30,7 @@ const updateCandidateSchema = z.object({
   status: z.enum(CANDIDATE_STATUSES).optional(),
   notes: z.string().optional(),
   repliedAt: z.null().optional(),
+  ownerUserId: z.string().min(1).nullable().optional(),
 });
 
 // Pagination bounds — clamp `page` and `limit` so an attacker (or a buggy
@@ -41,8 +45,17 @@ const paginationSchema = z.object({
 // `status` / `mailboxId` strings flow straight into the where clause; the
 // runtime still rejects malformed inputs at the DB layer, but the response
 // is opaque and the SQL it generates is wasted work.
+const REPLY_STATUSES = ['NEW', 'AWAITING_REPLY', 'REPLIED'] as const;
+
+// Server-side sort columns (L16). Default (no sort) keeps latest-activity order.
+const SORT_COLUMNS = ['name', 'email', 'company', 'role', 'status', 'createdAt', 'updatedAt', 'lastInboundAt'] as const;
+const NULLABLE_SORT_COLUMNS = new Set<string>(['company', 'role', 'lastInboundAt']);
+
 const candidateListFilterSchema = z.object({
   status: z.enum(CANDIDATE_STATUSES).optional(),
+  replyStatus: z.enum(REPLY_STATUSES).optional(),
+  sort: z.enum(SORT_COLUMNS).optional(),
+  dir: z.enum(['asc', 'desc']).optional(),
   // Cuid shape — 20–30 lowercase alphanumerics. Prisma's default id() uses
   // `c` + 24 chars in practice; the wider range absorbs other cuid variants
   // without opening up to arbitrary input.
@@ -58,28 +71,127 @@ function qs(val: unknown): string | undefined {
   return undefined;
 }
 
-type ReplyStatus = 'NEW' | 'AWAITING_REPLY' | 'REPLIED';
-
-function deriveReplyStatus(c: {
-  repliedAt: Date | null;
-  threads: Array<{ lastMessageAt: Date }>;
-}): ReplyStatus {
-  if (c.repliedAt) return 'REPLIED';
-  if (!c.threads.length) return 'NEW';
-  return 'AWAITING_REPLY';
+/**
+ * Prisma filter equal to deriveReplyStatus (lib/candidateState), so list
+ * filters and counts agree with the badge (H6, M19). Rows without
+ * lastInboundAt (not yet backfilled) use the legacy repliedAt rule.
+ */
+function replyStatusWhere(status: (typeof REPLY_STATUSES)[number]): Prisma.CandidateWhereInput {
+  const outbound = prisma.candidate.fields.lastOutboundAt;
+  switch (status) {
+    case 'AWAITING_REPLY':
+      return {
+        OR: [
+          { lastInboundAt: { not: null }, lastOutboundAt: null },
+          { lastInboundAt: { gt: outbound } },
+          { lastInboundAt: null, repliedAt: null, threads: { some: {} } },
+        ],
+      };
+    case 'REPLIED':
+      return {
+        OR: [
+          { lastInboundAt: { not: null, lte: outbound } },
+          { lastInboundAt: null, repliedAt: { not: null } },
+        ],
+      };
+    case 'NEW':
+      return { lastInboundAt: null, repliedAt: null, threads: { none: {} } };
+  }
 }
+
+const cuidSchema = z.string().regex(/^[a-z0-9]{20,30}$/, 'mailboxId must be a cuid');
+
+/**
+ * Pipeline counts for the dashboard, computed in SQL over every candidate
+ * rather than from a 500-row client sample (M18). `awaitingReply` follows
+ * the same rule as replyStatus AWAITING_REPLY and, like the dashboard pill
+ * always has, leaves out IGNORED and role-less candidates. `pendingDrafts`
+ * matches the Pending tab: PENDING, younger than the expiry window, and not
+ * already answered outside the app.
+ */
+router.get('/counts', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const parsedMailbox = cuidSchema.optional().safeParse(qs(req.query.mailboxId));
+    if (!parsedMailbox.success) {
+      return next(createError(parsedMailbox.error.errors[0]?.message ?? 'Invalid mailboxId', 400));
+    }
+    const mailboxId = parsedMailbox.data ?? null;
+    const expiryCutoff = new Date(Date.now() - DRAFT_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+
+    const candidateRows = await prisma.$queryRaw<
+      Array<{ mailboxId: string | null; candidates: number; needsReview: number; awaitingReply: number }>
+    >`
+      SELECT c."mailboxId" AS "mailboxId",
+        COUNT(*) FILTER (WHERE c.status <> 'IGNORED')::int AS candidates,
+        COUNT(*) FILTER (WHERE c.status = 'NEEDS_REVIEW')::int AS "needsReview",
+        COUNT(*) FILTER (
+          WHERE c.status <> 'IGNORED' AND c.role IS NOT NULL AND (
+            (c."lastInboundAt" IS NOT NULL AND (c."lastOutboundAt" IS NULL OR c."lastInboundAt" > c."lastOutboundAt"))
+            OR (c."lastInboundAt" IS NULL AND c."repliedAt" IS NULL
+                AND EXISTS (SELECT 1 FROM "EmailThread" t WHERE t."candidateId" = c.id))
+          )
+        )::int AS "awaitingReply"
+      FROM "Candidate" c
+      WHERE (${mailboxId}::text IS NULL OR c."mailboxId" = ${mailboxId})
+      GROUP BY c."mailboxId"`;
+
+    const draftRows = await prisma.$queryRaw<Array<{ mailboxId: string; pendingDrafts: number }>>`
+      SELECT t."mailboxId" AS "mailboxId", COUNT(*)::int AS "pendingDrafts"
+      FROM "EmailDraft" d
+      JOIN "EmailThread" t ON t.id = d."threadId"
+      LEFT JOIN "Candidate" c ON c.id = t."candidateId"
+      WHERE d.status = 'PENDING'
+        AND d."createdAt" >= ${expiryCutoff}
+        AND NOT (c."repliedAt" IS NOT NULL AND c."repliedAt" > d."createdAt")
+        AND (${mailboxId}::text IS NULL OR t."mailboxId" = ${mailboxId})
+      GROUP BY t."mailboxId"`;
+
+    const pendingByMailbox = new Map((draftRows ?? []).map((r) => [r.mailboxId, Number(r.pendingDrafts)]));
+    const byMailbox = (candidateRows ?? []).map((r) => ({
+      mailboxId: r.mailboxId,
+      candidates: Number(r.candidates),
+      needsReview: Number(r.needsReview),
+      awaitingReply: Number(r.awaitingReply),
+      pendingDrafts: pendingByMailbox.get(r.mailboxId ?? '') ?? 0,
+    }));
+    // Mailboxes with drafts but no candidate rows still count.
+    for (const [mbId, n] of pendingByMailbox) {
+      if (!byMailbox.some((r) => r.mailboxId === mbId)) {
+        byMailbox.push({ mailboxId: mbId, candidates: 0, needsReview: 0, awaitingReply: 0, pendingDrafts: n });
+      }
+    }
+    const sum = (k: 'candidates' | 'needsReview' | 'awaitingReply' | 'pendingDrafts') =>
+      byMailbox.reduce((acc, r) => acc + r[k], 0);
+
+    res.json({
+      success: true,
+      data: {
+        candidates: sum('candidates'),
+        awaitingReply: sum('awaitingReply'),
+        needsReview: sum('needsReview'),
+        pendingDrafts: sum('pendingDrafts'),
+        byMailbox,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
 
 // GET /api/candidates
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const filterParsed = candidateListFilterSchema.safeParse({
       status: qs(req.query.status),
+      replyStatus: qs(req.query.replyStatus),
+      sort: qs(req.query.sort),
+      dir: qs(req.query.dir),
       mailboxId: qs(req.query.mailboxId),
     });
     if (!filterParsed.success) {
       return next(createError(filterParsed.error.errors[0]?.message ?? 'Invalid filter', 400));
     }
-    const { status, mailboxId } = filterParsed.data;
+    const { status, replyStatus, sort, dir, mailboxId } = filterParsed.data;
     const paged = paginationSchema.safeParse({
       page: qs(req.query.page),
       limit: qs(req.query.limit),
@@ -93,7 +205,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const includeIgnored = qs(req.query.includeIgnored) === 'true';
     const search = qs(req.query.search)?.trim() ?? '';
 
-    const where: Record<string, unknown> = {};
+    const where: Prisma.CandidateWhereInput = {};
     if (search) {
       // Search overrides status filter and includes all statuses (incl. ignored)
       // so the user can find any candidate regardless of state.
@@ -110,6 +222,14 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       where.status = { not: 'IGNORED' };
     }
     if (mailboxId) where.mailboxId = mailboxId;
+    if (replyStatus && !search) {
+      where.AND = [replyStatusWhere(replyStatus)];
+      // Matches the dashboard's "awaiting reply" pill: active, role detected.
+      if (replyStatus === 'AWAITING_REPLY') {
+        if (!status) where.status = { not: 'IGNORED' };
+        where.role = { not: null };
+      }
+    }
 
     // The UI's "Last activity" column shows time-since the most recent
     // thread message, falling back to candidate.updatedAt when no threads
@@ -123,7 +243,13 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     // window may not contain the globally-newest thread activity, so
     // ordering near a page boundary can drift. Acceptable until we move
     // to keyset pagination — the practical workload is well under 500.
-    const overFetchTake = Math.min(limit * 3, 500);
+    const overFetchTake = sort ? limit : Math.min(limit * 3, 500);
+    const sortDir = dir ?? 'asc';
+    // `nulls` is only accepted on nullable columns.
+    const sortKey = sort && NULLABLE_SORT_COLUMNS.has(sort) ? { sort: sortDir, nulls: 'last' as const } : sortDir;
+    const orderBy: Prisma.CandidateOrderByWithRelationInput[] = sort
+      ? [{ [sort]: sortKey } as Prisma.CandidateOrderByWithRelationInput, { id: 'asc' }]
+      : [{ updatedAt: 'desc' }];
 
     const [candidates, total] = await Promise.all([
       prisma.candidate.findMany({
@@ -138,18 +264,22 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
             select: { id: true, subject: true, lastMessageAt: true },
           },
         },
-        orderBy: { updatedAt: 'desc' },
+        orderBy,
         skip,
         take: overFetchTake,
       }),
       prisma.candidate.count({ where }),
     ]);
 
-    const enriched = candidates
-      .map((c) => ({
-        ...c,
-        replyStatus: deriveReplyStatus(c),
-      }))
+    const withStatus = candidates.map((c) => ({
+      ...c,
+      replyStatus: deriveReplyStatus(c),
+    }));
+    // An explicit sort is the DB order; otherwise sort the window by latest
+    // thread activity (see over-fetch note above).
+    const enriched = sort
+      ? withStatus
+      : withStatus
       .sort((a, b) => {
         const aTs =
           a.threads[0]?.lastMessageAt?.getTime() ??
@@ -213,27 +343,63 @@ router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => 
     }
 
     const id = String(req.params.id);
-    const candidate = await prisma.candidate.findUnique({ where: { id } });
+    const candidate = await prisma.candidate.findUnique({
+      where: { id },
+      include: { threads: { select: { id: true } } },
+    });
     if (!candidate) {
       return next(createError('Candidate not found', 404));
     }
 
+    const { threads, ...current } = candidate;
+    const data: Prisma.CandidateUncheckedUpdateInput = { ...parsed.data };
+
     // Guard against email collisions explicitly so the caller gets a 409 with
     // a clear message instead of Prisma's opaque P2002 surfacing as a 500.
-    if (parsed.data.email && parsed.data.email !== candidate.email) {
-      const existing = await prisma.candidate.findUnique({
-        where: { email: parsed.data.email },
-      });
-      if (existing && existing.id !== id) {
-        return next(
-          createError('Another candidate already uses this email', 409)
-        );
+    // Stored lowercased and compared case-insensitively (M12).
+    if (parsed.data.email) {
+      const email = normalizeEmail(parsed.data.email);
+      data.email = email;
+      if (email !== current.email.toLowerCase()) {
+        const existing = await prisma.candidate.findFirst({
+          where: { email: { equals: email, mode: 'insensitive' } },
+        });
+        if (existing && existing.id !== id) {
+          return next(
+            createError('Another candidate already uses this email', 409)
+          );
+        }
       }
+    }
+
+    // "Clear replied" must also reset conversation state, or the candidate
+    // would still read as answered (H6).
+    if (parsed.data.repliedAt === null) data.lastOutboundAt = null;
+
+    // Choosing IGNORED from the status dropdown is the same action as the
+    // ignore button: live drafts are discarded with it (M20).
+    if (parsed.data.status === 'IGNORED' && current.status !== 'IGNORED') {
+      const [updated, discardResult] = await prisma.$transaction([
+        prisma.candidate.update({ where: { id }, data }),
+        prisma.emailDraft.updateMany({
+          where: {
+            threadId: { in: threads.map((t) => t.id) },
+            status: { in: ['PENDING', 'APPROVED'] },
+          },
+          data: { status: 'DISCARDED' },
+        }),
+      ]);
+      await logEvent(
+        'CANDIDATE_IGNORED',
+        { candidateId: id, draftsDiscarded: discardResult.count, via: 'status_change' },
+        'INFO'
+      );
+      return res.json({ success: true, data: updated });
     }
 
     const updated = await prisma.candidate.update({
       where: { id },
-      data: parsed.data,
+      data,
     });
 
     res.json({ success: true, data: updated });

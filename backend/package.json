@@ -17,7 +17,7 @@
     "vercel-build": "prisma generate && prisma migrate deploy"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.30.0",
+    "@anthropic-ai/sdk": "^0.132.1",
     "@prisma/client": "^5.22.0",
     "@vercel/functions": "1.6.0",
     "bcryptjs": "^2.4.3",

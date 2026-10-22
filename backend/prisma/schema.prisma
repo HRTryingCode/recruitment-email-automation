@@ -21,6 +21,7 @@ model User {
   role         String   @default("recruiter")
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+  ownedCandidates Candidate[]
 }
 
 /// The only currently-supported `provider` value is `"GMAIL"`. Outlook/IMAP
@@ -54,6 +55,9 @@ model Mailbox {
   /// and these aliases count as monitored for sender coverage (audit H2).
   sendAsAddresses String[]     @default([])
   sendAsSyncedAt  DateTime?
+  /// Hand-off draft rules for this inbox: 'ethan' or 'coordinator'. Null
+  /// falls back to the address map in claude.service getHandoffType (M4).
+  handoffProfile String?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   threads       EmailThread[]
@@ -61,6 +65,9 @@ model Mailbox {
   candidates    Candidate[]
 }
 
+/// `email` is stored lowercased (M12). A unique index on lower(email) is
+/// added by scripts/b7/01_lowercase_candidate_emails.sql once the existing
+/// case-collision group is merged; Prisma can't express a functional index.
 model Candidate {
   id        String        @id @default(cuid())
   name      String
@@ -71,15 +78,30 @@ model Candidate {
   status    String        @default("PENDING")
   source    String?
   notes     String?
+  /// Mailbox of the latest classified message (moves between inboxes; see
+  /// firstMailboxId for the original one).
   mailboxId String?
   mailbox   Mailbox?      @relation(fields: [mailboxId], references: [id], onDelete: SetNull)
+  /// Time of the recruiter's latest reply after a candidate message. Kept for
+  /// the stale-draft filter; reply state now comes from the two fields below.
   repliedAt DateTime?
+  /// Latest message from the candidate. Awaiting reply = lastInboundAt >
+  /// lastOutboundAt (H6).
+  lastInboundAt  DateTime?
+  /// Latest message from the recruiter mailbox on the candidate's threads.
+  lastOutboundAt DateTime?
+  /// Mailbox that first created this candidate; never changes (M12).
+  firstMailboxId String?
+  /// Recruiter who owns this candidate (M12). Not assigned automatically yet.
+  ownerUserId    String?
+  owner          User?         @relation(fields: [ownerUserId], references: [id], onDelete: SetNull)
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
   threads   EmailThread[]
 
   @@index([mailboxId])
   @@index([status])
+  @@index([ownerUserId])
 }
 
 model EmailThread {
@@ -145,6 +167,11 @@ model EmailDraft {
   status             String      @default("PENDING")
   sentAt             DateTime?
   externalDraftId    String?
+  /// Model id, prompt version and Messages API token usage that produced the
+  /// body. Null for template fallbacks and pre-B7 rows (M14).
+  model              String?
+  promptVersion      String?
+  usage              Json?
   createdAt          DateTime    @default(now())
   updatedAt          DateTime    @updatedAt
 

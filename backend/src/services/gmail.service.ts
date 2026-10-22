@@ -2,7 +2,7 @@ import { google } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 import { config } from '../config';
 import { prisma } from '../db/client';
-import { classifyReply, generateDraftReply, generateHandoffDraftReply, getHandoffType, type ExampleReply, type Classification, type HandoffType } from './claude.service';
+import { classifyReply, generateDraftReply, generateHandoffDraftReply, getHandoffType, type ExampleReply, type Classification, type HandoffType, type DraftGenerationMeta } from './claude.service';
 import { logEvent } from './monitoring.service';
 import { decrypt, encrypt } from '../lib/crypto';
 import { safeError, isAuthRevokedError, MailboxNeedsReauthError } from '../lib/safeError';
@@ -16,7 +16,8 @@ import {
 import { COMPANY_DOMAIN, isCompanyEmail } from '../lib/accessPolicy';
 import { createError } from '../middleware/error';
 import { composeDraftHtml, encodeHeaderValue, escapeHtml, isRfcMessageId, sanitizeReferences, stripHeaderBreaks } from '../lib/draftBody';
-import type { Mailbox, EmailThread } from '@prisma/client';
+import { normalizeEmail, resolveCandidateStatus, shouldSkipNotRecruiting } from '../lib/candidateState';
+import type { Mailbox, EmailThread, Prisma } from '@prisma/client';
 
 /**
  * Serialize an OAuth2 / service-account credentials object for storage.
@@ -327,7 +328,7 @@ interface ParsedGmailMessage {
   };
 }
 
-function parseGmailMessage(
+export function parseGmailMessage(
   msgId: string,
   fullMsgData: {
     threadId?: string | null;
@@ -356,7 +357,8 @@ function parseGmailMessage(
 
   const fromMatch = fromRaw.match(/^(.*?)\s*<([^>]+)>$/) ?? [];
   const fromName = fromMatch[1]?.trim().replace(/^"|"$/g, '') || undefined;
-  const fromAddress = (fromMatch[2] ?? fromRaw).trim();
+  // Lowercased so Candidate.email matching is case-insensitive (M12).
+  const fromAddress = normalizeEmail(fromMatch[2] ?? fromRaw);
 
   const toAddresses = toRaw
     .split(',')
@@ -414,27 +416,41 @@ function parseGmailMessage(
 }
 
 /**
- * Status priority — never downgrade a candidate's status as a side-effect
- * of a later, less-informative reply.
- *
- * Higher index = higher priority. NEEDS_REVIEW wins outright (a human must
- * look). Otherwise REPLIED > INTERESTED > NEUTRAL > NOT_INTERESTED > PENDING.
- *
- * Unknown / legacy values fall to the bottom so they never beat a known one.
+ * Draft generation metadata as EmailDraft columns (M14). Template fallbacks
+ * have no meta and store nulls.
  */
-const STATUS_PRIORITY: Record<string, number> = {
-  PENDING: 0,
-  NOT_INTERESTED: 1,
-  NEUTRAL: 2,
-  INTERESTED: 3,
-  REPLIED: 4,
-  NEEDS_REVIEW: 5,
-};
+export function draftMetaColumns(meta: DraftGenerationMeta | undefined | null): {
+  model: string | null;
+  promptVersion: string | null;
+  usage: Prisma.InputJsonValue | undefined;
+} {
+  return {
+    model: meta?.model ?? null,
+    promptVersion: meta?.promptVersion ?? null,
+    usage: meta?.usage ? (meta.usage as unknown as Prisma.InputJsonValue) : undefined,
+  };
+}
 
-export function pickHigherPriorityStatus(current: string, next: string): string {
-  const cur = STATUS_PRIORITY[current] ?? -1;
-  const nxt = STATUS_PRIORITY[next] ?? -1;
-  return nxt > cur ? next : current;
+/**
+ * Candidate row for an address, matched case-insensitively so rows written
+ * before emails were lowercased (M12) are still found until the backfill runs.
+ */
+export async function findCandidateByEmail(email: string) {
+  return prisma.candidate.findFirst({
+    where: { email: { equals: normalizeEmail(email), mode: 'insensitive' } },
+    orderBy: { createdAt: 'asc' },
+  });
+}
+
+/**
+ * Move Candidate.lastOutboundAt forward to `at`, never backward: messages
+ * are processed out of order by reconcile / resync / webhooks.
+ */
+async function advanceLastOutboundAt(candidateId: string, at: Date): Promise<void> {
+  await prisma.candidate.updateMany({
+    where: { id: candidateId, OR: [{ lastOutboundAt: null }, { lastOutboundAt: { lt: at } }] },
+    data: { lastOutboundAt: at },
+  });
 }
 
 // Thread-context window for the classifier. We send the first N (the original
@@ -482,7 +498,7 @@ export async function findBlockingDraft(
   });
 }
 
-async function classifyAndDraft(opts: {
+export async function classifyAndDraft(opts: {
   mailbox: Mailbox;
   thread: EmailThread;
   parsed: ParsedGmailMessage;
@@ -504,16 +520,13 @@ async function classifyAndDraft(opts: {
   // If the recruiter has explicitly ignored this candidate, the message is
   // already stored (we don't want to drop data) but we skip classification
   // and draft generation entirely. Equivalent to muting the sender.
-  const ignoredCandidate = await prisma.candidate.findUnique({
-    where: { email: parsed.fromAddress },
-    select: { id: true, status: true },
-  });
-  if (ignoredCandidate?.status === 'IGNORED') {
+  const existingCandidate = await findCandidateByEmail(parsed.fromAddress);
+  if (existingCandidate?.status === 'IGNORED') {
     await logEvent(
       'MESSAGE_FROM_IGNORED_CANDIDATE',
       {
         mailboxId: mailbox.id,
-        candidateId: ignoredCandidate.id,
+        candidateId: existingCandidate.id,
         messageId: parsed.externalMessageId,
         // Intentionally omit fromAddress — that's candidate.email PII;
         // candidateId is the queryable id.
@@ -588,13 +601,28 @@ async function classifyAndDraft(opts: {
     return;
   }
 
-  const { classification, messageType, needsReview, confidence, role } = classificationResult;
+  const { classification, messageType, confidence, role } = classificationResult;
+  let { needsReview } = classificationResult;
+
+  // A thread the mailbox wrote on (outreach), one already linked to a
+  // candidate, or mail from a known candidate is never dropped as noise (M15).
+  const recruitingContext = {
+    threadHasOutboundFromMailbox: allMessages.some((m) => isMailboxOwnAddress(mailbox, m.fromAddress)),
+    threadLinkedToCandidate: !!thread.candidateId,
+    knownCandidate: !!existingCandidate,
+  };
+  const inRecruitingContext =
+    recruitingContext.threadHasOutboundFromMailbox ||
+    recruitingContext.threadLinkedToCandidate ||
+    recruitingContext.knownCandidate;
 
   // ---- Routing decisions ----------------------------------------------------
   // NO ROLE DETECTED: skip entirely. Emails where we can't identify a candidate
   // role are almost always spam, bulk outreach, or non-recruiting noise. Don't
   // create a candidate record — it clutters the pipeline and inflates counts.
-  if (role === null && messageType !== 'NOT_RECRUITING_RELATED') {
+  // A follow-up in an existing conversation often names no role, so that
+  // case is classified as usual.
+  if (role === null && messageType !== 'NOT_RECRUITING_RELATED' && !inRecruitingContext) {
     await logEvent(
       'MESSAGE_SKIPPED_NO_ROLE',
       { mailboxId: mailbox.id, messageId: parsed.externalMessageId, messageType, confidence },
@@ -603,8 +631,17 @@ async function classifyAndDraft(opts: {
     return;
   }
 
-  // NOT_RECRUITING_RELATED: don't pollute the candidate table at all.
-  if (messageType === 'NOT_RECRUITING_RELATED') {
+  // NOT_RECRUITING_RELATED: don't pollute the candidate table, but only when
+  // the classifier is sure and nothing ties the thread to recruiting (M15).
+  // Otherwise a human reviews it.
+  if (messageType === 'NOT_RECRUITING_RELATED' && !shouldSkipNotRecruiting({ confidence, ...recruitingContext })) {
+    needsReview = true;
+    await logEvent(
+      'NOT_RECRUITING_ROUTED_TO_REVIEW',
+      { mailboxId: mailbox.id, messageId: parsed.externalMessageId, confidence, ...recruitingContext },
+      'INFO'
+    );
+  } else if (messageType === 'NOT_RECRUITING_RELATED') {
     await logEvent(
       'MESSAGE_SKIPPED_NOT_RECRUITING',
       {
@@ -626,16 +663,15 @@ async function classifyAndDraft(opts: {
   const desiredStatus =
     needsReview || lowConfidence ? 'NEEDS_REVIEW' : classification;
 
-  // Look up the existing candidate to enforce status-priority (don't downgrade
-  // an INTERESTED candidate to NEUTRAL just because they sent a logistics
-  // follow-up).
-  const existingCandidate = await prisma.candidate.findUnique({
-    where: { email: parsed.fromAddress },
-  });
+  // Transition rules (no downgrade on logistics replies, confident declines
+  // win, NEEDS_REVIEW clears) live in lib/candidateState (H6).
+  const finalStatus = resolveCandidateStatus(existingCandidate?.status ?? null, desiredStatus, confidence);
 
-  const finalStatus = existingCandidate
-    ? pickHigherPriorityStatus(existingCandidate.status, desiredStatus)
-    : desiredStatus;
+  // Conversation state: the candidate's latest message (only moves forward).
+  const lastInboundAt =
+    existingCandidate?.lastInboundAt && existingCandidate.lastInboundAt > parsed.receivedAt
+      ? existingCandidate.lastInboundAt
+      : parsed.receivedAt;
 
   // Only overwrite role on existing candidates when we have a new value and
   // the row didn't already have one — avoids churning a manually-edited or
@@ -644,10 +680,13 @@ async function classifyAndDraft(opts: {
     role !== null && existingCandidate && !existingCandidate.role;
 
   const candidate = await prisma.candidate.upsert({
-    where: { email: parsed.fromAddress },
+    // The existing row's own spelling, so a not-yet-lowercased row is updated
+    // rather than duplicated (M12).
+    where: { email: existingCandidate?.email ?? parsed.fromAddress },
     update: {
       status: finalStatus,
       mailboxId: mailbox.id,
+      lastInboundAt,
       updatedAt: new Date(),
       ...(shouldSetRoleOnUpdate ? { role } : {}),
     },
@@ -656,6 +695,8 @@ async function classifyAndDraft(opts: {
       email: parsed.fromAddress,
       status: finalStatus,
       mailboxId: mailbox.id,
+      firstMailboxId: mailbox.id,
+      lastInboundAt,
       source: 'EMAIL_REPLY',
       role: role ?? null,
     },
@@ -790,6 +831,7 @@ async function classifyAndDraft(opts: {
         classification,
         confidence,
         status: 'PENDING',
+        ...draftMetaColumns(content.meta),
       },
       { mailboxId: mailbox.id, candidateId: candidate.id, threadId: thread.id }
     );
@@ -855,6 +897,7 @@ async function classifyAndDraft(opts: {
         classification,
         confidence,
         status: 'PENDING',
+        ...draftMetaColumns(draftReply.meta),
       },
       { mailboxId: mailbox.id, candidateId: candidate.id, threadId: thread.id }
     );
@@ -878,6 +921,69 @@ async function classifyAndDraft(opts: {
       { mailboxId: mailbox.id, threadId: thread.id, error: message },
       'WARN'
     );
+  }
+}
+
+/**
+ * Candidate-side effects of a message the mailbox sent: advance
+ * lastOutboundAt, and when it answers a candidate message, set repliedAt and
+ * supersede any live drafts on the thread (the recruiter replied by hand).
+ */
+export async function recordOutboundMessage(
+  mailbox: Pick<Mailbox, 'id' | 'emailAddress'> & { sendAsAddresses?: string[] | null },
+  thread: Pick<EmailThread, 'id' | 'candidateId'>,
+  receivedAt: Date
+): Promise<void> {
+  if (thread.candidateId) {
+    // Conversation state (H6): any recruiter message puts the ball in the
+    // candidate's court.
+    await advanceLastOutboundAt(thread.candidateId, receivedAt);
+
+    // Only count this as a recruiter reply if the candidate already sent
+    // at least one inbound message before this outbound message.
+    // Without this check, the original outreach email would set repliedAt
+    // and mark the candidate as "Replied" before they've said anything.
+    // "Inbound" = not from this mailbox (primary or alias) and not from
+    // a colleague on an internal domain.
+    const priorInbound = await prisma.emailMessage.findFirst({
+      where: {
+        threadId: thread.id,
+        receivedAt: { lt: receivedAt },
+        AND: [
+          ...mailboxOwnAddresses(mailbox).map((addr) => ({
+            NOT: { fromAddress: { equals: addr, mode: 'insensitive' as const } },
+          })),
+          ...config.internalDomains.map((domain) => ({
+            NOT: { fromAddress: { endsWith: `@${domain}`, mode: 'insensitive' as const } },
+          })),
+        ],
+      },
+    });
+
+    if (priorInbound) {
+      await prisma.candidate.update({
+        where: { id: thread.candidateId },
+        data: { repliedAt: receivedAt },
+      });
+
+      // Discard any PENDING or APPROVED drafts on this thread — they're
+      // now stale because the recruiter already sent a manual reply.
+      const superseded = await prisma.emailDraft.updateMany({
+        where: {
+          threadId: thread.id,
+          status: { in: ['PENDING', 'APPROVED'] },
+        },
+        data: { status: 'DISCARDED' },
+      });
+      // Implicit discards were unlogged, hiding ~all real discards (M14).
+      if (superseded.count > 0) {
+        await logEvent(
+          'DRAFT_SUPERSEDED',
+          { mailboxId: mailbox.id, threadId: thread.id, candidateId: thread.candidateId, reason: 'manual_reply', count: superseded.count },
+          'INFO'
+        );
+      }
+    }
   }
 }
 
@@ -1086,45 +1192,7 @@ export async function fetchAndStoreMessage(
     }
 
     if (isOutbound) {
-      if (thread.candidateId) {
-        // Only count this as a recruiter reply if the candidate already sent
-        // at least one inbound message before this outbound message.
-        // Without this check, the original outreach email would set repliedAt
-        // and mark the candidate as "Replied" before they've said anything.
-        // "Inbound" = not from this mailbox (primary or alias) and not from
-        // a colleague on an internal domain.
-        const priorInbound = await prisma.emailMessage.findFirst({
-          where: {
-            threadId: thread.id,
-            receivedAt: { lt: parsed.receivedAt },
-            AND: [
-              ...mailboxOwnAddresses(mailbox).map((addr) => ({
-                NOT: { fromAddress: { equals: addr, mode: 'insensitive' as const } },
-              })),
-              ...config.internalDomains.map((domain) => ({
-                NOT: { fromAddress: { endsWith: `@${domain}`, mode: 'insensitive' as const } },
-              })),
-            ],
-          },
-        });
-
-        if (priorInbound) {
-          await prisma.candidate.update({
-            where: { id: thread.candidateId },
-            data: { repliedAt: parsed.receivedAt },
-          });
-
-          // Discard any PENDING or APPROVED drafts on this thread — they're
-          // now stale because the recruiter already sent a manual reply.
-          await prisma.emailDraft.updateMany({
-            where: {
-              threadId: thread.id,
-              status: { in: ['PENDING', 'APPROVED'] },
-            },
-            data: { status: 'DISCARDED' },
-          });
-        }
-      }
+      await recordOutboundMessage(mailbox, thread, parsed.receivedAt);
       return 'stored';
     }
 
@@ -2216,7 +2284,7 @@ export function buildHandoffDraftContent(
  * `template`, so it is never mistaken for Claude output (L12).
  */
 export async function composeHandoffDraftContent(opts: {
-  mailbox: Pick<Mailbox, 'id' | 'emailAddress' | 'displayName'>;
+  mailbox: Pick<Mailbox, 'id' | 'emailAddress' | 'displayName'> & { handoffProfile?: string | null };
   candidateName: string;
   candidateRole: string | null;
   threadId: string;
@@ -2225,7 +2293,13 @@ export async function composeHandoffDraftContent(opts: {
   classification: Classification;
   signatureHtml: string | null;
   via: string;
-}): Promise<{ subject: string; bodyText: string; bodyHtml: string; template: 'handoff_claude' | 'handoff_fallback_template' }> {
+}): Promise<{
+  subject: string;
+  bodyText: string;
+  bodyHtml: string;
+  template: 'handoff_claude' | 'handoff_fallback_template';
+  meta?: DraftGenerationMeta;
+}> {
   const { mailbox, signatureHtml } = opts;
   const ccEmail = config.draftCcEmail.toLowerCase();
   // First name only for the CC person so drafts say "Sofia" not "Sofia Delgado".
@@ -2234,7 +2308,7 @@ export async function composeHandoffDraftContent(opts: {
     select: { displayName: true },
   });
   const ccName = (ccMailbox?.displayName ?? 'Sofia').split(/\s+/)[0] || 'Sofia';
-  const handoffType = getHandoffType(mailbox.emailAddress, opts.candidateRole);
+  const handoffType = getHandoffType(mailbox.emailAddress, opts.candidateRole, mailbox.handoffProfile);
   const sigPlain = signatureHtml ? htmlSignatureToPlainText(signatureHtml) : null;
 
   try {
@@ -2262,6 +2336,7 @@ export async function composeHandoffDraftContent(opts: {
       bodyText,
       bodyHtml: composeDraftHtml(bodyText, signatureHtml, sigPlain),
       template: 'handoff_claude',
+      meta: reply.meta,
     };
   } catch (err) {
     await logEvent(
@@ -2286,6 +2361,33 @@ export async function composeHandoffDraftContent(opts: {
   }
 }
 
+/**
+ * Drop the quoted history from a reply body so a style example is only what
+ * the recruiter wrote: cut at the first "On … wrote:" / "-----Original
+ * Message-----" line or the first ">"-quoted line.
+ */
+export function stripQuotedReply(body: string): string {
+  const lines = body.replace(/\r\n/g, '\n').split('\n');
+  const cut = lines.findIndex(
+    (l) =>
+      /^\s*>/.test(l) ||
+      /^\s*On .+wrote:\s*$/i.test(l) ||
+      /^\s*-+\s*Original Message\s*-+/i.test(l)
+  );
+  return (cut === -1 ? lines : lines.slice(0, cut)).join('\n').trim();
+}
+
+// A sent message this close to an app-sent draft's sentAt is that draft, not
+// something the recruiter wrote themselves.
+const APP_SENT_WINDOW_MS = 10 * 60 * 1000;
+
+/**
+ * Few-shot style examples for generateDraftReply (L11). Taken from the
+ * recruiter's own sent Gmail replies (outbound EmailMessage rows that answer
+ * a candidate message), not from the app's SENT drafts, which were the
+ * model's own output. Replies the app sent are skipped. Falls back to
+ * Sofia's mailbox when this one has none.
+ */
 export async function fetchExamplesForMailbox(
   mailboxId: string,
   mailboxEmail: string,
@@ -2297,41 +2399,51 @@ export async function fetchExamplesForMailbox(
     if (sofiaMailbox) mailboxIds.push(sofiaMailbox.id);
   }
 
-  const sentDrafts = await prisma.emailDraft.findMany({
+  const sentMessages = await prisma.emailMessage.findMany({
     where: {
-      status: 'SENT',
-      classification,
-      thread: { mailboxId: { in: mailboxIds } },
+      mailboxId: { in: mailboxIds },
+      bodyText: { not: null },
+      thread: { candidate: { status: classification } },
     },
     include: {
+      mailbox: { select: { emailAddress: true } },
       thread: {
         include: {
-          messages: { orderBy: { receivedAt: 'asc' } },
-          candidate: { select: { name: true, email: true } },
-          mailbox: { select: { emailAddress: true } },
+          messages: {
+            orderBy: { receivedAt: 'asc' },
+            select: { fromAddress: true, bodyText: true, receivedAt: true },
+          },
+          candidate: { select: { name: true } },
+          drafts: { where: { status: 'SENT' }, select: { sentAt: true } },
         },
       },
     },
-    orderBy: { sentAt: 'desc' },
-    take: 6,
+    orderBy: { receivedAt: 'desc' },
+    take: 40,
   });
 
   const examples: ExampleReply[] = [];
-  for (const draft of sentDrafts) {
-    const recruiterDomain = draft.thread.mailbox.emailAddress.split('@')[1] ?? '';
-    const candidateEmail = draft.thread.candidate?.email ?? '';
-    // The candidate message is any message not from the recruiter's domain
-    const candidateMessages = draft.thread.messages.filter(
-      (m) => !m.fromAddress.toLowerCase().endsWith(`@${recruiterDomain}`) ||
-             m.fromAddress.toLowerCase() === candidateEmail.toLowerCase()
+  for (const msg of sentMessages) {
+    const owner = msg.mailbox.emailAddress.toLowerCase();
+    if (msg.fromAddress.toLowerCase() !== owner) continue;
+
+    const appSent = msg.thread.drafts.some(
+      (d) => d.sentAt && Math.abs(d.sentAt.getTime() - msg.receivedAt.getTime()) < APP_SENT_WINDOW_MS
     );
-    const lastCandidateMsg = candidateMessages[candidateMessages.length - 1];
-    if (!lastCandidateMsg?.bodyText || !draft.bodyText) continue;
+    if (appSent) continue;
+
+    const candidateMsg = [...msg.thread.messages]
+      .reverse()
+      .find((m) => m.receivedAt < msg.receivedAt && m.fromAddress.toLowerCase() !== owner);
+    if (!candidateMsg?.bodyText) continue;
+
+    const ourReply = stripQuotedReply(msg.bodyText ?? '');
+    if (!ourReply) continue;
 
     examples.push({
-      candidateName: draft.thread.candidate?.name ?? 'the candidate',
-      candidateMessage: lastCandidateMsg.bodyText.slice(0, 800).trim(),
-      ourReply: draft.bodyText.slice(0, 600).trim(),
+      candidateName: msg.thread.candidate?.name ?? 'the candidate',
+      candidateMessage: stripQuotedReply(candidateMsg.bodyText).slice(0, 800).trim(),
+      ourReply: ourReply.slice(0, 600).trim(),
     });
     if (examples.length >= 3) break;
   }

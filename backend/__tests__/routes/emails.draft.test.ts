@@ -171,6 +171,79 @@ describe('POST /api/emails/threads/:id/draft', () => {
   });
 });
 
+describe('POST /api/emails/threads/:id/draft — triage + metadata (M17, M14)', () => {
+  let app: Awaited<ReturnType<typeof loadApp>>;
+
+  beforeEach(async () => {
+    resetPrismaMock(mockPrisma);
+    for (const m of [classifyReply, generateDraftReply, generateHandoffDraftReply, fetchMailboxSignature, fetchExamplesForMailbox]) {
+      m.mockReset();
+    }
+    fetchMailboxSignature.mockResolvedValue(null);
+    fetchExamplesForMailbox.mockResolvedValue([]);
+    mockPrisma.emailThread.findUnique.mockResolvedValue({
+      id: 'thread-1',
+      subject: 'opportunity',
+      externalThreadId: 'ext-1',
+      messages: [outbound, inbound],
+      candidate,
+      mailbox: handoffMailbox,
+      drafts: [],
+    });
+    mockPrisma.mailbox.findUnique.mockResolvedValue({ displayName: 'Sofia Delgado' });
+    mockPrisma.emailDraft.create.mockImplementation(async ({ data }: { data: unknown }) => ({ id: 'draft-new', ...(data as object) }));
+    app = await loadApp();
+  });
+
+  it("uses the recruiter's triage decision instead of re-classifying", async () => {
+    generateHandoffDraftReply.mockResolvedValueOnce({ subject: 'Re: opportunity', bodyText: 'Hi', bodyHtml: '<div>Hi</div>' });
+
+    await request(app)
+      .post('/api/emails/threads/thread-1/draft')
+      .set('Authorization', AUTH)
+      .send({ classification: 'INTERESTED' })
+      .expect(201);
+
+    expect(classifyReply).not.toHaveBeenCalled();
+    expect(generateHandoffDraftReply).toHaveBeenCalled();
+    const data = mockPrisma.emailDraft.create.mock.calls[0]![0].data;
+    expect(data).toMatchObject({ classification: 'INTERESTED', confidence: 1 });
+    const created = loggedEvents().find((e) => e.event === 'DRAFT_CREATED');
+    expect(created?.details.via).toBe('triage');
+  });
+
+  it('rejects an unknown classification override', async () => {
+    const res = await request(app)
+      .post('/api/emails/threads/thread-1/draft')
+      .set('Authorization', AUTH)
+      .send({ classification: 'REPLIED' });
+    expect(res.status).toBe(400);
+  });
+
+  it('stores model, prompt version and token usage on the draft', async () => {
+    classifyReply.mockResolvedValueOnce(classification());
+    generateHandoffDraftReply.mockResolvedValueOnce({
+      subject: 'Re: opportunity',
+      bodyText: 'Hi',
+      bodyHtml: '<div>Hi</div>',
+      meta: {
+        model: 'claude-sonnet-4-6',
+        promptVersion: 'handoff-2026-10-22',
+        usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      },
+    });
+
+    await request(app).post('/api/emails/threads/thread-1/draft').set('Authorization', AUTH).expect(201);
+
+    const data = mockPrisma.emailDraft.create.mock.calls[0]![0].data;
+    expect(data).toMatchObject({
+      model: 'claude-sonnet-4-6',
+      promptVersion: 'handoff-2026-10-22',
+      usage: { input_tokens: 10, output_tokens: 5 },
+    });
+  });
+});
+
 describe('POST /api/drafts/:id/regenerate (M5)', () => {
   let app: Awaited<ReturnType<typeof loadApp>>;
 

@@ -8,8 +8,9 @@ import {
   composeHandoffDraftContent,
   fetchMailboxSignature,
   htmlSignatureToPlainText,
+  draftMetaColumns,
 } from '../services/gmail.service';
-import { classifyReply, generateDraftReply } from '../services/claude.service';
+import { classifyReply, generateDraftReply, type Classification, type DraftGenerationMeta } from '../services/claude.service';
 import { composeDraftHtml, threadingHeadersFor } from '../lib/draftBody';
 import { config } from '../config';
 import { logEvent } from '../services/monitoring.service';
@@ -134,6 +135,13 @@ router.get(
   }
 );
 
+// Optional body for the draft route. `classification` is the recruiter's own
+// triage decision on a NEEDS_REVIEW candidate (M17): it replaces the
+// re-classification, which is what flagged the candidate in the first place.
+const generateDraftBodySchema = z
+  .object({ classification: z.enum(['INTERESTED', 'NOT_INTERESTED', 'NEUTRAL']).optional() })
+  .optional();
+
 // POST /api/emails/threads/:id/draft
 // Manually generate a draft for a thread that was skipped by the auto-classifier
 // (e.g. because Sofia wasn't CC'd on the original outreach). Bypasses the
@@ -142,6 +150,12 @@ router.post(
   '/threads/:id/draft',
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      const body = generateDraftBodySchema.safeParse(req.body ?? undefined);
+      if (!body.success) {
+        return next(createError(body.error.errors[0]?.message ?? 'Invalid body', 400));
+      }
+      const triageClassification = body.data?.classification;
+      const via = triageClassification ? 'triage' : 'manual_generate';
       const threadId = String(req.params.id);
       const thread = await prisma.emailThread.findUnique({
         where: { id: threadId },
@@ -178,20 +192,27 @@ router.post(
       // Superhuman/Outlook/Apple Mail thread the reply correctly (M13).
       const { inReplyToMessageId, referencesHeader: refsHeader } = threadingHeadersFor(lastInbound.headers);
 
-      // Re-classify the latest inbound message so we draft appropriately.
-      const classificationResult = await classifyReply(
-        lastInbound.bodyText ?? lastInbound.subject,
-        candidate.name,
-        { subject: thread.subject, previousMessages: thread.messages.slice(0, -1).map((m) => ({ fromAddress: m.fromAddress, bodyText: m.bodyText, receivedAt: m.receivedAt })) }
-      );
-      // Never draft on the classifier's safe fallback: it means Claude was
-      // unreachable or returned garbage, so NEUTRAL/0 says nothing about the
-      // candidate (M5).
-      if (classificationResult.isFallback) {
-        await logEvent('DRAFT_GENERATE_CLASSIFIER_UNAVAILABLE', { threadId, via: 'manual_generate' }, 'WARN');
-        return next(createError('The classifier is unavailable right now; no draft was created. Please retry.', 502));
+      let classification: Classification;
+      let confidence: number;
+      if (triageClassification) {
+        classification = triageClassification;
+        confidence = 1;
+      } else {
+        // Re-classify the latest inbound message so we draft appropriately.
+        const classificationResult = await classifyReply(
+          lastInbound.bodyText ?? lastInbound.subject,
+          candidate.name,
+          { subject: thread.subject, previousMessages: thread.messages.slice(0, -1).map((m) => ({ fromAddress: m.fromAddress, bodyText: m.bodyText, receivedAt: m.receivedAt })) }
+        );
+        // Never draft on the classifier's safe fallback: it means Claude was
+        // unreachable or returned garbage, so NEUTRAL/0 says nothing about the
+        // candidate (M5).
+        if (classificationResult.isFallback) {
+          await logEvent('DRAFT_GENERATE_CLASSIFIER_UNAVAILABLE', { threadId, via }, 'WARN');
+          return next(createError('The classifier is unavailable right now; no draft was created. Please retry.', 502));
+        }
+        ({ classification, confidence } = classificationResult);
       }
-      const { classification, confidence } = classificationResult;
 
       const signatureHtml = await fetchMailboxSignature(mailbox.id);
       const messages = thread.messages.map((m) => ({
@@ -205,6 +226,7 @@ router.post(
       let bodyText: string;
       let bodyHtml: string;
       let template: string;
+      let meta: DraftGenerationMeta | undefined;
 
       // Hand-off ("looping in <CC>") only makes sense for an interested
       // candidate; anything else gets a normal reply for its classification.
@@ -218,9 +240,9 @@ router.post(
           messages,
           classification,
           signatureHtml,
-          via: 'manual_generate',
+          via,
         });
-        ({ subject, bodyText, bodyHtml, template } = content);
+        ({ subject, bodyText, bodyHtml, template, meta } = content);
       } else {
         const examples = await fetchExamplesForMailbox(mailbox.id, mailbox.emailAddress, classification);
         const draftReply = await generateDraftReply(
@@ -239,6 +261,7 @@ router.post(
         bodyText = sigPlain ? `${draftReply.bodyText}\n${sigPlain}` : draftReply.bodyText;
         bodyHtml = composeDraftHtml(bodyText, signatureHtml, sigPlain);
         template = 'claude';
+        meta = draftReply.meta;
       }
 
       const draft = await prisma.emailDraft.create({
@@ -252,6 +275,7 @@ router.post(
           classification,
           confidence,
           status: 'PENDING',
+          ...draftMetaColumns(meta),
         },
       });
 
@@ -261,7 +285,7 @@ router.post(
           mailboxId: mailbox.id,
           candidateId: candidate.id,
           threadId,
-          via: 'manual_generate',
+          via,
           template,
           classification,
           confidence,
