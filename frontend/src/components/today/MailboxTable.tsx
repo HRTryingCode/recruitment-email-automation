@@ -24,7 +24,8 @@ function HealthDot({ state, settingsHref }: { state: Health; settingsHref: strin
   const content = (
     <>
       <Circle className={cn('size-2', dot)} aria-hidden />
-      {label}
+      {/* Phones: the dot alone keeps the table inside the card. */}
+      <span className="max-sm:sr-only">{label}</span>
     </>
   );
   if (state === 'ok' || state === 'unknown') {
@@ -86,7 +87,7 @@ export default function MailboxTable({
               <TableRow>
                 <TableHead>Mailbox</TableHead>
                 <TableHead className="text-right">Waiting</TableHead>
-                <TableHead className="text-right">Sent today</TableHead>
+                <TableHead className="text-right max-sm:hidden">Sent today</TableHead>
                 <TableHead className="max-sm:hidden">Last received</TableHead>
                 <TableHead>Health</TableHead>
               </TableRow>
@@ -98,9 +99,9 @@ export default function MailboxTable({
                 const name = nameById.get(m.mailboxId) ?? h?.emailAddress ?? 'Unknown mailbox';
                 return (
                   <TableRow key={m.mailboxId}>
-                    <TableCell className="max-w-48 truncate font-medium">{name}</TableCell>
+                    <TableCell className="max-w-36 truncate font-medium sm:max-w-48">{name}</TableCell>
                     <TableCell className="text-right tabular-nums">{m.waiting}</TableCell>
-                    <TableCell className="text-right tabular-nums">{m.sentToday}</TableCell>
+                    <TableCell className="text-right tabular-nums max-sm:hidden">{m.sentToday}</TableCell>
                     <TableCell className="text-muted-foreground max-sm:hidden">
                       {m.lastReceivedAt ? formatTimeAgo(m.lastReceivedAt) : '—'}
                     </TableCell>

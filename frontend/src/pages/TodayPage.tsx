@@ -31,7 +31,7 @@ export default function TodayPage() {
   const summary = today.data?.data;
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex min-w-0 flex-col gap-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Today</h1>
         <p className="text-sm text-muted-foreground">Replies waiting, what went out, and what's next for Lever.</p>
@@ -51,8 +51,8 @@ export default function TodayPage() {
       ) : (
         <>
           <TodayStrip summary={summary} params={params} />
-          <div className="grid gap-6 lg:grid-cols-3">
-            <div className="flex flex-col gap-6 lg:col-span-2">
+          <div className="grid items-start gap-6 lg:grid-cols-3">
+            <div className="flex min-w-0 flex-col gap-6 lg:col-span-2">
               <MailboxTable
                 summary={summary}
                 mailboxes={mailboxes.data?.data ?? []}

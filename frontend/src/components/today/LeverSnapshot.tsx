@@ -22,7 +22,7 @@ export default function LeverSnapshot({ summary, params }: { summary: TodaySumma
   const notInLeverHref = viewHref('/candidates', params, { status: 'INTERESTED', lever: 'NOT_IN' });
 
   return (
-    <Card role="region" aria-label="Lever">
+    <Card role="region" aria-label="Lever" className="min-w-0">
       <CardHeader>
         <CardTitle>Lever</CardTitle>
         <CardDescription>Interested candidates still to add, and what was added.</CardDescription>
