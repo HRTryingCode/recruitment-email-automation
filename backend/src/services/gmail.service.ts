@@ -17,6 +17,8 @@ import { COMPANY_DOMAIN, isCompanyEmail } from '../lib/accessPolicy';
 import { createError } from '../middleware/error';
 import { composeDraftHtml, encodeHeaderValue, escapeHtml, isRfcMessageId, sanitizeReferences, stripHeaderBreaks } from '../lib/draftBody';
 import { normalizeEmail, resolveCandidateStatus, shouldSkipNotRecruiting } from '../lib/candidateState';
+import { loopInSentence } from '../lib/handoffLoopIn';
+import { ccFirstName, resolveDraftCc, NO_CC } from './draftCc.service';
 import type { Mailbox, EmailThread, Prisma } from '@prisma/client';
 
 /**
@@ -831,6 +833,7 @@ export async function classifyAndDraft(opts: {
         classification,
         confidence,
         status: 'PENDING',
+        ccEmail: draftCcAddressFor(mailbox.emailAddress) ?? NO_CC,
         ...draftMetaColumns(content.meta),
       },
       { mailboxId: mailbox.id, candidateId: candidate.id, threadId: thread.id }
@@ -897,6 +900,7 @@ export async function classifyAndDraft(opts: {
         classification,
         confidence,
         status: 'PENDING',
+        ccEmail: draftCcAddressFor(mailbox.emailAddress) ?? NO_CC,
         ...draftMetaColumns(draftReply.meta),
       },
       { mailboxId: mailbox.id, candidateId: candidate.id, threadId: thread.id }
@@ -1789,43 +1793,38 @@ export async function createServiceAccountClient(emailToImpersonate: string) {
  * the UI shows the real CC instead of a hardcoded address (L17).
  */
 export function draftCcAddressFor(ownerEmail: string): string | null {
-  const ccAddress = config.draftCcEmail.trim();
-  if (!ccAddress) return null;
-  return ccAddress.toLowerCase() === ownerEmail.trim().toLowerCase() ? null : ccAddress;
+  return resolveDraftCc(null, ownerEmail);
 }
 
-export async function createDraft(
-  mailboxId: string,
-  draft: {
-    threadId: string;
-    externalThreadId: string;
-    subject: string;
-    bodyText: string;
-    bodyHtml?: string;
-    inReplyToMessageId?: string;
-    referencesHeader?: string;
-    toAddress: string;
-  }
-): Promise<string> {
-  const mailbox = await prisma.mailbox.findUnique({ where: { id: mailboxId } });
-  if (!mailbox) throw new Error('Mailbox not found');
+export interface GmailDraftInput {
+  threadId: string;
+  externalThreadId: string;
+  subject: string;
+  bodyText: string;
+  bodyHtml?: string;
+  inReplyToMessageId?: string;
+  referencesHeader?: string;
+  toAddress: string;
+  /** The draft's stored EmailDraft.ccEmail (F4); null/undefined = configured default. */
+  ccEmail?: string | null;
+}
 
-  const gmail = await getGmailClient(mailbox);
-
+/** base64url RFC 2822 message for a draft, shared by create and update. */
+async function buildDraftRaw(mailbox: Pick<Mailbox, 'id' | 'emailAddress'>, draft: GmailDraftInput): Promise<string> {
   // Build RFC 2822 email with proper threading headers
   // Every header value is CR/LF-stripped (and Subject RFC 2047-encoded) so
   // model- or user-supplied text can never inject extra headers (M10).
   const headers: string[] = [`To: ${stripHeaderBreaks(draft.toAddress)}`];
 
-  // CC the configured address on every AI-drafted email (e.g. sofia@archive.com)
-  // so she stays in the loop on outbound recruiting traffic. Skip if the CC
-  // would be the mailbox owner itself to avoid self-CC loops.
-  const ccAddress = config.draftCcEmail.trim();
-  const ownerAddress = mailbox.emailAddress.trim().toLowerCase();
-  if (ccAddress && ccAddress.toLowerCase() === ownerAddress) {
+  // CC the draft's chosen admin (default sofia@archive.com) so they stay in
+  // the loop on outbound recruiting traffic. Never CC the mailbox owner
+  // itself, whichever CC was chosen, to avoid self-CC loops.
+  const requested = (draft.ccEmail ?? config.draftCcEmail).trim();
+  const ccAddress = resolveDraftCc(draft.ccEmail, mailbox.emailAddress);
+  if (requested && !ccAddress) {
     await logEvent(
       'DRAFT_CC_SELF_SKIPPED',
-      { mailboxId, ownerAddress, ccAddress },
+      { mailboxId: mailbox.id, ownerAddress: mailbox.emailAddress.trim().toLowerCase(), ccAddress: requested },
       'INFO'
     );
   } else if (ccAddress) {
@@ -1858,17 +1857,25 @@ export async function createDraft(
     headers.push(`Content-Type: text/plain; charset=utf-8`);
     rawEmail = headers.join('\r\n') + '\r\n\r\n' + draft.bodyText;
   }
-  const encodedEmail = Buffer.from(rawEmail)
+  return Buffer.from(rawEmail)
     .toString('base64')
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/, '');
+}
+
+export async function createDraft(mailboxId: string, draft: GmailDraftInput): Promise<string> {
+  const mailbox = await prisma.mailbox.findUnique({ where: { id: mailboxId } });
+  if (!mailbox) throw new Error('Mailbox not found');
+
+  const gmail = await getGmailClient(mailbox);
+  const raw = await buildDraftRaw(mailbox, draft);
 
   const res = await gmail.users.drafts.create({
     userId: 'me',
     requestBody: {
       message: {
-        raw: encodedEmail,
+        raw,
         // CRITICAL: Always set threadId to preserve threading in Superhuman
         threadId: draft.externalThreadId,
       },
@@ -1876,6 +1883,27 @@ export async function createDraft(
   });
 
   return res.data.id ?? '';
+}
+
+/**
+ * Replace an existing Gmail draft's message (e.g. after its CC changed, F4)
+ * so what sits in the recruiter's Gmail Drafts matches the app.
+ */
+export async function updateDraft(mailboxId: string, externalDraftId: string, draft: GmailDraftInput): Promise<void> {
+  const mailbox = await prisma.mailbox.findUnique({ where: { id: mailboxId } });
+  if (!mailbox) throw new Error('Mailbox not found');
+
+  const gmail = await getGmailClient(mailbox);
+  const raw = await buildDraftRaw(mailbox, draft);
+
+  await gmail.users.drafts.update({
+    userId: 'me',
+    id: externalDraftId,
+    requestBody: {
+      id: externalDraftId,
+      message: { raw, threadId: draft.externalThreadId },
+    },
+  });
 }
 
 export async function sendDraft(mailboxId: string, externalDraftId: string): Promise<void> {
@@ -2242,16 +2270,7 @@ export function buildHandoffDraftContent(
 
   const subject = /^re:/i.test(threadSubject) ? stripHeaderBreaks(threadSubject) : `Re: ${stripHeaderBreaks(threadSubject)}`;
 
-  const loopIn = (() => {
-    switch (opts.handoffType ?? 'coordinator') {
-      case 'sofia_interviews':
-        return `I'm looping in ${ccName} from the recruitment team here — she'll be interviewing you and will get some time on the calendar.`;
-      case 'ethan_interviews_sofia_schedules':
-        return `I'm looping in ${ccName} from the recruitment team here to coordinate timing for the interview.`;
-      default:
-        return `I'm looping in ${ccName} from the recruitment team here to schedule time with you and share more about the position.`;
-    }
-  })();
+  const loopIn = loopInSentence(opts.handoffType ?? 'coordinator', ccName);
 
   const sigPlainText = signatureHtml ? '\n' + htmlSignatureToPlainText(signatureHtml) : '\n' + recruiterFirst;
   const sigHtmlBlock = signatureHtml
@@ -2293,6 +2312,8 @@ export async function composeHandoffDraftContent(opts: {
   classification: Classification;
   signatureHtml: string | null;
   via: string;
+  /** The draft's stored ccEmail (regenerate keeps a changed CC, F4); omit for the default. */
+  ccEmail?: string | null;
 }): Promise<{
   subject: string;
   bodyText: string;
@@ -2301,13 +2322,11 @@ export async function composeHandoffDraftContent(opts: {
   meta?: DraftGenerationMeta;
 }> {
   const { mailbox, signatureHtml } = opts;
-  const ccEmail = config.draftCcEmail.toLowerCase();
+  // The person looped in is the draft's CC; a "No CC" draft still names the
+  // default so the sentence reads naturally (the UI warns about the mismatch).
+  const ccEmail = (resolveDraftCc(opts.ccEmail, mailbox.emailAddress) ?? config.draftCcEmail).toLowerCase();
   // First name only for the CC person so drafts say "Sofia" not "Sofia Delgado".
-  const ccMailbox = await prisma.mailbox.findUnique({
-    where: { emailAddress: ccEmail },
-    select: { displayName: true },
-  });
-  const ccName = (ccMailbox?.displayName ?? 'Sofia').split(/\s+/)[0] || 'Sofia';
+  const ccName = await ccFirstName(ccEmail);
   const handoffType = getHandoffType(mailbox.emailAddress, opts.candidateRole, mailbox.handoffProfile);
   const sigPlain = signatureHtml ? htmlSignatureToPlainText(signatureHtml) : null;
 

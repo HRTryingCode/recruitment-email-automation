@@ -169,6 +169,26 @@ describe('POST /api/emails/threads/:id/draft', () => {
     const created = loggedEvents().find((e) => e.event === 'DRAFT_CREATED');
     expect(created?.details.template).toBe('handoff_fallback_template');
   });
+
+  it('stores the CC the draft was generated with (F4)', async () => {
+    classifyReply.mockResolvedValueOnce(classification());
+    generateHandoffDraftReply.mockResolvedValueOnce({ subject: 'Re: opportunity', bodyText: 'Hi', bodyHtml: '<div>Hi</div>' });
+
+    await request(app).post('/api/emails/threads/thread-1/draft').set('Authorization', AUTH).expect(201);
+
+    expect(mockPrisma.emailDraft.create.mock.calls[0]![0].data.ccEmail).toBe('sofia@archive.com');
+  });
+
+  it('the fallback loop-in sentence is pronoun-free (F4)', async () => {
+    classifyReply.mockResolvedValueOnce(classification());
+    generateHandoffDraftReply.mockRejectedValueOnce(new Error('boom'));
+
+    await request(app).post('/api/emails/threads/thread-1/draft').set('Authorization', AUTH).expect(201);
+
+    const { bodyText } = mockPrisma.emailDraft.create.mock.calls[0]![0].data;
+    expect(bodyText).toContain("I'm looping in Sofia from the recruitment team here, who will ");
+    expect(bodyText).not.toMatch(/\b(she|he)\b|she'll|he'll/i);
+  });
 });
 
 describe('POST /api/emails/threads/:id/draft — triage + metadata (M17, M14)', () => {

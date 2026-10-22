@@ -12,6 +12,7 @@ import {
 } from '../services/gmail.service';
 import { classifyReply, generateDraftReply, type Classification, type DraftGenerationMeta } from '../services/claude.service';
 import { composeDraftHtml, threadingHeadersFor } from '../lib/draftBody';
+import { resolveDraftCc, NO_CC } from '../services/draftCc.service';
 import { config } from '../config';
 import { logEvent } from '../services/monitoring.service';
 import { z } from 'zod';
@@ -275,6 +276,7 @@ router.post(
           classification,
           confidence,
           status: 'PENDING',
+          ccEmail: resolveDraftCc(null, mailbox.emailAddress) ?? NO_CC,
           ...draftMetaColumns(meta),
         },
       });

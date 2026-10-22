@@ -109,6 +109,8 @@ const isLive = (d: Row) => d.status === 'PENDING' || d.status === 'APPROVED';
 
 vi.mock('../../src/db/client', () => {
   const prisma = {
+    // CC display names (F4 ccFirstName): no users here, falls back to Mailbox.
+    user: { findUnique: vi.fn(async () => null) },
     mailbox: {
       findUnique: vi.fn(async ({ where }: Row) =>
         db.mailboxes.find((m) => (where.id ? m.id === where.id : m.emailAddress === where.emailAddress)) ?? null

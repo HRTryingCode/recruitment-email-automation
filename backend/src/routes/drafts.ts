@@ -2,7 +2,9 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db/client';
 import { createError } from '../middleware/error';
-import { createDraft, sendDraft as gmailSendDraft, deleteDraft as gmailDeleteDraft, fetchExamplesForMailbox, composeHandoffDraftContent, draftCcAddressFor, draftMetaColumns, fetchMailboxSignature, htmlSignatureToPlainText } from '../services/gmail.service';
+import { createDraft, updateDraft as gmailUpdateDraft, sendDraft as gmailSendDraft, deleteDraft as gmailDeleteDraft, fetchExamplesForMailbox, composeHandoffDraftContent, draftMetaColumns, fetchMailboxSignature, htmlSignatureToPlainText } from '../services/gmail.service';
+import { listCcOptions, resolveDraftCc, NO_CC } from '../services/draftCc.service';
+import { replaceLoopIn } from '../lib/handoffLoopIn';
 import { classifyReply, generateDraftReply, rewriteDraftWithNotes, type DraftGenerationMeta } from '../services/claude.service';
 import { config } from '../config';
 import { logEvent } from '../services/monitoring.service';
@@ -25,6 +27,8 @@ function qs(val: unknown): string | undefined {
 const updateDraftSchema = z.object({
   bodyText: z.string().optional(),
   subject: z.string().transform(stripHeaderBreaks).optional(),
+  // F4: one of GET /cc-options, or null for "No CC".
+  ccEmail: z.string().trim().email().transform((e) => e.toLowerCase()).nullable().optional(),
 });
 
 /** The mailbox's HTML signature and its plain-text rendering, or nulls if unavailable. */
@@ -293,11 +297,33 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       // only needs the resolved originalMessage.
       const { messages: _messages, ...threadRest } = draft.thread;
       const expiresAt = new Date(new Date(draft.createdAt).getTime() + DRAFT_EXPIRY_MS);
-      const ccAddress = draftCcAddressFor(draft.thread.mailbox.emailAddress);
+      const ccAddress = resolveDraftCc(draft.ccEmail, draft.thread.mailbox.emailAddress);
       return { ...draft, thread: threadRest, originalMessage, expiresAt, ccAddress };
     });
 
     res.json({ success: true, data, meta: { total, page, limit } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/drafts/cc-options[?draftId=]
+// Who a draft may CC (F4): "No CC" plus every admin. With draftId, the
+// draft's own mailbox owner is left out (a mailbox never CCs itself).
+router.get('/cc-options', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const draftId = qs(req.query.draftId);
+    let excludeEmail: string | undefined;
+    if (draftId) {
+      const draft = await prisma.emailDraft.findUnique({
+        where: { id: draftId },
+        include: { thread: { include: { mailbox: true } } },
+      });
+      if (!draft) return next(createError('Draft not found', 404));
+      excludeEmail = draft.thread.mailbox.emailAddress;
+    }
+    const options = await listCcOptions({ excludeEmail });
+    res.json({ success: true, data: [{ email: null, name: 'No CC', firstName: null }, ...options] });
   } catch (err) {
     next(err);
   }
@@ -337,7 +363,7 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
         messages: serializeEmailMessages(draft.thread.messages),
       },
       originalMessage,
-      ccAddress: draftCcAddressFor(draft.thread.mailbox.emailAddress),
+      ccAddress: resolveDraftCc(draft.ccEmail, draft.thread.mailbox.emailAddress),
     };
     res.json({ success: true, data });
   } catch (err) {
@@ -346,31 +372,113 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
 });
 
 // PATCH /api/drafts/:id
+// Body/subject edits apply to PENDING drafts. ccEmail (F4) may also change on
+// an APPROVED, unsent draft — then the Gmail draft is updated to match.
 router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const parsed = updateDraftSchema.safeParse(req.body);
     if (!parsed.success) {
       return next(createError(parsed.error.message, 400));
     }
+    const { ccEmail, ...edits } = parsed.data;
+    const ccChanging = ccEmail !== undefined;
+    const hasEdits = edits.bodyText !== undefined || edits.subject !== undefined;
 
     const id = String(req.params.id);
     // Fetch draft with mailbox so we can reconstruct the HTML signature.
     const draft = await prisma.emailDraft.findUnique({
       where: { id },
-      include: { thread: { include: { mailbox: true } } },
+      include: { thread: { include: { mailbox: true, candidate: true } } },
     });
     if (!draft) return next(createError('Draft not found', 404));
-    if (draft.status !== 'PENDING') {
-      return next(createError('Can only edit pending drafts', 400));
+    const ccOnlyOnApproved = ccChanging && !hasEdits && draft.status === 'APPROVED' && !draft.sentAt;
+    if (draft.status !== 'PENDING' && !ccOnlyOnApproved) {
+      return next(
+        createError(
+          ccChanging && !hasEdits
+            ? 'CC can only be changed on pending or approved drafts that have not been sent'
+            : 'Can only edit pending drafts',
+          400
+        )
+      );
+    }
+
+    const { mailbox, candidate } = draft.thread;
+    const updateData: Prisma.EmailDraftUpdateInput = { ...edits };
+    let bodyText = edits.bodyText;
+    let ccChange: {
+      ccAddress: string | null;
+      firstName: string | null;
+      loopIn: 'updated' | 'not_found' | 'not_handoff';
+      handoffWithoutCc: boolean;
+    } | undefined;
+
+    if (ccChanging) {
+      const option = ccEmail
+        ? (await listCcOptions({ excludeEmail: mailbox.emailAddress })).find((o) => o.email === ccEmail)
+        : null;
+      if (ccEmail && !option) {
+        return next(createError('ccEmail must be one of the CC options for this draft', 400));
+      }
+      updateData.ccEmail = ccEmail ?? NO_CC;
+
+      // Hand-off drafts name the CC in the body ("I'm looping in Sofia …");
+      // swap the name in that one sentence. If the recruiter reworded it we
+      // leave the body alone and let the UI ask them to fix it.
+      const isHandoff =
+        mailbox.emailAddress.toLowerCase() !== config.draftCcEmail.toLowerCase() &&
+        draft.classification === 'INTERESTED';
+      let loopIn: 'updated' | 'not_found' | 'not_handoff' = 'not_handoff';
+      if (isHandoff && option) {
+        const swapped = replaceLoopIn(bodyText ?? draft.bodyText, option.firstName);
+        loopIn = swapped.replaced ? 'updated' : 'not_found';
+        if (swapped.replaced) bodyText = swapped.text;
+      }
+      ccChange = {
+        ccAddress: resolveDraftCc(updateData.ccEmail, mailbox.emailAddress),
+        firstName: option?.firstName ?? null,
+        loopIn,
+        handoffWithoutCc: isHandoff && !ccEmail,
+      };
     }
 
     // Re-render bodyHtml from the edited text so the preview and the email we
     // hand to Gmail carry exactly what the recruiter typed, with the mailbox's
     // HTML signature swapped back in for its plain-text rendering (C1).
-    const updateData: { bodyText?: string; subject?: string; bodyHtml?: string } = { ...parsed.data };
-    if (parsed.data.bodyText !== undefined) {
-      const sig = await loadSignature(draft.thread.mailbox.id);
-      updateData.bodyHtml = composeDraftHtml(parsed.data.bodyText, sig.html, sig.plain);
+    if (bodyText !== undefined) {
+      const sig = await loadSignature(mailbox.id);
+      updateData.bodyText = bodyText;
+      updateData.bodyHtml = composeDraftHtml(bodyText, sig.html, sig.plain);
+    }
+
+    // An approved draft already sits in the recruiter's Gmail Drafts: rewrite
+    // it before touching the DB so Gmail never goes out with the old CC.
+    if (ccChanging && draft.externalDraftId && mailbox.provider === 'GMAIL' && candidate) {
+      try {
+        await gmailUpdateDraft(mailbox.id, draft.externalDraftId, {
+          threadId: draft.threadId,
+          externalThreadId: draft.thread.externalThreadId,
+          subject: draft.subject,
+          bodyText: (updateData.bodyText as string | undefined) ?? draft.bodyText,
+          bodyHtml: ((updateData.bodyHtml as string | undefined) ?? draft.bodyHtml) || undefined,
+          inReplyToMessageId: draft.inReplyToMessageId ?? undefined,
+          referencesHeader: draft.referencesHeader ?? undefined,
+          toAddress: candidate.email,
+          ccEmail: updateData.ccEmail as string,
+        });
+      } catch (err) {
+        if (isGmailNotFound(err)) {
+          // Deleted in Gmail: /send re-creates it from the row.
+          updateData.externalDraftId = null;
+        } else {
+          await logEvent(
+            'DRAFT_CC_GMAIL_UPDATE_FAILED',
+            { draftId: id, error: err instanceof Error ? err.message : String(err), actorUserId: req.userId },
+            'ERROR'
+          );
+          return next(createError('Could not update the draft in Gmail; the CC was not changed. Please retry.', 502));
+        }
+      }
     }
 
     const updated = await prisma.emailDraft.update({
@@ -378,7 +486,19 @@ router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => 
       data: updateData,
     });
 
-    res.json({ success: true, data: updated });
+    if (ccChange) {
+      await logEvent(
+        'DRAFT_CC_CHANGED',
+        { draftId: id, loopIn: ccChange.loopIn, noCc: ccChange.ccAddress === null, actorUserId: req.userId },
+        'INFO'
+      );
+    }
+
+    res.json({
+      success: true,
+      data: { ...updated, ccAddress: resolveDraftCc(updated.ccEmail, mailbox.emailAddress) },
+      ...(ccChange ? { ccChange } : {}),
+    });
   } catch (err) {
     next(err);
   }
@@ -520,6 +640,7 @@ async function regenerateDraftById(
       classification: classificationResult.classification,
       signatureHtml,
       via: 'regenerate',
+      ccEmail: draft.ccEmail,
     });
     replySubject = content.subject;
     replyBodyText = content.bodyText;
@@ -770,6 +891,7 @@ router.post('/:id/approve', async (req: Request, res: Response, next: NextFuncti
           inReplyToMessageId: draftWithThread.inReplyToMessageId ?? undefined,
           referencesHeader: draftWithThread.referencesHeader ?? undefined,
           toAddress: candidate.email,
+          ccEmail: draftWithThread.ccEmail,
         });
       } catch (gmailErr) {
         // Fail loudly and hand the draft back to the review queue so the
@@ -893,6 +1015,7 @@ router.post('/:id/send', async (req: Request, res: Response, next: NextFunction)
           inReplyToMessageId: draftWithThread.inReplyToMessageId ?? undefined,
           referencesHeader: draftWithThread.referencesHeader ?? undefined,
           toAddress: candidate.email,
+          ccEmail: draftWithThread.ccEmail,
         });
         // Persist the externalDraftId immediately (compare-and-set) so a
         // concurrent or retried send can't create and send a second copy.

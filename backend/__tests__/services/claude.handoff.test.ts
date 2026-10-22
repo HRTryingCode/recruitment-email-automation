@@ -130,3 +130,23 @@ describe('model ids are overridable from env (L13)', () => {
     expect(fresh.config.claudeClassifierModel).toBe('claude-haiku-5-5');
   });
 });
+
+describe('hand-off loop-in instruction (F4)', () => {
+  beforeEach(() => createMock.mockReset());
+
+  it.each(['coordinator', 'sofia_interviews', 'ethan_interviews_sofia_schedules'] as const)(
+    '%s: the prompt asks for the shared pronoun-free sentence verbatim',
+    async (handoffType) => {
+      const { loopInSentence } = await import('../../src/lib/handoffLoopIn');
+      createMock.mockResolvedValueOnce(draftResponse('Hi Cand,\n\nx\n\nBest,'));
+      await generateHandoffDraftReply(
+        { ...thread, ccName: 'Ethan', ccEmail: 'ethan@archive.com', handoffType },
+        caller
+      );
+      const prompt = createMock.mock.calls[0][0].messages[0].content as string;
+      expect(prompt).toContain(loopInSentence(handoffType, 'Ethan'));
+      expect(prompt).toMatch(/verbatim/i);
+      expect(prompt).not.toMatch(/she'll|she's|\bshe\b|he'll|\bhe\b/i);
+    }
+  );
+});

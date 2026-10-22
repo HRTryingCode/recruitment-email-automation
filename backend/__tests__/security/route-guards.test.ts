@@ -61,6 +61,7 @@ const MANIFEST: Record<string, Guard> = {
   'POST /api/emails/threads/:id/draft': 'auth',
 
   'GET /api/drafts/': 'auth',
+  'GET /api/drafts/cc-options': 'auth',
   'GET /api/drafts/:id': 'auth',
   'PATCH /api/drafts/:id': 'auth',
   'POST /api/drafts/regenerate-pending': 'admin',
