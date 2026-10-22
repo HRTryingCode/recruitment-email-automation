@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useLocation } from 'react-router-dom';
 import { Bookmark } from 'lucide-react';
@@ -6,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { fetchSavedViews, type InboxView } from '@/lib/api';
 import { VIEWS, isInboxView } from '@/lib/inbox';
+import { cn } from '@/lib/utils';
 
 /** ?view=…&mailboxId=… (item dropped) on top of the current search. */
 export function useViewHref() {
@@ -25,6 +27,27 @@ export function useViewHref() {
   };
 }
 
+const PULSE_MS = 1500;
+
+/** Views whose count just changed, for a short pulse on their badge. */
+function useChangedCounts(counts?: Record<InboxView, number>): Set<InboxView> {
+  const prev = useRef(counts);
+  const [changed, setChanged] = useState<Set<InboxView>>(new Set());
+  useEffect(() => {
+    const before = prev.current;
+    prev.current = counts;
+    if (!before || !counts) return;
+    const diff = VIEWS.map((v) => v.id).filter((id) => before[id] !== counts[id]);
+    if (diff.length > 0) setChanged(new Set(diff));
+  }, [counts]);
+  useEffect(() => {
+    if (changed.size === 0) return;
+    const t = window.setTimeout(() => setChanged(new Set()), PULSE_MS);
+    return () => window.clearTimeout(t);
+  }, [changed]);
+  return changed;
+}
+
 interface Props {
   view: InboxView;
   counts?: Record<InboxView, number>;
@@ -33,6 +56,7 @@ interface Props {
 /** Left rail: the five views with counts, then saved views. (Mailbox filter: shell header.) */
 export default function InboxRail({ view, counts }: Props) {
   const href = useViewHref();
+  const changed = useChangedCounts(counts);
   const { data: savedData } = useQuery({
     queryKey: ['saved-views', 'inbox'],
     queryFn: () => fetchSavedViews('inbox'),
@@ -53,7 +77,13 @@ export default function InboxRail({ view, counts }: Props) {
           >
             <Link to={href(v.id)} aria-current={v.id === view ? 'page' : undefined}>
               <span>{v.label}</span>
-              <Badge variant={v.id === view ? 'default' : 'outline'}>{counts?.[v.id] ?? 0}</Badge>
+              <Badge
+                variant={v.id === view ? 'default' : 'outline'}
+                data-changed={changed.has(v.id) ? 'true' : undefined}
+                className={cn('tabular-nums transition-shadow duration-500', changed.has(v.id) && 'ring-2 ring-success/60')}
+              >
+                {counts?.[v.id] ?? 0}
+              </Badge>
             </Link>
           </Button>
         ))}

@@ -31,6 +31,7 @@ function Row({
   item,
   selected,
   focused,
+  highlighted,
   checkable,
   checked,
   onOpen,
@@ -39,6 +40,7 @@ function Row({
   item: InboxItem;
   selected: boolean;
   focused: boolean;
+  highlighted: boolean;
   checkable: boolean;
   checked: boolean;
   onOpen: () => void;
@@ -46,8 +48,8 @@ function Row({
 }) {
   const ref = useRef<HTMLLIElement | null>(null);
   useEffect(() => {
-    if (focused) ref.current?.scrollIntoView({ block: 'nearest' });
-  }, [focused]);
+    if (focused || highlighted) ref.current?.scrollIntoView({ block: 'nearest' });
+  }, [focused, highlighted]);
   const name = item.candidate?.name ?? 'Unknown candidate';
   const preview = item.draft?.preview ?? 'No draft yet — needs a decision';
   return (
@@ -66,7 +68,8 @@ function Row({
         onClick={onOpen}
         aria-current={selected ? 'true' : undefined}
         data-focused={focused ? 'true' : undefined}
-        className="data-[focused=true]:ring-2 data-[focused=true]:ring-ring/40"
+        data-highlighted={highlighted ? 'true' : undefined}
+        className="transition-colors duration-700 data-[focused=true]:ring-2 data-[focused=true]:ring-ring/40 data-[highlighted=true]:bg-success/10 data-[highlighted=true]:ring-2 data-[highlighted=true]:ring-success/40"
       >
         <Avatar size="sm">
           <AvatarFallback>{initials(name)}</AvatarFallback>
@@ -101,6 +104,8 @@ interface Props {
   onRetry: () => void;
   selectedKey?: string;
   focusedKey?: string;
+  /** Briefly marks a row that just arrived in this view (H8). */
+  highlightKey?: string;
   onOpen: (key: string) => void;
   /** Batch selection (Not interested view only). */
   checked: Set<string>;
@@ -118,6 +123,7 @@ export default function InboxList({
   onRetry,
   selectedKey,
   focusedKey,
+  highlightKey,
   onOpen,
   checked,
   onCheckedChange,
@@ -192,6 +198,7 @@ export default function InboxList({
                   item={item}
                   selected={key === selectedKey}
                   focused={key === focusedKey}
+                  highlighted={key === highlightKey}
                   checkable={batchable && item.kind === 'draft'}
                   checked={checked.has(item.id)}
                   onOpen={() => onOpen(key)}
