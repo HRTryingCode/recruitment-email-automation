@@ -145,10 +145,13 @@ export function useInboxActions({ keys, setItem, onLocalChange, onSent, nameOf }
   );
 
   /** ⌘Z: undo the last send while its window is open. */
-  const undoLast = useCallback(() => {
+  const canUndoLast = useCallback(() => {
     const last = lastSend.current;
-    if (last && Date.now() < last.until) void undo(last.id);
-  }, [undo]);
+    return !!last && Date.now() < last.until;
+  }, []);
+  const undoLast = useCallback(() => {
+    if (canUndoLast()) void undo(lastSend.current!.id);
+  }, [undo, canUndoLast]);
 
   /** Undo for Dismiss: back to PENDING and reopened. */
   const undismiss = useCallback(
@@ -344,6 +347,7 @@ export function useInboxActions({ keys, setItem, onLocalChange, onSent, nameOf }
     send,
     undo,
     undoLast,
+    canUndoLast,
     dismiss,
     undismiss,
     snooze,

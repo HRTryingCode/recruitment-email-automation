@@ -211,7 +211,11 @@ export default function InboxPage() {
 
   const doSend = () => {
     if (!draft || !sendable || actions.sending) return;
-    actions.send(draft, editor.body, name, () => editor.reset(editor.body));
+    actions.send(draft, editor.body, name, () => {
+      editor.reset(editor.body);
+      // Leave the editor so ⌘Z (undo send) and the list keys work right away.
+      if (isTyping(document.activeElement)) document.activeElement.blur();
+    });
   };
 
   const go = (key: string) => (itemId ? openItem(key) : setCursor(key));
@@ -263,7 +267,7 @@ export default function InboxPage() {
     },
     close,
     help: () => setHelpOpen(true),
-  });
+  }, true, (id) => id === 'undo' && actions.canUndoLast() && !editor.dirty);
 
   const menus =
     draft && itemId ? (

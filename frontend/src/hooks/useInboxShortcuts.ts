@@ -84,12 +84,19 @@ function resolve(e: KeyboardEvent): InboxShortcut | null {
  * inside menus/dialogs nothing does. ⌘K stays with the shell palette, and
  * the key right after `g` is left to the shell's g-navigation (g s =
  * Settings, not Snooze). Handled keys are preventDefault-ed so the shell's
- * own `?` help yields to the Inbox one.
+ * own `?` help yields to the Inbox one. `allowWhileTyping` lets a shortcut
+ * through from a text field when it says so (⌘Z undo-send from a clean editor).
  */
-export function useInboxShortcuts(handlers: Partial<Record<InboxShortcut, () => void>>, enabled = true): void {
+export function useInboxShortcuts(
+  handlers: Partial<Record<InboxShortcut, () => void>>,
+  enabled = true,
+  allowWhileTyping?: (id: InboxShortcut) => boolean
+): void {
   const ref = useRef(handlers);
+  const allowRef = useRef(allowWhileTyping);
   useLayoutEffect(() => {
     ref.current = handlers;
+    allowRef.current = allowWhileTyping;
   });
 
   useEffect(() => {
@@ -105,7 +112,7 @@ export function useInboxShortcuts(handlers: Partial<Record<InboxShortcut, () => 
       const id = resolve(e);
       if (!id) return;
       if (inOverlay(e.target)) return;
-      if (isTypingTarget(e.target) && id !== 'send' && id !== 'close') return;
+      if (isTypingTarget(e.target) && id !== 'send' && id !== 'close' && !allowRef.current?.(id)) return;
       const fn = ref.current[id];
       if (!fn) return;
       e.preventDefault();

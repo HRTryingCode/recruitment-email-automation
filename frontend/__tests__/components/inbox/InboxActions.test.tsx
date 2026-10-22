@@ -84,6 +84,42 @@ describe('one-step send', () => {
     await waitFor(() => expect(posts(store, '/d1/send')).toHaveLength(1));
   });
 
+  it('sending from the editor leaves it, so ⌘Z undoes the send', async () => {
+    const store = installInbox(ITEMS);
+    renderInbox('/inbox?view=interested&item=d1');
+    const box = within(await openPane()).getByRole('textbox', { name: 'Reply' });
+    box.focus();
+    fireEvent.keyDown(box, { key: 'Enter', metaKey: true });
+    await openPane('Ben Sample');
+    expect(document.activeElement).not.toBe(box);
+    expect(document.activeElement?.tagName).not.toBe('TEXTAREA');
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'z', metaKey: true });
+    await waitFor(() => expect(posts(store, '/d1/undo-send')).toHaveLength(1));
+  });
+
+  it('⌘Z in the next reply\'s untouched editor still undoes the send', async () => {
+    const store = installInbox(ITEMS);
+    const user = userEvent.setup();
+    renderInbox('/inbox?view=interested&item=d1');
+    await user.click(within(await openPane()).getByRole('button', { name: /^Send/ }));
+    const next = within(await openPane('Ben Sample')).getByRole('textbox', { name: 'Reply' });
+    next.focus();
+    fireEvent.keyDown(next, { key: 'z', metaKey: true });
+    await waitFor(() => expect(posts(store, '/d1/undo-send')).toHaveLength(1));
+  });
+
+  it('⌘Z in an editor with unsaved changes is the text undo, not undo-send', async () => {
+    const store = installInbox(ITEMS);
+    const user = userEvent.setup();
+    renderInbox('/inbox?view=interested&item=d1');
+    await user.click(within(await openPane()).getByRole('button', { name: /^Send/ }));
+    const next = within(await openPane('Ben Sample')).getByRole('textbox', { name: 'Reply' });
+    await user.type(next, ' typo');
+    fireEvent.keyDown(next, { key: 'z', metaKey: true });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(posts(store, '/d1/undo-send')).toHaveLength(0);
+  });
+
   it('sending the last reply in a view falls back to the previous one', async () => {
     installInbox(ITEMS);
     const user = userEvent.setup();

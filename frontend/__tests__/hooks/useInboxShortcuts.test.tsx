@@ -95,4 +95,21 @@ describe('useInboxShortcuts', () => {
   it('documents every shortcut for the help dialog', () => {
     expect(SHORTCUTS.map((s) => s.id).sort()).toEqual([...ids].sort());
   });
+
+  it('allowWhileTyping lets a chosen shortcut through from the editor', () => {
+    let allow = true;
+    function Allowing() {
+      useInboxShortcuts(handlers, true, (id) => id === 'undo' && allow);
+      return <textarea aria-label="editor" />;
+    }
+    const { getByLabelText } = render(<Allowing />);
+    const editor = getByLabelText('editor');
+    fireEvent.keyDown(editor, { key: 'z', metaKey: true });
+    expect(handlers.undo).toHaveBeenCalledTimes(1);
+    allow = false;
+    fireEvent.keyDown(editor, { key: 'z', metaKey: true });
+    expect(handlers.undo).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(editor, { key: 'd' });
+    expect(handlers.dismiss).not.toHaveBeenCalled();
+  });
 });
