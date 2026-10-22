@@ -21,7 +21,8 @@ import { useInboxActions } from '@/hooks/useInboxActions';
 import { useInboxShortcuts } from '@/hooks/useInboxShortcuts';
 import { useInboxUrlState } from '@/hooks/useInboxUrlState';
 import { useTriageDraft, type TriageResult } from '@/hooks/useTriageDraft';
-import { fetchCandidate, fetchDraft, fetchInbox, type InboxView } from '@/lib/api';
+import { fetchCandidate, fetchDraft, type InboxView } from '@/lib/api';
+import { inboxQueryOptions } from '@/lib/inboxQuery';
 import { fetchLeverMe } from '@/lib/leverApi';
 import { prefetchAddToLever } from '@/lib/leverQueries';
 import { toastWarning } from '@/lib/toast';
@@ -29,7 +30,7 @@ import { LIVE_DRAFT_STATUSES } from '@/lib/candidates';
 import { VIEWS, groupByRole, isInboxView, nextItemId } from '@/lib/inbox';
 import { cn } from '@/lib/utils';
 
-export const INBOX_POLL_MS = 15_000;
+export { INBOX_POLL_MS } from '@/lib/inboxQuery';
 
 /** Draft statuses a legacy ?candidateId= link can land on. */
 const LIVE_STATUSES = LIVE_DRAFT_STATUSES;
@@ -97,10 +98,8 @@ export default function InboxPage() {
   );
 
   const inboxQ = useQuery({
-    // ['inbox', view, …] prefix stays first: mutations invalidate ['inbox'].
-    queryKey: ['inbox', listView, mailboxId ?? null, sort, roles],
-    queryFn: () => fetchInbox({ view: listView, mailboxId, order: sort, role: roles.length ? roles : undefined }),
-    refetchInterval: INBOX_POLL_MS,
+    // Shared with the shell's nav badge (same key) — see lib/inboxQuery.
+    ...inboxQueryOptions({ view: listView, mailboxId, sort, roles }),
     placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[1] === listView ? prev : undefined),
   });
   const roleCounts = useMemo(() => inboxQ.data?.data.roleCounts ?? [], [inboxQ.data]);

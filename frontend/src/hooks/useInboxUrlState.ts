@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import type { InboxView } from '../lib/api';
-import { isInboxView, type InboxSort } from '../lib/inbox';
+import type { InboxSort } from '../lib/inbox';
+import { inboxSortFrom, inboxViewFrom } from '../lib/inboxQuery';
 
 /**
  * Inbox place in the URL — /inbox?view=…&mailboxId=…&item=<draftId>, plus
@@ -29,12 +30,11 @@ export function useInboxUrlState() {
     );
   }, [legacyDraftId, setParams]);
 
-  const rawView = params.get('view');
-  const view: InboxView = isInboxView(rawView) ? rawView : params.get('status') === 'SENT' ? 'sent_today' : 'needs_review';
+  const view: InboxView = inboxViewFrom(params);
   const mailboxId = params.get('mailboxId') ?? undefined;
   const legacyCandidateId = params.get('candidateId') ?? undefined;
   const itemId = params.get('item') ?? legacyDraftId ?? undefined;
-  const sort: InboxSort = params.get('sort') === 'oldest' ? 'oldest' : 'newest';
+  const sort: InboxSort = inboxSortFrom(params);
   const roleParam = params.getAll('role').join('\u0000');
   const roles = useMemo(() => (roleParam ? roleParam.split('\u0000') : []), [roleParam]);
   const grouped = params.get('group') === 'role';
