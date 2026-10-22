@@ -14,7 +14,7 @@ function store(on: boolean): void {
 
 /**
  * Opt in to a desktop notification when replies arrive while the tab is in
- * the background. Lives in the Inbox rail; asks the browser on first use.
+ * the background. Lives in Settings → Notifications; asks the browser on first use.
  */
 export default function DesktopAlertsToggle() {
   const supported = typeof Notification !== 'undefined';

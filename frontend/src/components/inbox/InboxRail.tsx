@@ -1,14 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useLocation } from 'react-router-dom';
-import { Bookmark } from 'lucide-react';
+import { BellRing, Bookmark } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { fetchSavedViews, type InboxView } from '@/lib/api';
 import { VIEWS, isInboxView } from '@/lib/inbox';
 import { cn } from '@/lib/utils';
-import DesktopAlertsToggle from './DesktopAlertsToggle';
 
 /** ?view=…&mailboxId=… (item dropped) on top of the current search. */
 export function useViewHref() {
@@ -111,7 +110,13 @@ export default function InboxRail({ view, counts }: Props) {
         </>
       )}
       <Separator />
-      <DesktopAlertsToggle />
+      {/* The toggle lives in Settings → Notifications; this is the way there. */}
+      <Button asChild variant="ghost" size="sm" className="w-full justify-start text-muted-foreground">
+        <Link to="/settings/mailboxes#notifications">
+          <BellRing data-icon="inline-start" />
+          Desktop alerts
+        </Link>
+      </Button>
     </div>
   );
 }

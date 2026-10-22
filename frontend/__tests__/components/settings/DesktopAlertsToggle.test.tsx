@@ -2,7 +2,7 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import DesktopAlertsToggle from '../../../src/components/inbox/DesktopAlertsToggle';
+import DesktopAlertsToggle from '../../../src/components/settings/DesktopAlertsToggle';
 import { DESKTOP_ALERTS_KEY } from '../../../src/hooks/useNewReplyAlerts';
 
 function stubNotification(permission: NotificationPermission, grant: NotificationPermission = permission) {

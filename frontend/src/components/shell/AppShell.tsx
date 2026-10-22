@@ -1,7 +1,7 @@
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { Outlet, useMatch, useSearchParams } from 'react-router-dom';
 import { fetchMailboxes } from '../../lib/api';
-import { inboxQueryOptions, inboxSortFrom, inboxViewFrom, waitingCount } from '../../lib/inboxQuery';
+import { inboxCounts, inboxQueryOptions, inboxSortFrom, inboxViewFrom, waitingCount } from '../../lib/inboxQuery';
 import { useMailboxFilter } from '../../lib/urlState';
 import { cn } from '../../lib/utils';
 import { SidebarInset, SidebarProvider } from '../ui/sidebar';
@@ -38,7 +38,7 @@ export default function AppShell() {
   // elsewhere the default view — so it never disagrees with the rail or adds
   // a poll. (Mid-triage, H8's list can briefly show another view; the badge
   // then follows the URL's view, which is the one the rail highlights.)
-  const { data: inboxData } = useQuery(
+  const { data: inboxData } = useInfiniteQuery(
     inboxQueryOptions(
       onInbox
         ? { view: inboxViewFrom(params), mailboxId, sort: inboxSortFrom(params), roles: params.getAll('role') }
@@ -52,7 +52,7 @@ export default function AppShell() {
 
   return (
     <SidebarProvider>
-      <AppSidebar waitingCount={waitingCount(inboxData?.data.counts)} />
+      <AppSidebar waitingCount={waitingCount(inboxCounts(inboxData))} />
       <SidebarInset className={cn('min-w-0', fullBleed && 'h-svh overflow-hidden')}>
         <AppHeader
           mailboxes={mailboxesData?.data ?? []}

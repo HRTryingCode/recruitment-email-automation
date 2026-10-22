@@ -17,19 +17,20 @@ vi.mock('../../src/lib/api', () => ({
   addGmailMailbox: vi.fn(),
 }));
 
-// A stand-in Inbox that reads the inbox queue the way the real page does
-// (shared options), so the test can prove the shell adds no extra request.
+// A stand-in Inbox that reads the inbox queue with the real page's paged
+// list hook, so the test can prove the shell adds no extra request.
 vi.mock('../../src/pages/InboxPage', async () => {
-  const { inboxQueryOptions } = await import('../../src/lib/inboxQuery');
+  const { useInboxList } = await import('../../src/hooks/useInboxList');
   const { useInboxUrlState } = await import('../../src/hooks/useInboxUrlState');
   return {
     default: () => {
-      const { view, mailboxId, sort, roles } = useInboxUrlState();
-      const q = useQuery(inboxQueryOptions({ view, mailboxId, sort, roles }));
-      return <div data-testid="screen">inbox:{q.data ? 'loaded' : 'loading'}</div>;
+      const { view, mailboxId, sort, roles, grouped } = useInboxUrlState();
+      const list = useInboxList({ view, mailboxId, sort, roles, grouped });
+      return <div data-testid="screen">inbox:{list.ready ? 'loaded' : 'loading'}</div>;
     },
   };
 });
+
 vi.mock('../../src/pages/TodayPage', () => ({ default: () => <div data-testid="screen">today</div> }));
 vi.mock('../../src/pages/settings/MailboxesSettings', () => ({ default: () => <div data-testid="screen">settings</div> }));
 

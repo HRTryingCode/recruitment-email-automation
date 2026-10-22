@@ -1,9 +1,10 @@
 import { useEffect, useMemo } from 'react';
 import { useInfiniteQuery, type InfiniteData } from '@tanstack/react-query';
-import { fetchInbox, type InboxItem, type InboxPage, type InboxView, type SingleResponse } from '../lib/api';
+import type { InboxItem, InboxPage, InboxView, SingleResponse } from '../lib/api';
+import { inboxQueryOptions } from '../lib/inboxQuery';
 import { mergePages, type InboxSort } from '../lib/inbox';
 
-export const INBOX_POLL_MS = 15_000;
+export { INBOX_POLL_MS } from '../lib/inboxQuery';
 
 /** Group by role pulls in the whole view, up to this many pages (50 each). */
 export const MAX_GROUPED_PAGES = 10;
@@ -27,19 +28,8 @@ interface Params {
  */
 export function useInboxList({ view, mailboxId, sort, roles, grouped }: Params) {
   const q = useInfiniteQuery({
-    // ['inbox', view, …] prefix stays first: mutations invalidate ['inbox'].
-    queryKey: ['inbox', view, mailboxId ?? null, sort, roles],
-    queryFn: ({ pageParam }) =>
-      fetchInbox({
-        view,
-        mailboxId,
-        order: sort,
-        role: roles.length ? roles : undefined,
-        ...(pageParam ? { cursor: pageParam } : {}),
-      }),
-    initialPageParam: null as string | null,
-    getNextPageParam: (last) => last.data.nextCursor ?? undefined,
-    refetchInterval: INBOX_POLL_MS,
+    // Shared with the shell's nav badge (same key) — see lib/inboxQuery.
+    ...inboxQueryOptions({ view, mailboxId, sort, roles }),
     placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[1] === view ? prev : undefined),
   });
 

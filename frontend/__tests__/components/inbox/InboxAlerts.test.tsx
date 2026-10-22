@@ -49,12 +49,13 @@ describe('new-reply alerts', () => {
     await waitFor(() => expect(screen.queryByText(/new repl/)).not.toBeInTheDocument());
   });
 
-  it('offers desktop alerts in the rail', async () => {
+  it('links to the desktop alerts setting from the rail (the toggle lives in Settings)', async () => {
     vi.stubGlobal('Notification', Object.assign(vi.fn(), { permission: 'default', requestPermission: vi.fn() }));
     installInbox(ITEMS);
     renderInbox('/inbox?view=interested');
     const rail = await screen.findByRole('complementary', { name: 'Inbox' });
-    expect(within(rail).getByRole('button', { name: /Desktop alerts/ })).toBeInTheDocument();
+    expect(within(rail).getByRole('link', { name: /Desktop alerts/ })).toHaveAttribute('href', '/settings/mailboxes#notifications');
+    expect(within(rail).queryByRole('button', { name: /Desktop alerts/ })).not.toBeInTheDocument();
     vi.unstubAllGlobals();
   });
 

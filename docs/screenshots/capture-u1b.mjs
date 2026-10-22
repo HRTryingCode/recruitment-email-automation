@@ -63,6 +63,7 @@ async function mock(page) {
     if (p === '/mailboxes') return route.fulfill(ok([{ ...mailbox, provider: 'GMAIL', isActive: true, authStatus: 'OK', createdAt: ago(9999), updatedAt: ago(1) }]));
     if (p === '/lever/me') return route.fulfill(ok({ configured: false }));
     if (p === '/drafts') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true, data: [], meta: { total: 0, page: 1, limit: 50 } }) });
+    if (p === '/coverage') return route.fulfill(ok({ generatedAt: new Date(NOW).toISOString(), windowDays: 30, expectedSenderCount: 1, unmonitored: [], quietMailboxes: [], mailboxes: [] }));
     if (p === '/internal/sync-health') return route.fulfill(ok([]));
     return route.fulfill(ok([]));
   });
@@ -101,6 +102,10 @@ for (const theme of ['light', 'dark']) {
   await page.getByText('Dismissed').first().waitFor();
   await page.waitForTimeout(400);
   await page.screenshot({ path: `${OUT}/inbox-dismiss-undo-${theme}.png` });
+  await page.goto('http://localhost:4173/settings/mailboxes#notifications');
+  await page.getByRole('region', { name: 'Notifications', exact: true }).waitFor();
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: `${OUT}/settings-notifications-${theme}.png`, fullPage: true });
   await ctx.close();
 }
 await browser.close();
