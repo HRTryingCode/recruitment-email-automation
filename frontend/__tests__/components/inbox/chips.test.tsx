@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { LabelChip, PresenceChip, MailboxChip } from '../../../src/components/inbox/chips';
+import { LabelChip, NeedsReviewChip, PresenceChip, MailboxChip } from '../../../src/components/inbox/chips';
 import EvidenceMessage from '../../../src/components/inbox/EvidenceMessage';
 import ChangesView from '../../../src/components/inbox/ChangesView';
 
@@ -14,6 +14,11 @@ describe('inbox chips', () => {
   it('LabelChip reads Unsure for neutral drafts', () => {
     render(<LabelChip classification="NEUTRAL" confidenceLabel="high" />);
     expect(screen.getByText('Unsure')).toHaveAttribute('data-tone', 'warning');
+  });
+
+  it('NeedsReviewChip uses the shared status word (U2a vocabulary), not Unsure', () => {
+    render(<NeedsReviewChip />);
+    expect(screen.getByText('Needs review')).toHaveAttribute('data-tone', 'warning');
   });
 
   it('PresenceChip names who is on the reply and what they are doing', () => {

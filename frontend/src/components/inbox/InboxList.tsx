@@ -1,7 +1,6 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, type CSSProperties } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { AlertCircle, Inbox as InboxIcon, Send } from 'lucide-react';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Inbox as InboxIcon, Send } from 'lucide-react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -9,24 +8,14 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/
 import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
 import type { InboxItem, InboxView } from '@/lib/api';
-import { VIEWS, formatAge, itemKey, type RoleGroup } from '@/lib/inbox';
+import { VIEWS, itemKey, type RoleGroup } from '@/lib/inbox';
+import { formatAge, initials } from '@/lib/utils';
+import QueryError from '@/components/shell/QueryError';
 import { cn } from '@/lib/utils';
-import { LabelChip, MailboxChip, PresenceChip, RoleChip } from './chips';
+import { LabelChip, MailboxChip, NeedsReviewChip, PresenceChip, RoleChip } from './chips';
 import DraftFlags from './DraftFlags';
 
 export { itemKey } from '@/lib/inbox';
-
-function initials(name: string): string {
-  return (
-    name
-      .trim()
-      .split(/\s+/)
-      .map((s) => s[0])
-      .slice(0, 2)
-      .join('')
-      .toUpperCase() || '?'
-  );
-}
 
 /** Rows above this count render through a virtualizer (only a window is in the DOM). */
 export const VIRTUALIZE_AFTER = 100;
@@ -102,7 +91,7 @@ const Row = memo(function Row({ item, rowKey, selected, focused, highlighted, ch
             {item.draft ? (
               <LabelChip classification={item.draft.classification} confidenceLabel={item.draft.confidenceLabel} />
             ) : (
-              <LabelChip classification="NEUTRAL" />
+              <NeedsReviewChip />
             )}
             <PresenceChip presence={item.presence} />
           </span>
@@ -348,15 +337,7 @@ function InboxList({
           </div>
         ) : error ? (
           <div className="px-3">
-            <Alert variant="destructive">
-              <AlertCircle />
-              <AlertTitle>Couldn't load the inbox</AlertTitle>
-              <AlertDescription>
-                <Button size="sm" variant="outline" onClick={onRetry}>
-                  Retry
-                </Button>
-              </AlertDescription>
-            </Alert>
+            <QueryError thing="the inbox" onRetry={onRetry} />
           </div>
         ) : items.length === 0 ? (
           <Empty>

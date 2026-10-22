@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { AlertCircle, ArrowLeft, EyeOff, PenLine, X } from 'lucide-react';
+import QueryError from '@/components/shell/QueryError';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -11,7 +12,7 @@ import { fetchCandidate, type InboxItem } from '@/lib/api';
 import { messagePlainText, type TriageClass } from '@/lib/inbox';
 import { formatTimeAgo } from '@/lib/utils';
 import CandidateLink from './CandidateLink';
-import { LabelChip, RoleChip } from './chips';
+import { NeedsReviewChip, RoleChip } from './chips';
 
 interface Props {
   item: InboxItem;
@@ -70,7 +71,7 @@ export default function CandidatePane({ item, onClose, onReply, pending, error, 
               <CandidateLink id={item.candidate?.id} name={name} />
             </h2>
             <RoleChip role={item.candidate?.role} />
-            <LabelChip classification="NEUTRAL" />
+            <NeedsReviewChip />
           </div>
           <p className="truncate text-sm text-muted-foreground">{item.candidate?.email}</p>
           <p className="text-sm text-muted-foreground">No draft yet — the label was unclear. Pick one to write a reply.</p>
@@ -99,15 +100,7 @@ export default function CandidatePane({ item, onClose, onReply, pending, error, 
         ) : isLoading ? (
           <Skeleton className="h-32 w-full" />
         ) : isError ? (
-          <Alert variant="destructive">
-            <AlertCircle />
-            <AlertTitle>Couldn't load this candidate</AlertTitle>
-            <AlertDescription>
-              <Button size="sm" variant="outline" onClick={() => void refetch()}>
-                Retry
-              </Button>
-            </AlertDescription>
-          </Alert>
+          <QueryError thing="this candidate" onRetry={() => void refetch()} />
         ) : latest ? (
           <Card size="sm">
             <CardHeader>

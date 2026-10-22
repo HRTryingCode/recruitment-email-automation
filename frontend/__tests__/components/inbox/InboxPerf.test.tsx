@@ -20,13 +20,13 @@ vi.mock('../../../src/hooks/useNewReplyAlerts', async (orig) => {
   };
 });
 // One call per list-row render.
-vi.mock('../../../src/lib/inbox', async (orig) => {
-  const actual = await orig<typeof import('../../../src/lib/inbox')>();
+vi.mock('../../../src/lib/utils', async (orig) => {
+  const actual = await orig<typeof import('../../../src/lib/utils')>();
   return {
     ...actual,
-    formatAge: (ms: number) => {
+    formatAge: (...args: Parameters<typeof actual.formatAge>) => {
       renders.rows++;
-      return actual.formatAge(ms);
+      return actual.formatAge(...args);
     },
   };
 });
