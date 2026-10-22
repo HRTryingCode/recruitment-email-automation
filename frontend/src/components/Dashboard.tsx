@@ -1,25 +1,16 @@
-import { useMemo } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import {
   fetchCandidateCounts,
   fetchMailboxes,
   fetchDrafts,
   fetchSyncHealth,
-  approveDraft,
   type Mailbox,
-  type EmailDraft,
 } from '../lib/api';
 import { cn } from '../lib/utils';
 import { summarizeHealth, mailboxHealthState, type HealthSummary } from '../lib/mailboxHealth';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './ui/empty';
 import { Skeleton } from './ui/skeleton';
 import { startGmailReconnect } from '../lib/reconnect';
-import {
-  toastSuccess,
-  toastError,
-  extractApiErrorMessage,
-  isAlreadyResolvedError,
-} from '../lib/toast';
 import {
   Mail,
   Clock,
@@ -29,8 +20,6 @@ import {
   Activity,
   Inbox,
   ChevronRight,
-  Sparkles,
-  Check,
   CheckCircle2,
   RefreshCw,
 } from 'lucide-react';
@@ -40,7 +29,9 @@ interface Props {
   onRefetchMailboxes: () => void;
   onSwitchToDrafts?: () => void;
   onSwitchToCandidates?: (filter?: string) => void;
+  /** Unused since R2 retired Quick triage (the Inbox replaces it). */
   onOpenDraftForCandidate?: (candidateId: string) => void;
+  /** See onOpenDraftForCandidate. */
   onOpenDraft?: (draftId: string) => void;
 }
 
@@ -118,87 +109,6 @@ function ActionPill({
       </div>
       <ChevronRight className="h-4 w-4 flex-shrink-0 text-fg-subtle transition-all group-hover:translate-x-0.5 group-hover:text-fg-default" />
     </button>
-  );
-}
-
-// ---------- Quick triage row ----------
-
-function initialsFor(name?: string, email?: string): string {
-  const seed = (name || email || '?').trim();
-  return (
-    seed
-      .split(/\s+/)
-      .map((s) => s[0])
-      .slice(0, 2)
-      .join('')
-      .toUpperCase() || '?'
-  );
-}
-
-function firstNonEmptyLine(body: string): string {
-  return body.split('\n').find((l) => l.trim().length > 0) ?? '';
-}
-
-function QuickTriageRow({
-  draft,
-  onApprove,
-  onOpen,
-  approving,
-}: {
-  draft: EmailDraft;
-  onApprove: (id: string) => void;
-  onOpen: (id: string) => void;
-  approving: boolean;
-}) {
-  const candidate = draft.thread?.candidate;
-  const name = candidate?.name ?? 'Unknown candidate';
-  const role = candidate?.role;
-  const subjectLine = firstNonEmptyLine(draft.bodyText) || draft.subject;
-  return (
-    <div
-      className="group flex cursor-pointer items-center gap-3 border-b border-line-soft px-4 py-3 transition-colors last:border-b-0 hover:bg-fg-strong/[0.02]"
-      onClick={() => onOpen(draft.id)}
-    >
-      <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-accent-500/80 to-accent-700/80 text-[11px] font-semibold text-white ring-1 ring-inset ring-fg-strong/[0.08]">
-        {initialsFor(name, candidate?.email)}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-2">
-          <p className="truncate text-[13px] font-medium text-fg-strong">{name}</p>
-          {role ? (
-            <span
-              data-testid="role-pill"
-              className="max-w-[160px] flex-shrink-0 truncate rounded-md bg-accent-500/8 px-1.5 py-0.5 text-[10.5px] font-medium text-accent-600 ring-1 ring-inset ring-accent-500/15 dark:text-accent-300"
-              title={role}
-            >
-              {role}
-            </span>
-          ) : null}
-        </div>
-        <p className="truncate text-[12px] text-fg-muted">{subjectLine}</p>
-      </div>
-      <div
-        className="flex flex-shrink-0 items-center gap-1"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <button
-          onClick={() => onApprove(draft.id)}
-          disabled={approving}
-          aria-label={`Approve draft for ${name}`}
-          className="flex items-center gap-1.5 rounded-md bg-emerald-500/10 px-2.5 py-1 text-[12px] font-medium text-emerald-700 ring-1 ring-inset ring-emerald-500/20 transition-colors hover:bg-emerald-500/15 dark:text-emerald-300 dark:hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Check className="h-3.5 w-3.5" />
-          Approve
-        </button>
-        <button
-          onClick={() => onOpen(draft.id)}
-          aria-label={`Open draft for ${name} in pane`}
-          className="flex h-7 w-7 items-center justify-center rounded-md text-fg-subtle transition-colors hover:bg-fg-strong/[0.06] hover:text-fg-strong"
-        >
-          <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
-        </button>
-      </div>
-    </div>
   );
 }
 
@@ -386,10 +296,7 @@ export default function Dashboard({
   mailboxId,
   onSwitchToDrafts,
   onSwitchToCandidates,
-  onOpenDraftForCandidate,
-  onOpenDraft,
 }: Props) {
-  const queryClient = useQueryClient();
 
   // Counts come from the server over every candidate, not a 500-row sample
   // (M18). Keyed under 'candidates' so candidate mutations refresh them.
@@ -399,10 +306,10 @@ export default function Dashboard({
     staleTime: 30_000,
   });
 
-  // Only the quick-triage rows are downloaded; the pill uses meta.total.
+  // Count only (meta.total): replying happens in the Inbox since R2.
   const { data: draftsData, isLoading: loadingDrafts } = useQuery({
-    queryKey: ['drafts', 'triage', { mailboxId }],
-    queryFn: () => fetchDrafts({ status: 'PENDING', limit: 5, mailboxId }),
+    queryKey: ['drafts', 'pending-count', { mailboxId }],
+    queryFn: () => fetchDrafts({ status: 'PENDING', limit: 1, mailboxId }),
     staleTime: 30_000,
   });
 
@@ -420,27 +327,13 @@ export default function Dashboard({
   });
 
   const counts = countsData?.data;
-  const allDrafts = draftsData?.data ?? [];
   const mailboxes = mailboxesData?.data ?? [];
   const syncHealth = syncHealthData?.data ?? [];
 
   // Role-less candidates (spam/noise) are excluded server-side.
   const awaitingReply = counts?.awaitingReply ?? 0;
   const needsReview = counts?.needsReview ?? 0;
-  const pendingDrafts = allDrafts.filter((d) => d.status === 'PENDING');
-  const pendingDraftCount = draftsData?.meta.total ?? pendingDrafts.length;
-
-  // Top 5 most-recent pending drafts for the quick triage panel
-  const triageDrafts = useMemo(
-    () =>
-      [...pendingDrafts]
-        .sort(
-          (a, b) =>
-            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-        )
-        .slice(0, 5),
-    [pendingDrafts]
-  );
+  const pendingDraftCount = draftsData?.meta.total ?? 0;
 
   const candidateCountByMailbox: Record<string, number> = {};
   const pendingDraftCountByMailbox: Record<string, number> = {};
@@ -455,44 +348,6 @@ export default function Dashboard({
     syncHealth.filter((h) => mailboxHealthState(h) === 'reconnect').map((h) => h.mailboxId)
   );
 
-  const approveMutation = useMutation({
-    mutationFn: approveDraft,
-    onSuccess: (_data, id) => {
-      const d = pendingDrafts.find((x) => x.id === id);
-      const who = d?.thread?.candidate?.name ?? 'candidate';
-      toastSuccess(
-        'Draft approved',
-        `Saved as a Gmail draft — review in ${who}'s thread before sending.`
-      );
-      void queryClient.invalidateQueries({ queryKey: ['drafts'] });
-    },
-    onError: (err) => {
-      if (isAlreadyResolvedError(err)) {
-        toastSuccess('Already approved', 'This draft was approved in another session.');
-        void queryClient.invalidateQueries({ queryKey: ['drafts'] });
-        return;
-      }
-      toastError(
-        'Could not approve draft',
-        extractApiErrorMessage(err, 'Please try again.')
-      );
-    },
-  });
-
-  const handleOpenDraft = (draftId: string) => {
-    if (onOpenDraft) {
-      onOpenDraft(draftId);
-      return;
-    }
-    const draft = pendingDrafts.find((d) => d.id === draftId);
-    const cid = draft?.thread?.candidate?.id;
-    if (cid && onOpenDraftForCandidate) {
-      onOpenDraftForCandidate(cid);
-      return;
-    }
-    onSwitchToDrafts?.();
-  };
-
   return (
     <div className="flex flex-col gap-8">
       {/* Hero — greeting + health pill */}
@@ -502,7 +357,7 @@ export default function Dashboard({
             Pipeline overview
           </h1>
           <p className="mt-1 text-[13.5px] text-fg-muted">
-            Drafts to approve, replies waiting, and conversations needing
+            Drafts waiting, replies pending, and conversations needing
             attention.
           </p>
         </div>
@@ -519,7 +374,7 @@ export default function Dashboard({
           testId="action-pill-drafts"
           count={pendingDraftCount}
           label="drafts pending"
-          hint="Ready for one-click approval"
+          hint="Waiting in the Inbox"
           icon={FileText}
           tone="accent"
           loading={loadingDrafts}
@@ -546,54 +401,6 @@ export default function Dashboard({
           onClick={() => onSwitchToCandidates?.('NEEDS_REVIEW')}
         />
       </div>
-
-      {/* Quick triage */}
-      <section>
-        <SectionHeader
-          icon={Sparkles}
-          iconClass="text-accent-600 dark:text-accent-300 bg-accent-500/10 ring-accent-500/20"
-          title="Quick triage"
-          count={pendingDraftCount}
-          right={
-            pendingDraftCount > 0 ? (
-              <button
-                onClick={onSwitchToDrafts}
-                className="text-[12px] font-medium text-fg-muted transition-colors hover:text-fg-strong"
-              >
-                View all →
-              </button>
-            ) : null
-          }
-        />
-        {loadingDrafts ? (
-          <div className="flex flex-col gap-1 rounded-xl border border-line bg-surface-raised/60">
-            {[1, 2, 3].map((i) => (
-              <Skeleton key={i} className="h-14 rounded-none" />
-            ))}
-          </div>
-        ) : triageDrafts.length === 0 ? (
-          <EmptyState
-            compact
-            icon={CheckCircle2}
-            title="All caught up"
-            description="No pending drafts right now. New drafts appear here as candidates reply."
-          />
-        ) : (
-          <div className="overflow-hidden rounded-xl border border-line bg-surface-raised/60">
-            {triageDrafts.map((draft) => (
-              <QuickTriageRow
-                key={draft.id}
-                draft={draft}
-                onApprove={(id) => approveMutation.mutate(id)}
-                onOpen={handleOpenDraft}
-                approving={
-                  approveMutation.isPending && approveMutation.variables === draft.id
-                }
-              />
-            ))}
-          </div>
-        )}
-      </section>
 
       {/* Account Pipelines (condensed) */}
       <section>

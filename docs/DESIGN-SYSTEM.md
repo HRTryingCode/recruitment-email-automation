@@ -161,7 +161,7 @@ screens; the last batch deletes the legacy mappings from `tailwind.config.ts`.
 | `alert` | refreshed (unchanged) | inline notices (mailbox reconnect, sender coverage) |
 | `alert-dialog` | refreshed (Tailwind 3 equivalent) | discard / destructive confirms |
 | `badge` | refreshed (unchanged) | role chips, counts, Lever state |
-| `button` | **refreshed** — secondary hover via `color-mix` | every clickable control; `asChild` for links |
+| `button` | **refreshed** — secondary hover via `color-mix`; `forwardRef` (React 18, for Radix `asChild` triggers); R2 adds `size="row"` for list rows | every clickable control; `asChild` for links and Radix triggers |
 | `card` | **refreshed** — single `--card-spacing` variable | dashboard tiles, panels |
 | `dialog` | refreshed (Tailwind 3 equivalent) | modals (Add to Lever, lookup) |
 | `empty` | refreshed (unchanged) | empty states |
@@ -264,10 +264,13 @@ The audit rules (ids used in §7): `raw-button`, `raw-input`, `raw-select`,
 comments are ignored.
 
 Ownership: `R1` = everything not claimed below (pages, App, main, shell
-components, `lib/`, other hooks, and any **new** file) · `R2` = Dashboard,
-UnmonitoredSenders · `R3` = CandidateTable, LookupBar, LookupIntegrations,
-LeverBadge, AddToLeverButton, AddToLeverDialog, JobCombobox, GemConnect, GemReturnToast · `R4` =
-EmailDrafts, DraftReviewPane, DraftCcSelect, useDraftKeyboardShortcuts. New
+components, `lib/`, other hooks, and any **new** file) · `R2` = the Inbox
+(`pages/InboxPage`, `components/inbox/*`, `useInbox*`/`useDraftEditor`/
+`useDraftPresence`, `DraftCcSelect`, `lib/inbox`) — the old EmailDrafts,
+DraftReviewPane and useDraftKeyboardShortcuts were deleted when the Inbox
+was mounted · `R3` = CandidateTable, LookupBar, LookupIntegrations,
+LeverBadge, AddToLeverButton, AddToLeverDialog, JobCombobox, GemConnect,
+GemReturnToast · `R4` = the Today page: Dashboard, UnmonitoredSenders. New
 feature files default to R1. If one belongs elsewhere, add it to
 `AREA_BY_FILE`.
 

@@ -41,8 +41,8 @@ export default function DraftCcSelect({ draft, onChange }: Props) {
   const warnNoCc = !current && mentionsLoopIn(draft.bodyText);
 
   return (
-    <div className="mb-2">
-      <div className="flex items-center gap-2 text-[11px] text-fg-subtle">
+    <div>
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <span id={`cc-label-${draft.id}`}>Cc</span>
         <Select
           value={value}
@@ -55,7 +55,6 @@ export default function DraftCcSelect({ draft, onChange }: Props) {
           <SelectTrigger
             size="sm"
             aria-labelledby={`cc-label-${draft.id}`}
-            className="h-7 rounded-md border-line bg-surface-base/60 px-2 text-[12px] text-fg-default"
           >
             <SelectValue placeholder={current ?? 'No CC'} />
           </SelectTrigger>
@@ -64,7 +63,7 @@ export default function DraftCcSelect({ draft, onChange }: Props) {
               <SelectItem key={o.email ?? NO_CC} value={o.email ?? NO_CC}>
                 {o.name}
                 {o.email && o.name !== o.email ? (
-                  <span className="font-mono text-[11px] text-fg-muted">{o.email}</span>
+                  <span className="text-xs text-muted-foreground">{o.email}</span>
                 ) : null}
               </SelectItem>
             ))}
@@ -72,8 +71,8 @@ export default function DraftCcSelect({ draft, onChange }: Props) {
         </Select>
       </div>
       {warnNoCc && (
-        <p role="status" className="mt-1.5 flex items-center gap-1.5 text-[11.5px] text-amber-700 dark:text-amber-300">
-          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+        <p role="status" className="mt-1.5 flex items-center gap-1.5 text-xs text-warning">
+          <AlertTriangle className="size-3.5 shrink-0" />
           No one is CC'd, but this email still says you're looping someone in — pick a CC or edit the body.
         </p>
       )}

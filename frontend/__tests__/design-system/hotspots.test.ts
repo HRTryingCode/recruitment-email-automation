@@ -12,7 +12,7 @@ import { audit, summarize, AREAS } from '../../scripts/design-system-audit.mjs';
  * here, which makes the area fail on any regression. The last batch adds
  * the final area and flips the ESLint rules in eslint.config.mjs to "error".
  */
-const STRICT_AREAS: string[] = ['R1'];
+const STRICT_AREAS: string[] = ['R1', 'R2'];
 
 type Finding = { file: string; line: number; rule: string; match: string; area: string };
 

@@ -21,7 +21,6 @@ vi.mock('../../src/lib/api', () => ({
   fetchSyncHealth: vi.fn(),
   // Sender-coverage panel (B3); resolves undefined → panel stays hidden.
   fetchSenderCoverage: vi.fn(),
-  approveDraft: vi.fn(),
   addGmailMailbox: vi.fn(),
   // H1 auto-refresh of never-checked Lever rows; never settles here.
   refreshCandidateLever: vi.fn(() => new Promise(() => {})),
@@ -32,7 +31,6 @@ const fetchCandidateCountsMock = vi.mocked(api.fetchCandidateCounts);
 const fetchDraftsMock = vi.mocked(api.fetchDrafts);
 const fetchMailboxesMock = vi.mocked(api.fetchMailboxes);
 const fetchSyncHealthMock = vi.mocked(api.fetchSyncHealth);
-const approveDraftMock = vi.mocked(api.approveDraft);
 
 const MAILBOX: Mailbox = {
   id: 'mb-1',
@@ -230,7 +228,6 @@ describe('<Dashboard />', () => {
       success: true,
       data: SYNC_HEALTH,
     });
-    approveDraftMock.mockResolvedValue({ success: true, message: 'ok' });
   });
 
   afterEach(() => {
@@ -247,11 +244,7 @@ describe('<Dashboard />', () => {
   it('renders the three action pills with server-side counts (M18)', async () => {
     renderDashboard();
 
-    // Wait for the queries to resolve — Ada Lovelace only renders inside the
-    // quick-triage panel once the drafts query has fired.
-    await screen.findByText('Ada Lovelace');
-
-    const draftsPill = screen.getByTestId('action-pill-drafts');
+    const draftsPill = await screen.findByTestId('action-pill-drafts');
     await waitFor(() => {
       expect(within(draftsPill).getByText('2')).toBeInTheDocument();
     });
@@ -269,9 +262,9 @@ describe('<Dashboard />', () => {
     expect(within(reviewPill).getByText('75')).toBeInTheDocument();
     expect(within(reviewPill).getByText(/needs review/i)).toBeInTheDocument();
 
-    // No 500-row candidate download; drafts fetch only the triage top 5.
+    // No 500-row candidate download; drafts are counted, not downloaded (R2).
     expect(fetchCandidatesMock).not.toHaveBeenCalled();
-    expect(fetchDraftsMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'PENDING', limit: 5 }));
+    expect(fetchDraftsMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'PENDING', limit: 1 }));
   });
 
   it('shows the server awaiting count as-is (no-role exclusion is done in SQL, B7)', async () => {
@@ -287,26 +280,12 @@ describe('<Dashboard />', () => {
     expect(fetchCandidatesMock).not.toHaveBeenCalled();
   });
 
-  it('the quick triage panel shows pending drafts and approves on one click', async () => {
-    const user = userEvent.setup();
+  it('has no Quick triage or Approve step any more (R2 Inbox replaces it)', async () => {
     renderDashboard();
-
-    // Pending drafts appear inside the quick-triage panel with candidate names
-    expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
-    expect(screen.getByText('Marie Curie')).toBeInTheDocument();
-
-    const approveBtns = screen.getAllByRole('button', {
-      name: /approve draft for/i,
-    });
-    await user.click(approveBtns[0]);
-
-    await waitFor(() => {
-      expect(approveDraftMock).toHaveBeenCalled();
-    });
-    // First call's first arg should be a known draft id from the fixture
-    expect(['draft-1', 'draft-2']).toContain(
-      approveDraftMock.mock.calls[0][0]
-    );
+    await screen.findByTestId('action-pill-drafts');
+    expect(screen.queryByText(/quick triage/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('Ada Lovelace')).not.toBeInTheDocument();
   });
 
   it('account pipelines section renders one condensed row per mailbox (no stacked bar)', async () => {
@@ -356,15 +335,11 @@ describe('<Dashboard />', () => {
     expect(onSwitchToCandidates).toHaveBeenCalledWith('AWAITING_REPLY');
   });
 
-  it('renders the "All caught up" empty state when no pending drafts exist', async () => {
-    fetchDraftsMock.mockResolvedValue({
-      success: true,
-      data: [],
-      meta: { total: 0, page: 1, limit: 1000 },
-    });
-
+  it('shows zero drafts pending when none exist', async () => {
+    fetchDraftsMock.mockResolvedValue({ success: true, data: [], meta: { total: 0, page: 1, limit: 1 } });
     renderDashboard();
-    expect(await screen.findByText(/all caught up/i)).toBeInTheDocument();
+    const pill = await screen.findByTestId('action-pill-drafts');
+    await waitFor(() => expect(within(pill).getByText('0')).toBeInTheDocument());
   });
 
   it('mailbox admin lives in Settings now: no health table or debug lookup on Today (R1)', async () => {
