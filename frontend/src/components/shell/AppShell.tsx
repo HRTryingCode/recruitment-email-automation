@@ -35,14 +35,14 @@ export default function AppShell() {
   return (
     <SidebarProvider>
       <AppSidebar pendingCount={pendingData?.meta.total ?? 0} />
-      <SidebarInset>
+      <SidebarInset className="min-w-0">
         <AppHeader
           mailboxes={mailboxesData?.data ?? []}
           mailboxId={mailboxId}
           onMailboxChange={setMailboxId}
         />
         <StatusBanner />
-        <div className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
+        <div className="mx-auto w-full min-w-0 max-w-7xl flex-1 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
           <Outlet />
         </div>
       </SidebarInset>

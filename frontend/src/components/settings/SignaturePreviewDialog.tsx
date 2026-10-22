@@ -9,6 +9,9 @@ interface Props {
   onOpenChange: (open: boolean) => void;
 }
 
+// An iframe's `title` is its accessible name (not a hover tooltip).
+const FRAME_NAME = 'Signature preview';
+
 // The signature renders the way recipients see it: on a white email body,
 // in a sandboxed frame with no scripts.
 function srcDoc(html: string): string {
@@ -36,7 +39,7 @@ export default function SignaturePreviewDialog({ mailbox, onOpenChange }: Props)
           <iframe
             srcDoc={srcDoc(data.signatureHtml)}
             sandbox="allow-same-origin"
-            title="Signature preview"
+            title={FRAME_NAME}
             className="h-40 w-full border border-border"
             onLoad={(e) => {
               const body = e.currentTarget.contentDocument?.body;

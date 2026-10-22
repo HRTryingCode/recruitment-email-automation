@@ -1,27 +1,32 @@
 import { Link } from 'react-router-dom';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, FileQuestion } from 'lucide-react';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../components/ui/empty';
 
 export default function NotFound() {
   return (
-    <div className="flex min-h-screen items-center justify-center px-4">
-      <div className="text-center">
-        <p className="font-mono text-[11px] font-medium uppercase tracking-[0.2em] text-accent-500 dark:text-accent-400">
-          Error 404
-        </p>
-        <h1 className="mt-3 font-display text-5xl font-semibold tracking-tight text-fg-strong sm:text-6xl">
-          Page not found
-        </h1>
-        <p className="mt-4 max-w-md text-[14px] text-fg-muted">
-          The page you're looking for doesn't exist or has been moved.
-        </p>
-        <Link
-          to="/"
-          className="mt-8 inline-flex items-center gap-2 rounded-lg bg-accent-500 px-4 py-2 text-[13.5px] font-medium text-white shadow-glow transition-colors hover:bg-accent-400"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Back to Dashboard
-        </Link>
-      </div>
+    <div className="flex min-h-screen items-center justify-center bg-background px-4">
+      <Empty>
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <FileQuestion />
+          </EmptyMedia>
+          <Badge variant="outline">Error 404</Badge>
+          <EmptyTitle>
+            <h1>Page not found</h1>
+          </EmptyTitle>
+          <EmptyDescription>The page you’re looking for doesn’t exist or has been moved.</EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          <Button asChild>
+            <Link to="/">
+              <ArrowLeft data-icon="inline-start" />
+              Back to Inbox
+            </Link>
+          </Button>
+        </EmptyContent>
+      </Empty>
     </div>
   );
 }

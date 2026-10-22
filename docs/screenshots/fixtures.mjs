@@ -52,6 +52,8 @@ export function respond(path) {
   if (path === '/api/drafts') return ok(drafts, { meta: { total: drafts.length, page: 1, limit: 50 } });
   const d = path.match(/^\/api\/drafts\/(d\d)$/); if (d) return ok(drafts.find((x) => x.id === d[1]));
   if (path === '/api/internal/sync-health') return ok(syncHealth);
+  if (path === '/api/lever/me') return ok({ configured: true, createEnabled: true, appEmail: user.email, leverUser: { id: 'lu1', name: user.name } });
+  if (path === '/api/integrations/gem/status') return ok({ status: 'OK', lastError: null });
   if (path === '/api/coverage') return ok(coverage);
   if (path === '/api/coverage/expected-senders') return ok([]);
   if (path.startsWith('/api/emails/threads/')) return ok({ ...drafts[0].thread, messages: [] });

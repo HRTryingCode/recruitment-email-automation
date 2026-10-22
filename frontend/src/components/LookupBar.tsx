@@ -32,6 +32,10 @@ import { Spinner } from './ui/spinner';
 import LookupIntegrations from './LookupIntegrations';
 import { NAV_ITEMS } from './shell/nav';
 
+// CommandDialog's screen-reader title/description (not hover tooltips).
+const PALETTE_TITLE = 'Look up a person or run a command';
+const PALETTE_DESCRIPTION = 'Type or paste an email to see whether we know this person, or search the commands.';
+
 const DEBOUNCE_MS = 300;
 const PARTIAL_MIN_CHARS = 2;
 const PARTIAL_LIMIT = 5;
@@ -291,8 +295,8 @@ export default function LookupBar() {
       <CommandDialog
         open={open}
         onOpenChange={handleOpenChange}
-        title="Look up a person or run a command"
-        description="Type or paste an email to see whether we know this person, or search the commands."
+        title={PALETTE_TITLE}
+        description={PALETTE_DESCRIPTION}
         className="sm:max-w-xl"
       >
         <Command shouldFilter={false} loop label="Email to look up, or a command">

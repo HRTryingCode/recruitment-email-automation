@@ -17,7 +17,7 @@ const SRC = path.join(root, 'src');
 
 /** Which refactor batch owns each file (paths relative to src/). */
 export const AREAS = {
-  R1: 'Shell — App, main, pages (Login, Index, NotFound), nav, ThemeToggle, MailboxFilter, ProtectedRoute, lib',
+  R1: 'Shell — App, main, pages (Login, NotFound, route pages, settings), components/shell + settings, ThemeToggle, MailboxFilter, ProtectedRoute, lib, hooks',
   R2: 'Dashboard — Dashboard, UnmonitoredSenders',
   R3: 'Candidates — CandidateTable, LookupBar, LookupIntegrations, LeverBadge, AddToLever*, GemConnect',
   R4: 'Drafts — EmailDrafts, DraftReviewPane, DraftCcSelect, useDraftKeyboardShortcuts',
