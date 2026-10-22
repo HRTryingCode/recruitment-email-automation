@@ -13,9 +13,9 @@ import { requireAdmin } from '../middleware/requireAdmin';
 import { z } from 'zod';
 import { composeDraftHtml, stripHeaderBreaks } from '../lib/draftBody';
 import { waitUntil } from '@vercel/functions';
-import { CANCELABLE_DRAFT_STATUSES } from '../lib/draftStatus';
+import { CANCELABLE_DRAFT_STATUSES, DRAFT_EXPIRY_DAYS } from '../lib/draftStatus';
 import { confidenceLabel } from '../lib/confidence';
-import { runDelayedSend, undoScheduledSend } from '../services/draftSend.service';
+import { runDelayedSend, runDelayedSendBatch, undoScheduledSend } from '../services/draftSend.service';
 import { findLockHolder, listPresence, heartbeatPresence, clearPresence, PRESENCE_MODES } from '../services/draftPresence.service';
 
 const router = Router();
@@ -199,12 +199,8 @@ const draftListFilterSchema = z.object({
   expired: z.enum(['true', 'false']).optional(),
 });
 
-/**
- * PENDING drafts older than this are treated as expired: they leave the
- * review queue and are listed under ?expired=true instead (M16). Derived from
- * createdAt, so there is no schema change.
- */
-export const DRAFT_EXPIRY_DAYS = 21;
+// Expiry window (M16) lives in lib/draftStatus; re-exported for callers.
+export { DRAFT_EXPIRY_DAYS };
 const DRAFT_EXPIRY_MS = DRAFT_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
 
 /**
@@ -1262,6 +1258,78 @@ router.post('/:id/send', async (req: Request, res: Response, next: NextFunction)
       data: { id, status: 'SCHEDULED', scheduledSendAt, undoSeconds },
       ...(ccChange ? { ccChange } : {}),
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+export const BATCH_SEND_MAX = 50;
+const batchSendSchema = z.object({
+  draftIds: z.array(z.string().regex(cuidPattern, 'draftIds must be cuids')).min(1).max(BATCH_SEND_MAX),
+  undoSeconds: z.number().int().min(0).max(30).default(10),
+});
+
+type BatchSkipReason = 'not_found' | 'locked' | 'not_pending' | 'not_batchable' | 'no_candidate';
+
+// POST /api/drafts/batch-send  { draftIds (≤ 50), undoSeconds? }
+// One-step send for a batch of Not interested replies: same rules as
+// POST /:id/send, applied per draft. Drafts someone is editing, or that
+// aren't PENDING NOT_INTERESTED drafts, are skipped and reported — batch
+// sending is only for the replies that don't need individual review.
+router.post('/batch-send', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const parsed = batchSendSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return next(createError(parsed.error.errors[0]?.message ?? 'Invalid body', 400));
+    const draftIds = [...new Set(parsed.data.draftIds)];
+    const { undoSeconds } = parsed.data;
+
+    const [drafts, presence] = await Promise.all([
+      prisma.emailDraft.findMany({
+        where: { id: { in: draftIds } },
+        include: { thread: { select: { candidate: { select: { id: true } } } } },
+      }),
+      listPresence(draftIds, req.userId),
+    ]);
+    const byId = new Map(drafts.map((d) => [d.id, d]));
+
+    const undoMs = undoSeconds * 1000;
+    const scheduledSendAt = new Date(Date.now() + undoMs);
+    const scheduled: string[] = [];
+    const skipped: Array<{ id: string; reason: BatchSkipReason; lockedBy?: string }> = [];
+    for (const id of draftIds) {
+      const draft = byId.get(id);
+      const editor = (presence.get(id) ?? []).find((p) => p.mode === 'editing');
+      if (!draft) skipped.push({ id, reason: 'not_found' });
+      else if (editor) skipped.push({ id, reason: 'locked', lockedBy: editor.name });
+      else if (draft.status !== 'PENDING') skipped.push({ id, reason: 'not_pending' });
+      else if (draft.classification !== 'NOT_INTERESTED') skipped.push({ id, reason: 'not_batchable' });
+      else if (!draft.thread.candidate) skipped.push({ id, reason: 'no_candidate' });
+      else {
+        const claimed = await prisma.emailDraft.updateMany({
+          where: { id, status: 'PENDING' },
+          data: {
+            status: 'SCHEDULED',
+            scheduledSendAt,
+            sentByUserId: req.userId ?? null,
+            sendError: null,
+            snoozedUntil: null,
+            returnedFromSnoozeAt: null,
+          },
+        });
+        if (claimed.count === 0) skipped.push({ id, reason: 'not_pending' });
+        else scheduled.push(id);
+      }
+    }
+
+    if (scheduled.length > 0) {
+      waitUntil(runDelayedSendBatch(scheduled, undoMs));
+    }
+    await logEvent(
+      'DRAFT_BATCH_SEND_SCHEDULED',
+      { scheduled: scheduled.length, skipped: skipped.length, undoSeconds, actorUserId: req.userId },
+      'INFO'
+    );
+    res.status(202).json({ success: true, data: { scheduled, skipped, scheduledSendAt, undoSeconds } });
   } catch (err) {
     next(err);
   }

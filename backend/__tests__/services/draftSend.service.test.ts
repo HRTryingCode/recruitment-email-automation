@@ -16,6 +16,7 @@ import { prisma as injectedPrisma } from '../../src/db/client';
 import {
   executeScheduledSend,
   runDelayedSend,
+  runDelayedSendBatch,
   sweepScheduledSends,
   undoScheduledSend,
   SWEEP_GRACE_MS,
@@ -208,5 +209,33 @@ describe('draftSend.service (U0)', () => {
       expect(String(store.get().sendError)).toMatch(/Gmail Sent/);
       expect(sendMessage).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('runDelayedSendBatch', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('waits once, then sends the drafts one after another', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    resetPrismaMock(mockPrisma);
+    sendMessage.mockReset();
+    const order: string[] = [];
+    mockPrisma.emailDraft.updateMany.mockImplementation(async ({ where }) =>
+      where.status === 'SCHEDULED' ? (order.push(where.id), { count: 1 }) : { count: 1 }
+    );
+    mockPrisma.emailDraft.findUnique.mockImplementation(async ({ where }) => ({
+      id: where.id, subject: 's', bodyText: 'b', bodyHtml: null, ccEmail: null, externalDraftId: null, thread,
+    }));
+    mockPrisma.candidate.update.mockResolvedValue({});
+    sendMessage.mockResolvedValue({ id: 'x', threadId: 'y' });
+
+    const p = runDelayedSendBatch(['a', 'b', 'c'], 10_000);
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(order).toEqual([]);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await p;
+    expect(order).toEqual(['a', 'b', 'c']);
+    expect(sendMessage).toHaveBeenCalledTimes(3);
   });
 });

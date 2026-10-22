@@ -86,6 +86,9 @@ const MANIFEST: Record<string, Guard> = {
   'POST /api/drafts/:id/unsnooze': 'auth',
   'POST /api/drafts/:id/presence': 'auth',
   'DELETE /api/drafts/:id/presence': 'auth',
+  'POST /api/drafts/batch-send': 'auth',
+  // U0 inbox queue.
+  'GET /api/inbox/': 'auth',
 
   'GET /api/internal/sync-health': 'auth',
 

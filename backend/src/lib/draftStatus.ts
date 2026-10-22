@@ -30,3 +30,9 @@ export const LIVE_DRAFT_STATUSES: DraftStatus[] = ['PENDING', 'APPROVED', 'SCHED
  * is excluded: Gmail may already have the message.
  */
 export const CANCELABLE_DRAFT_STATUSES: DraftStatus[] = ['PENDING', 'APPROVED', 'SCHEDULED', 'FAILED'];
+
+/**
+ * PENDING drafts older than this are treated as expired: they leave the
+ * review queue and the inbox's live views (M16). Derived from createdAt.
+ */
+export const DRAFT_EXPIRY_DAYS = 21;

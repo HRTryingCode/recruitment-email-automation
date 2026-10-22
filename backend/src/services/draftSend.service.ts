@@ -111,6 +111,22 @@ export async function runDelayedSend(draftId: string, delayMs: number): Promise<
   }
 }
 
+/**
+ * Batch send (Not interested): one shared undo window, then the drafts go out
+ * one at a time so a 50-draft batch doesn't burst Gmail's per-user limits.
+ * Each draft is still claimed individually, so undoing one skips just it.
+ */
+export async function runDelayedSendBatch(draftIds: string[], delayMs: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, Math.max(0, delayMs) + TIMER_SLACK_MS));
+  for (const draftId of draftIds) {
+    try {
+      await executeScheduledSend(draftId);
+    } catch (err) {
+      await logEvent('DRAFT_SEND_RUNNER_ERROR', { draftId, error: safeError(err).message }, 'WARN');
+    }
+  }
+}
+
 export type UndoOutcome = 'undone' | 'already_sent' | 'not_scheduled';
 
 export async function undoScheduledSend(draftId: string): Promise<UndoOutcome> {
