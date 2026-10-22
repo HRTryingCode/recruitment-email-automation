@@ -6,10 +6,14 @@ import { loadApp } from '../_setup/testApp';
 
 // Both cron endpoints reach into gmail.service. Hoisted mocks let each test
 // program the renewGmailWatches count and the per-mailbox reconcile result.
-const { renewGmailWatches, reconcileMailbox } = vi.hoisted(() => ({
+const { renewGmailWatches, reconcileMailbox, sweepStuckMessages, pruneSystemLog } = vi.hoisted(() => ({
   renewGmailWatches: vi.fn(),
   reconcileMailbox: vi.fn(),
+  sweepStuckMessages: vi.fn(),
+  pruneSystemLog: vi.fn(),
 }));
+
+vi.mock('../../src/services/systemLogRetention.service', () => ({ pruneSystemLog }));
 
 vi.mock('../../src/services/gmail.service', async () => {
   const actual = await vi.importActual<typeof import('../../src/services/gmail.service')>(
@@ -19,6 +23,7 @@ vi.mock('../../src/services/gmail.service', async () => {
     ...actual,
     renewGmailWatches,
     reconcileMailbox,
+    sweepStuckMessages,
   };
 });
 
@@ -41,6 +46,8 @@ describe('/api/internal/cron', () => {
     resetPrismaMock(mockPrisma);
     renewGmailWatches.mockReset();
     reconcileMailbox.mockReset();
+    sweepStuckMessages.mockReset();
+    pruneSystemLog.mockReset();
     app = await loadApp();
   });
 
@@ -198,6 +205,119 @@ describe('/api/internal/cron', () => {
       expect(errored.error).toMatch(/Gmail 503/);
       // The second mailbox should have been processed despite the first failing.
       expect(reconcileMailbox).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('GET /api/internal/cron/reconcile — fairness (M1)', () => {
+    const mk = (id: string) => ({
+      id,
+      provider: 'GMAIL',
+      emailAddress: `${id}@archive.com`,
+      isActive: true,
+      authStatus: 'OK',
+      lastReconciledAt: null,
+      createdAt: new Date('2026-04-01T00:00:00Z'),
+    });
+    const ok = { scannedFromGmail: 1, missingBefore: 0, ingested: 0 };
+
+    it('processes the least-recently-reconciled mailboxes first', async () => {
+      mockPrisma.mailbox.findMany.mockResolvedValueOnce([]);
+      await request(app).get('/api/internal/cron/reconcile').set('Authorization', `Bearer ${CRON_SECRET}`);
+      expect(mockPrisma.mailbox.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          orderBy: [{ lastReconciledAt: { sort: 'asc', nulls: 'first' } }, { createdAt: 'asc' }],
+        })
+      );
+    });
+
+    it('stamps lastReconciledAt on every attempted mailbox, including failures', async () => {
+      mockPrisma.mailbox.findMany.mockResolvedValueOnce([mk('mb-1'), mk('mb-2')]);
+      reconcileMailbox.mockRejectedValueOnce(new Error('Gmail 503')).mockResolvedValueOnce(ok);
+
+      await request(app).get('/api/internal/cron/reconcile').set('Authorization', `Bearer ${CRON_SECRET}`);
+
+      const stamped = mockPrisma.mailbox.update.mock.calls
+        .filter((c) => c[0].data.lastReconciledAt instanceof Date)
+        .map((c) => c[0].where.id)
+        .sort();
+      expect(stamped).toEqual(['mb-1', 'mb-2']);
+    });
+
+    it('reconciles mailboxes concurrently (default 2 at a time)', async () => {
+      mockPrisma.mailbox.findMany.mockResolvedValueOnce([mk('mb-1'), mk('mb-2'), mk('mb-3')]);
+      let inFlight = 0;
+      let maxInFlight = 0;
+      reconcileMailbox.mockImplementation(async () => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((r) => setTimeout(r, 5));
+        inFlight -= 1;
+        return ok;
+      });
+
+      const res = await request(app)
+        .get('/api/internal/cron/reconcile')
+        .set('Authorization', `Bearer ${CRON_SECRET}`);
+
+      expect(res.body.data.results.map((r: { mailboxId: string }) => r.mailboxId)).toEqual([
+        'mb-1',
+        'mb-2',
+        'mb-3',
+      ]);
+      expect(maxInFlight).toBe(2);
+    });
+  });
+
+  describe('GET /api/internal/cron/sweep-stuck-messages (M3)', () => {
+    it('returns 401 without the cron secret', async () => {
+      const res = await request(app).get('/api/internal/cron/sweep-stuck-messages');
+      expect(res.status).toBe(401);
+      expect(sweepStuckMessages).not.toHaveBeenCalled();
+    });
+
+    it('runs the sweeper with a deadline and returns its counts', async () => {
+      sweepStuckMessages.mockResolvedValueOnce({ found: 3, processed: 2, failed: 1, skipped: 0 });
+      const res = await request(app)
+        .get('/api/internal/cron/sweep-stuck-messages')
+        .set('Authorization', `Bearer ${CRON_SECRET}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({ found: 3, processed: 2, failed: 1, skipped: 0 });
+      expect(sweepStuckMessages).toHaveBeenCalledWith(
+        expect.objectContaining({ deadline: expect.any(Number) })
+      );
+    });
+  });
+
+  describe('GET /api/internal/cron/systemlog-retention (M26)', () => {
+    const original = process.env.SYSTEMLOG_RETENTION_ENABLED;
+    afterEach(() => {
+      if (original === undefined) delete process.env.SYSTEMLOG_RETENTION_ENABLED;
+      else process.env.SYSTEMLOG_RETENTION_ENABLED = original;
+    });
+
+    it('returns 401 without the cron secret', async () => {
+      const res = await request(app).get('/api/internal/cron/systemlog-retention');
+      expect(res.status).toBe(401);
+      expect(pruneSystemLog).not.toHaveBeenCalled();
+    });
+
+    it('is a dry run unless SYSTEMLOG_RETENTION_ENABLED=true', async () => {
+      delete process.env.SYSTEMLOG_RETENTION_ENABLED;
+      pruneSystemLog.mockResolvedValueOnce({ enabled: false, deleted: 0 });
+      await request(app)
+        .get('/api/internal/cron/systemlog-retention')
+        .set('Authorization', `Bearer ${CRON_SECRET}`);
+      expect(pruneSystemLog).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }));
+    });
+
+    it('deletes when SYSTEMLOG_RETENTION_ENABLED=true', async () => {
+      process.env.SYSTEMLOG_RETENTION_ENABLED = 'true';
+      pruneSystemLog.mockResolvedValueOnce({ enabled: true, deleted: 10 });
+      const res = await request(app)
+        .get('/api/internal/cron/systemlog-retention')
+        .set('Authorization', `Bearer ${CRON_SECRET}`);
+      expect(res.body.data).toMatchObject({ enabled: true, deleted: 10 });
+      expect(pruneSystemLog).toHaveBeenCalledWith(expect.objectContaining({ enabled: true }));
     });
   });
 

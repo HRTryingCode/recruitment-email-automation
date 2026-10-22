@@ -45,6 +45,10 @@ model Mailbox {
   /// Sanitized message of the error that flipped authStatus (no tokens).
   lastAuthError String?
   lastAuthErrorAt DateTime?
+  /// Start time of the last reconcile attempt (success or failure). The
+  /// hourly reconcile processes mailboxes oldest-first by this column so a
+  /// deadline-hit run never starves the same mailboxes twice in a row.
+  lastReconciledAt DateTime?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   threads       EmailThread[]
@@ -107,11 +111,19 @@ model EmailMessage {
   bodyHtml          String?
   receivedAt        DateTime
   headers           String      @default("{}")
+  /// Ingestion pipeline state: "STORED" (row written, classify/draft not yet
+  /// finished) | "PROCESSED" | "SKIPPED" (stored for context only) | "FAILED".
+  /// The sweep-stuck-messages cron retries inbound STORED/FAILED rows.
+  /// Rows that predate this column default to PROCESSED.
+  processingState   String      @default("PROCESSED")
+  /// Classification attempts (initial + sweeper retries).
+  attempts          Int         @default(0)
   createdAt         DateTime    @default(now())
 
   @@index([threadId])
   @@index([mailboxId])
   @@index([receivedAt])
+  @@index([processingState, createdAt])
 }
 
 model EmailDraft {
@@ -133,6 +145,10 @@ model EmailDraft {
 
   @@index([threadId])
   @@index([status])
+  // Partial unique index "EmailDraft_threadId_live_key" on ("threadId") WHERE
+  // status IN ('PENDING','APPROVED') lives in raw SQL (migration
+  // 9_ingestion_reliability) — Prisma can't express partial indexes. It makes
+  // a second live draft per thread a P2002 instead of a duplicate row.
 }
 
 model SystemLog {
@@ -141,6 +157,28 @@ model SystemLog {
   details   String   @default("{}")
   level     String   @default("INFO")
   createdAt DateTime @default(now())
+
+  @@index([event, createdAt])
+  @@index([createdAt])
+}
+
+/// Gmail message ids that could not be fetched. NOT_FOUND (404: deleted
+/// message or a draft that was sent/discarded) and FAILED rows that hit the
+/// attempt cap are skipped by reconcile for 48h instead of being refetched
+/// every hour. Keyed per mailbox because Gmail ids are per-user.
+model GmailFetchTombstone {
+  id                String   @id @default(cuid())
+  mailboxId         String
+  externalMessageId String
+  /// "NOT_FOUND" | "FAILED"
+  reason            String
+  attempts          Int      @default(1)
+  lastError         String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([mailboxId, externalMessageId])
+  @@index([updatedAt])
 }
 
 /// Persistent OAuth state for CSRF protection on the Gmail connect flow.

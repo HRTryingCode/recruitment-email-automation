@@ -755,8 +755,8 @@ async function classifyAndDraft(opts: {
       );
     }
 
-    await prisma.emailDraft.create({
-      data: {
+    const createdHandoff = await createLiveDraft(
+      {
         threadId: thread.id,
         inReplyToMessageId,
         referencesHeader,
@@ -767,7 +767,9 @@ async function classifyAndDraft(opts: {
         confidence,
         status: 'PENDING',
       },
-    });
+      { mailboxId: mailbox.id, candidateId: candidate.id, threadId: thread.id }
+    );
+    if (!createdHandoff) return;
 
     await logEvent(
       'DRAFT_CREATED',
@@ -818,8 +820,8 @@ async function classifyAndDraft(opts: {
       ? `${existingRefs} ${inReplyToMessageId ?? ''}`.trim()
       : inReplyToMessageId;
 
-    await prisma.emailDraft.create({
-      data: {
+    const created = await createLiveDraft(
+      {
         threadId: thread.id,
         inReplyToMessageId,
         referencesHeader,
@@ -830,7 +832,9 @@ async function classifyAndDraft(opts: {
         confidence,
         status: 'PENDING',
       },
-    });
+      { mailboxId: mailbox.id, candidateId: candidate.id, threadId: thread.id }
+    );
+    if (!created) return;
 
     await logEvent(
       'DRAFT_CREATED',
@@ -862,31 +866,106 @@ async function classifyAndDraft(opts: {
 // dashboard can show reply status when the recruiter replies via Gmail or
 // Superhuman directly.
 //
-// Returns true if a new message was actually stored, false if skipped.
+// Outcome of one fetchAndStoreMessage call:
+//   stored    — new row written (classification may have failed; the row's
+//               processingState records that and the sweeper retries it)
+//   exists    — already stored (pre-check, or lost a P2002 race)
+//   gone      — Gmail 404 (deleted, or a draft that was sent/discarded);
+//               tombstoned so reconcile skips it for 48h
+//   failed    — fetch/store error; retry worthwhile (syncIncremental holds
+//               its history cursor for these)
+//   abandoned — failed MAX_FETCH_ATTEMPTS times; stop holding the cursor
+export type StoreOutcome = 'stored' | 'exists' | 'gone' | 'failed' | 'abandoned';
+
+export const MAX_FETCH_ATTEMPTS = 3;
+const TOMBSTONE_TTL_MS = 48 * 60 * 60 * 1000;
+
+export function isUniqueViolation(err: unknown): boolean {
+  return (err as { code?: unknown } | null)?.code === 'P2002';
+}
+
+function isGmailNotFound(err: unknown): boolean {
+  const e = err as { code?: unknown; status?: unknown; response?: { status?: unknown } } | null;
+  return (e?.code ?? e?.status ?? e?.response?.status) === 404;
+}
+
+async function recordFetchTombstone(
+  mailboxId: string,
+  externalMessageId: string,
+  reason: 'NOT_FOUND' | 'FAILED',
+  error: string
+): Promise<number> {
+  try {
+    const row = await prisma.gmailFetchTombstone.upsert({
+      where: { mailboxId_externalMessageId: { mailboxId, externalMessageId } },
+      update: { reason, lastError: error.slice(0, 500), attempts: { increment: 1 } },
+      create: { mailboxId, externalMessageId, reason, lastError: error.slice(0, 500) },
+    });
+    return row.attempts;
+  } catch (err) {
+    console.warn(`[Gmail] Failed to record tombstone for ${externalMessageId}:`, safeError(err));
+    return 1;
+  }
+}
+
+// Insert a live (PENDING) draft. The partial unique index
+// EmailDraft_threadId_live_key (migration 9) rejects a second live draft on a
+// thread, which happens when two messages on one thread are classified
+// concurrently (webhook + reconcile) — both pass the existingDraft check
+// before either inserts. Losing that race is not an error.
+async function createLiveDraft(
+  data: Parameters<typeof prisma.emailDraft.create>[0]['data'],
+  log: { mailboxId: string; candidateId: string; threadId: string }
+): Promise<boolean> {
+  try {
+    await prisma.emailDraft.create({ data });
+    return true;
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+    await logEvent('DRAFT_SKIPPED_DUPLICATE', { ...log, race: true }, 'INFO');
+    return false;
+  }
+}
+
 async function fetchAndStoreMessage(
   gmail: ReturnType<typeof google.gmail>,
   mailbox: Mailbox,
   externalMessageId: string,
   opts: { skipClassification?: boolean; classifyCutoff?: Date } = {}
-): Promise<boolean> {
+): Promise<StoreOutcome> {
   // Skip if already stored
   const existing = await prisma.emailMessage.findUnique({
     where: { externalMessageId },
   });
-  if (existing) return false;
+  if (existing) return 'exists';
 
+  let storedMessageId: string | null = null;
   try {
-    const fullMsg = await gmail.users.messages.get({
-      userId: 'me',
-      id: externalMessageId,
-      format: 'full',
-    });
+    let fullMsg;
+    try {
+      fullMsg = await gmail.users.messages.get({
+        userId: 'me',
+        id: externalMessageId,
+        format: 'full',
+      });
+    } catch (err) {
+      if (!isGmailNotFound(err)) throw err;
+      await recordFetchTombstone(mailbox.id, externalMessageId, 'NOT_FOUND', 'not found');
+      await logEvent(
+        'MESSAGE_FETCH_NOT_FOUND',
+        { mailboxId: mailbox.id, messageId: externalMessageId },
+        'INFO'
+      );
+      return 'gone';
+    }
 
     const parsed = parseGmailMessage(externalMessageId, fullMsg.data);
     const isOutbound =
       parsed.fromAddress.toLowerCase() === mailbox.emailAddress.toLowerCase();
 
-    // Upsert thread
+    // Upsert thread. lastMessageAt/subject only ever move forward (M24):
+    // messages arrive out of order across webhook / reconcile / resync, so the
+    // update is a conditional updateMany rather than an unconditional write.
     const thread = await prisma.emailThread.upsert({
       where: {
         mailboxId_externalThreadId: {
@@ -894,10 +973,7 @@ async function fetchAndStoreMessage(
           externalThreadId: parsed.threadId,
         },
       },
-      update: {
-        subject: parsed.subject,
-        lastMessageAt: parsed.receivedAt,
-      },
+      update: {},
       create: {
         mailboxId: mailbox.id,
         externalThreadId: parsed.threadId,
@@ -905,23 +981,41 @@ async function fetchAndStoreMessage(
         lastMessageAt: parsed.receivedAt,
       },
     });
+    if (thread.lastMessageAt < parsed.receivedAt) {
+      await prisma.emailThread.updateMany({
+        where: { id: thread.id, lastMessageAt: { lt: parsed.receivedAt } },
+        data: { subject: parsed.subject, lastMessageAt: parsed.receivedAt },
+      });
+    }
 
-    // Store message
-    await prisma.emailMessage.create({
-      data: {
-        threadId: thread.id,
-        mailboxId: mailbox.id,
-        externalMessageId,
-        fromAddress: parsed.fromAddress,
-        fromName: parsed.fromName,
-        toAddresses: JSON.stringify(parsed.toAddresses),
-        subject: parsed.subject,
-        bodyText: parsed.bodyText,
-        bodyHtml: parsed.bodyHtml,
-        receivedAt: parsed.receivedAt,
-        headers: JSON.stringify(parsed.headers),
-      },
-    });
+    const tooOld = opts.classifyCutoff && parsed.receivedAt < opts.classifyCutoff;
+    const willClassify = !isOutbound && !opts.skipClassification && !tooOld;
+
+    // Store message. A P2002 here means a concurrent run (webhook vs
+    // reconcile) stored it between our pre-check and now — that's success.
+    try {
+      const created = await prisma.emailMessage.create({
+        data: {
+          threadId: thread.id,
+          mailboxId: mailbox.id,
+          externalMessageId,
+          fromAddress: parsed.fromAddress,
+          fromName: parsed.fromName,
+          toAddresses: JSON.stringify(parsed.toAddresses),
+          subject: parsed.subject,
+          bodyText: parsed.bodyText,
+          bodyHtml: parsed.bodyHtml,
+          receivedAt: parsed.receivedAt,
+          headers: JSON.stringify(parsed.headers),
+          processingState: willClassify ? 'STORED' : isOutbound ? 'PROCESSED' : 'SKIPPED',
+          attempts: willClassify ? 1 : 0,
+        },
+      });
+      storedMessageId = created.id;
+    } catch (err) {
+      if (isUniqueViolation(err)) return 'exists';
+      throw err;
+    }
 
     if (isOutbound) {
       if (thread.candidateId) {
@@ -954,28 +1048,42 @@ async function fetchAndStoreMessage(
           });
         }
       }
-      return true;
+      return 'stored';
     }
 
     // Inbound: classify + maybe draft.
-    // Skip for old messages during bulk resync (they're stored for context only).
-    const tooOld = opts.classifyCutoff && parsed.receivedAt < opts.classifyCutoff;
-    if (!opts.skipClassification && !tooOld) {
+    // Skipped for old messages during bulk resync (stored for context only).
+    if (willClassify) {
       await classifyAndDraft({ mailbox, thread, parsed });
+      await prisma.emailMessage.update({
+        where: { id: storedMessageId },
+        data: { processingState: 'PROCESSED' },
+      });
     }
-    return true;
+    return 'stored';
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     console.error(`[Gmail] Failed to process message ${externalMessageId}:`, safeError(err));
     await logEvent(
       'MESSAGE_PROCESSING_FAILED',
       {
         mailboxId: mailbox.id,
         messageId: externalMessageId,
-        error: err instanceof Error ? err.message : String(err),
+        stored: storedMessageId !== null,
+        error: message,
       },
       'WARN'
     );
-    return false;
+    if (storedMessageId) {
+      // The row exists, so reconcile won't refetch it; flag it for the
+      // sweep-stuck-messages cron instead (M3).
+      await prisma.emailMessage
+        .update({ where: { id: storedMessageId }, data: { processingState: 'FAILED' } })
+        .catch((e: unknown) => console.warn('[Gmail] Failed to mark message FAILED:', safeError(e)));
+      return 'stored';
+    }
+    const attempts = await recordFetchTombstone(mailbox.id, externalMessageId, 'FAILED', message);
+    return attempts >= MAX_FETCH_ATTEMPTS ? 'abandoned' : 'failed';
   }
 }
 
@@ -1040,7 +1148,9 @@ export async function syncMessages(
   do {
     const listRes = await gmail.users.messages.list({
       userId: 'me',
-      q: `after:${after}`,
+      // Drafts (incl. the app's own) and chats aren't mail we ingest, and
+      // drafts 404 once sent/discarded (M25).
+      q: `after:${after} -in:drafts -in:chats`,
       maxResults: 500,
       pageToken,
     });
@@ -1067,7 +1177,7 @@ export async function syncMessages(
     (msgId) => fetchAndStoreMessage(gmail, mailbox, msgId, { classifyCutoff }),
     12
   );
-  for (const r of storedResults) if (r) stored++;
+  for (const r of storedResults) if (r === 'stored') stored++;
 
   // After a full sync, capture the current historyId so subsequent webhooks
   // run incrementally.
@@ -1116,7 +1226,9 @@ export async function syncIncremental(
   const gmail = await getGmailClient(mailbox);
 
   const startHistoryId = mailbox.lastHistoryId;
-  const newMessageIds = new Set<string>();
+  // message id → id of the first history record that added it, so a failed
+  // fetch can hold the cursor just before that record (L1).
+  const newMessageIds = new Map<string, string | undefined>();
   let latestHistoryId: string | undefined;
   let pageToken: string | undefined;
 
@@ -1135,8 +1247,9 @@ export async function syncIncremental(
       for (const entry of history) {
         const added = entry.messagesAdded ?? [];
         for (const added_msg of added) {
-          if (added_msg.message?.id) {
-            newMessageIds.add(added_msg.message.id);
+          const msgId = added_msg.message?.id;
+          if (msgId && !newMessageIds.has(msgId)) {
+            newMessageIds.set(msgId, entry.id ?? undefined);
           }
         }
       }
@@ -1178,14 +1291,33 @@ export async function syncIncremental(
   }
 
   // Fetch and store each new message (with classification for inbound).
-  for (const msgId of newMessageIds) {
-    await fetchAndStoreMessage(gmail, mailbox, msgId);
+  // Retryable failures hold the cursor at the record before the earliest one
+  // so the next push / run re-reads from there; already-stored messages in
+  // that range are cheap 'exists' skips. 404s, P2002s and messages that hit
+  // MAX_FETCH_ATTEMPTS don't hold it (reconcile + tombstones cover them).
+  let holdBefore: bigint | null = null;
+  let failedCount = 0;
+  let stored = 0;
+  for (const [msgId, recordId] of newMessageIds) {
+    const outcome = await fetchAndStoreMessage(gmail, mailbox, msgId);
+    if (outcome === 'stored') stored += 1;
+    if (outcome === 'failed' || outcome === 'abandoned') failedCount += 1;
+    if (outcome === 'failed' && recordId && /^\d+$/.test(recordId)) {
+      const before = BigInt(recordId) - 1n;
+      if (holdBefore === null || before < holdBefore) holdBefore = before;
+    }
   }
 
-  // Update historyId to whatever Gmail told us is latest, or fall back to
-  // the historyId from the incoming webhook payload.
-  const newHistoryId = latestHistoryId ?? incomingHistoryId;
-  if (newHistoryId) {
+  // The history list was read to the end, so Gmail's latest historyId (or
+  // the push's, if Gmail returned none) is safe — unless a failure holds it.
+  let newHistoryId = latestHistoryId ?? incomingHistoryId;
+  if (holdBefore !== null) {
+    newHistoryId =
+      /^\d+$/.test(startHistoryId) && holdBefore <= BigInt(startHistoryId)
+        ? startHistoryId
+        : holdBefore.toString();
+  }
+  if (newHistoryId && newHistoryId !== startHistoryId) {
     await prisma.mailbox.update({
       where: { id: mailboxId },
       data: { lastHistoryId: newHistoryId },
@@ -1194,7 +1326,14 @@ export async function syncIncremental(
 
   await logEvent(
     'MAILBOX_SYNCED_INCREMENTAL',
-    { mailboxId, messageCount: newMessageIds.size, startHistoryId, endHistoryId: newHistoryId },
+    {
+      mailboxId,
+      messageCount: newMessageIds.size,
+      storedCount: stored,
+      failedCount,
+      startHistoryId,
+      endHistoryId: newHistoryId,
+    },
     'INFO'
   );
 
@@ -1303,6 +1442,27 @@ export async function watchMailbox(mailboxId: string): Promise<void> {
 }
 
 /**
+ * Stop Gmail push notifications for a mailbox (L4). Called on disconnect so
+ * Pub/Sub stops pushing for an address we no longer sync. Best-effort: a
+ * failure is logged, never thrown — the soft-delete must still succeed, and
+ * processWebhook ignores pushes for inactive mailboxes anyway.
+ */
+export async function stopMailboxWatch(mailboxId: string): Promise<void> {
+  const mailbox = await prisma.mailbox.findUnique({ where: { id: mailboxId } });
+  if (!mailbox) return;
+  try {
+    const gmail = await getGmailClient(mailbox);
+    await gmail.users.stop({ userId: 'me' });
+    await prisma.mailbox.update({ where: { id: mailboxId }, data: { watchExpiry: null } });
+    await logEvent('GMAIL_WATCH_STOPPED', { mailboxId }, 'INFO');
+  } catch (err) {
+    const safe = safeError(err);
+    console.warn(`[Gmail] Failed to stop watch for ${mailbox.emailAddress}:`, safe);
+    await logEvent('GMAIL_WATCH_STOP_FAILED', { mailboxId, error: safe.message }, 'WARN');
+  }
+}
+
+/**
  * Format a Date as `YYYY/MM/DD` (UTC) for use in Gmail's `q=after:` search
  * syntax. Gmail interprets `after:YYYY/MM/DD` as "messages received on or
  * after midnight of that day". Using UTC for the conversion avoids missing
@@ -1340,7 +1500,9 @@ export async function reconcileMailbox(
   // the date gives us a roughly 24–48h window depending on time of day. That
   // overlap is fine — fetchAndStoreMessage is idempotent.
   const after = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const q = `after:${gmailDateString(after)}`;
+  // Drafts (incl. the app's own) and chats aren't ingestible mail and drafts
+  // 404 once sent/discarded — without this they were "missing" every hour (M25).
+  const q = `after:${gmailDateString(after)} -in:drafts -in:chats`;
 
   const messageIds: string[] = [];
   let pageToken: string | undefined;
@@ -1367,15 +1529,30 @@ export async function reconcileMailbox(
 
   // Find which of those we already have. Doing it with `in:` is bounded —
   // worst case ~2500 ids (5 pages × 500), which Postgres handles fine.
+  // Global check: externalMessageId is unique across mailboxes, so a row
+  // stored via another mailbox can't be inserted again anyway (M25).
   const existing = await prisma.emailMessage.findMany({
-    where: {
-      mailboxId: mailbox.id,
-      externalMessageId: { in: messageIds },
-    },
+    where: { externalMessageId: { in: messageIds } },
     select: { externalMessageId: true },
   });
   const existingSet = new Set(existing.map((e) => e.externalMessageId));
-  const missing = messageIds.filter((id) => !existingSet.has(id));
+
+  // Skip ids tombstoned in the last 48h: 404s and ids that failed
+  // MAX_FETCH_ATTEMPTS times. Retryable FAILED ids are still attempted.
+  const tombstones = await prisma.gmailFetchTombstone.findMany({
+    where: {
+      mailboxId: mailbox.id,
+      externalMessageId: { in: messageIds.filter((id) => !existingSet.has(id)) },
+      updatedAt: { gt: new Date(Date.now() - TOMBSTONE_TTL_MS) },
+    },
+    select: { externalMessageId: true, reason: true, attempts: true },
+  });
+  const tombstoned = new Set(
+    tombstones
+      .filter((t) => t.reason === 'NOT_FOUND' || t.attempts >= MAX_FETCH_ATTEMPTS)
+      .map((t) => t.externalMessageId)
+  );
+  const missing = messageIds.filter((id) => !existingSet.has(id) && !tombstoned.has(id));
 
   let ingested = 0;
   for (const msgId of missing) {
@@ -1385,8 +1562,8 @@ export async function reconcileMailbox(
       );
       break;
     }
-    const didStore = await fetchAndStoreMessage(gmail, mailbox, msgId);
-    if (didStore) ingested += 1;
+    const outcome = await fetchAndStoreMessage(gmail, mailbox, msgId);
+    if (outcome === 'stored') ingested += 1;
   }
 
   return { scannedFromGmail, missingBefore: missing.length, ingested };
@@ -1547,51 +1724,6 @@ export async function sendDraft(mailboxId: string, externalDraftId: string): Pro
       id: externalDraftId,
     },
   });
-}
-
-// In-memory idempotency cache for Pub/Sub deliveries. Pub/Sub guarantees
-// at-least-once delivery, so the same (mailboxId, historyId) pair routinely
-// arrives 2–3× within seconds. A short-lived LRU lets us skip the duplicate
-// work without a DB round-trip. Best-effort: a process restart or multi-
-// instance deploy weakens the guarantee, but the common case (retries hitting
-// the same warm process) is eliminated.
-const WEBHOOK_IDEMPOTENCY_TTL_MS = 5 * 60 * 1000; // 5 minutes
-const WEBHOOK_IDEMPOTENCY_MAX_ENTRIES = 1000;
-const webhookIdempotencyCache = new Map<string, number>();
-
-export function isWebhookDuplicate(
-  mailboxId: string,
-  historyId: string,
-  now: number = Date.now()
-): boolean {
-  const key = `${mailboxId}:${historyId}`;
-  const seenAt = webhookIdempotencyCache.get(key);
-  if (seenAt !== undefined && now - seenAt < WEBHOOK_IDEMPOTENCY_TTL_MS) {
-    // Bump recency by reinserting (Map preserves insertion order → LRU).
-    webhookIdempotencyCache.delete(key);
-    webhookIdempotencyCache.set(key, seenAt);
-    return true;
-  }
-  webhookIdempotencyCache.set(key, now);
-  // Drop expired entries first, then trim to cap.
-  for (const [k, ts] of webhookIdempotencyCache) {
-    if (now - ts >= WEBHOOK_IDEMPOTENCY_TTL_MS) {
-      webhookIdempotencyCache.delete(k);
-    } else {
-      break; // Map iteration is insertion-ordered → oldest first.
-    }
-  }
-  while (webhookIdempotencyCache.size > WEBHOOK_IDEMPOTENCY_MAX_ENTRIES) {
-    const oldestKey = webhookIdempotencyCache.keys().next().value;
-    if (oldestKey === undefined) break;
-    webhookIdempotencyCache.delete(oldestKey);
-  }
-  return false;
-}
-
-// Test-only: reset cache between unit tests.
-export function _resetWebhookIdempotencyCache(): void {
-  webhookIdempotencyCache.clear();
 }
 
 const SOFIA_EMAIL = 'sofia@archive.com';
@@ -1965,6 +2097,11 @@ export async function fetchExamplesForMailbox(
   return examples;
 }
 
+function isHistoryIdNotNewer(incoming: string | undefined, stored: string | null): boolean {
+  if (!incoming || !stored || !/^\d+$/.test(incoming) || !/^\d+$/.test(stored)) return false;
+  return BigInt(incoming) <= BigInt(stored);
+}
+
 export async function processWebhook(data: { message: { data: string } }): Promise<void> {
   try {
     const decoded = Buffer.from(data.message.data, 'base64').toString('utf-8');
@@ -1986,12 +2123,21 @@ export async function processWebhook(data: { message: { data: string } }): Promi
       return;
     }
 
-    // Pub/Sub at-least-once: skip if we've already processed this exact
-    // (mailbox, historyId) in the last 5 minutes.
-    if (isWebhookDuplicate(mailbox.id, notification.historyId)) {
+    // Disconnected (DELETE soft-deletes; users.stop is best-effort) or
+    // revoked mailboxes: nothing to sync.
+    if (!mailbox.isActive || mailbox.authStatus === AUTH_STATUS_NEEDS_REAUTH) {
+      console.log(`[Gmail Webhook] Ignoring push for inactive mailbox ${mailbox.id}`);
+      return;
+    }
+
+    // Pub/Sub at-least-once + one push per mailbox change: a push whose
+    // historyId is not past our stored cursor has nothing new for us. This
+    // replaces the per-instance in-memory cache, which never hit on
+    // serverless (0 WEBHOOK_DUPLICATE_SKIPPED ever).
+    if (isHistoryIdNotNewer(notification.historyId, mailbox.lastHistoryId)) {
       await logEvent(
-        'WEBHOOK_DUPLICATE_SKIPPED',
-        { mailboxId: mailbox.id, historyId: notification.historyId },
+        'WEBHOOK_STALE_SKIPPED',
+        { mailboxId: mailbox.id, historyId: notification.historyId, lastHistoryId: mailbox.lastHistoryId },
         'INFO'
       );
       return;
@@ -2100,4 +2246,117 @@ export async function reclassifyOrphanedThreads(mailboxId: string): Promise<{ th
   );
 
   return { threadsFound: allThreads.length, threadsClassified: classified };
+}
+
+/**
+ * Sweeper for M3: inbound messages are stored before classification, so a
+ * crash, freeze or timeout between the two (or a thrown classify/draft step)
+ * left a stored-but-never-classified row that nothing retried, because every
+ * ingest path treats "row exists" as done. Re-runs classifyAndDraft for
+ * inbound rows stuck in STORED/FAILED for longer than `minAgeMs` (so rows a
+ * live run is still working on are left alone), up to MAX_FETCH_ATTEMPTS.
+ *
+ * Each row is claimed with a compare-and-set on `attempts`, so overlapping
+ * sweeps (or a sweep racing the original run) process it at most once.
+ * Duplicate drafts are additionally prevented by classifyAndDraft's
+ * existing-draft check and the live-draft unique index.
+ */
+export async function sweepStuckMessages(
+  opts: { minAgeMs?: number; maxAgeMs?: number; limit?: number; deadline?: number } = {}
+): Promise<{ found: number; processed: number; failed: number; skipped: number }> {
+  const now = Date.now();
+  const minAgeMs = opts.minAgeMs ?? 10 * 60 * 1000;
+  const maxAgeMs = opts.maxAgeMs ?? 7 * 24 * 60 * 60 * 1000;
+
+  const rows = await prisma.emailMessage.findMany({
+    where: {
+      processingState: { in: ['STORED', 'FAILED'] },
+      attempts: { lt: MAX_FETCH_ATTEMPTS },
+      createdAt: { lt: new Date(now - minAgeMs), gt: new Date(now - maxAgeMs) },
+    },
+    orderBy: { createdAt: 'asc' },
+    take: opts.limit ?? 20,
+    include: { thread: true, mailbox: true },
+  });
+
+  let processed = 0;
+  let failed = 0;
+  let skipped = 0;
+  for (const row of rows) {
+    if (opts.deadline && Date.now() > opts.deadline) break;
+    const { mailbox, thread } = row as typeof row & { mailbox: Mailbox; thread: EmailThread };
+    if (
+      !mailbox ||
+      !thread ||
+      !mailbox.isActive ||
+      mailbox.authStatus === AUTH_STATUS_NEEDS_REAUTH ||
+      row.fromAddress.toLowerCase() === mailbox.emailAddress.toLowerCase()
+    ) {
+      skipped += 1;
+      continue;
+    }
+
+    const attempts = row.attempts + 1;
+    const claim = await prisma.emailMessage.updateMany({
+      where: { id: row.id, processingState: row.processingState, attempts: row.attempts },
+      data: { attempts: { increment: 1 } },
+    });
+    if (claim.count === 0) {
+      skipped += 1;
+      continue;
+    }
+
+    let toAddresses: string[] = [];
+    let headers = { messageId: '', inReplyTo: '', references: '', cc: '' };
+    try { toAddresses = JSON.parse(row.toAddresses) as string[]; } catch { /* ignore */ }
+    try { headers = { ...headers, ...(JSON.parse(row.headers) as Partial<typeof headers>) }; } catch { /* ignore */ }
+
+    try {
+      await classifyAndDraft({
+        mailbox,
+        thread,
+        parsed: {
+          externalMessageId: row.externalMessageId,
+          threadId: thread.externalThreadId,
+          subject: row.subject,
+          fromAddress: row.fromAddress,
+          fromName: row.fromName ?? undefined,
+          toAddresses,
+          bodyText: row.bodyText ?? '',
+          bodyHtml: row.bodyHtml ?? '',
+          receivedAt: row.receivedAt,
+          headers,
+        },
+      });
+      await prisma.emailMessage.update({
+        where: { id: row.id },
+        data: { processingState: 'PROCESSED' },
+      });
+      processed += 1;
+    } catch (err) {
+      failed += 1;
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[Sweeper] Failed to classify message ${row.id}:`, safeError(err));
+      await prisma.emailMessage.update({
+        where: { id: row.id },
+        data: { processingState: 'FAILED' },
+      });
+      if (attempts >= MAX_FETCH_ATTEMPTS) {
+        await logEvent(
+          'MESSAGE_PROCESSING_ABANDONED',
+          { mailboxId: mailbox.id, messageId: row.externalMessageId, attempts, error: message },
+          'ERROR'
+        );
+      }
+    }
+  }
+
+  if (rows.length > 0) {
+    await logEvent(
+      'SWEEP_STUCK_MESSAGES',
+      { found: rows.length, processed, failed, skipped },
+      failed > 0 ? 'WARN' : 'INFO'
+    );
+  }
+  return { found: rows.length, processed, failed, skipped };
 }

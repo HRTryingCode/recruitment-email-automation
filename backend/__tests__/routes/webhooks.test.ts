@@ -6,9 +6,14 @@ import { loadApp } from '../_setup/testApp';
 
 // `webhooks.ts` calls `processWebhook` from gmail.service for any well-formed
 // Pub/Sub push. Hoisted mock lets each test program the return / rejection.
-const { processWebhook } = vi.hoisted(() => ({
+const { processWebhook, waitUntil } = vi.hoisted(() => ({
   processWebhook: vi.fn(),
+  waitUntil: vi.fn(),
 }));
+
+// H4: on Vercel, work left running after the response is frozen unless it is
+// registered with waitUntil. Outside Vercel waitUntil is a no-op.
+vi.mock('@vercel/functions', () => ({ waitUntil }));
 
 vi.mock('../../src/services/gmail.service', async () => {
   const actual = await vi.importActual<typeof import('../../src/services/gmail.service')>(
@@ -35,8 +40,8 @@ function makePubSubBody(payload: Record<string, unknown>) {
   return { message: { data } };
 }
 
-// processWebhook is dispatched via `void processWebhook(...).catch(...)`, so
-// the route returns 200 before the catch runs. Flush pending microtasks +
+// processWebhook is dispatched in the background (registered with waitUntil),
+// so the route returns 200 before the catch runs. Flush pending microtasks +
 // macrotasks so the .catch (and its logEvent → systemLog.create) has fired by
 // the time the test asserts.
 async function flushAsync() {
@@ -50,7 +55,31 @@ describe('POST /api/webhooks/gmail', () => {
   beforeEach(async () => {
     resetPrismaMock(mockPrisma);
     processWebhook.mockReset();
+    waitUntil.mockReset();
     app = await loadApp();
+  });
+
+  it('registers the background processing with waitUntil so Vercel does not freeze it (H4)', async () => {
+    let finish!: () => void;
+    processWebhook.mockReturnValueOnce(new Promise<void>((r) => (finish = r)));
+
+    const res = await request(app)
+      .post('/api/webhooks/gmail')
+      .send(makePubSubBody({ emailAddress: 'inbox@archive.com', historyId: '1' }));
+
+    // Acked before processing finishes...
+    expect(res.status).toBe(200);
+    // ...but the work is handed to waitUntil, which keeps the function alive.
+    expect(waitUntil).toHaveBeenCalledTimes(1);
+    const registered = waitUntil.mock.calls[0]![0] as Promise<unknown>;
+    expect(typeof registered.then).toBe('function');
+    let settled = false;
+    void registered.then(() => (settled = true));
+    await flushAsync();
+    expect(settled).toBe(false);
+    finish();
+    await flushAsync();
+    expect(settled).toBe(true);
   });
 
   it('returns 200 without throwing when the body is empty', async () => {

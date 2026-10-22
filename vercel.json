@@ -5,7 +5,8 @@
   "framework": null,
   "functions": {
     "api/index.ts": {
-      "includeFiles": "backend/**"
+      "includeFiles": "backend/**",
+      "maxDuration": 300
     }
   },
   "rewrites": [
@@ -15,7 +16,9 @@
   "crons": [
     { "path": "/api/internal/cron/renew-watches", "schedule": "0 */6 * * *" },
     { "path": "/api/internal/cron/reconcile", "schedule": "0 * * * *" },
-    { "path": "/api/internal/cron/watchdog", "schedule": "*/15 * * * *" }
+    { "path": "/api/internal/cron/watchdog", "schedule": "*/15 * * * *" },
+    { "path": "/api/internal/cron/sweep-stuck-messages", "schedule": "5-59/10 * * * *" },
+    { "path": "/api/internal/cron/systemlog-retention", "schedule": "30 3 * * *" }
   ],
   "git": {
     "deploymentEnabled": {

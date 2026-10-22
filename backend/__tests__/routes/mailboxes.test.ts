@@ -14,7 +14,11 @@ const {
   syncMessages,
   createServiceAccountClient,
   serializeCredentials,
+  watchMailbox,
+  stopMailboxWatch,
 } = vi.hoisted(() => ({
+  watchMailbox: vi.fn(),
+  stopMailboxWatch: vi.fn(),
   getAuthUrl: vi.fn(),
   resolveMailboxDisplayName: vi.fn(),
   syncMessages: vi.fn(),
@@ -33,6 +37,8 @@ vi.mock('../../src/services/gmail.service', async () => {
     syncMessages,
     createServiceAccountClient,
     serializeCredentials,
+    watchMailbox,
+    stopMailboxWatch,
   };
 });
 
@@ -67,6 +73,8 @@ describe('/api/mailboxes', () => {
     syncMessages.mockReset();
     createServiceAccountClient.mockReset();
     serializeCredentials.mockReset();
+    watchMailbox.mockReset();
+    stopMailboxWatch.mockReset();
     app = await loadApp();
   });
 
@@ -141,6 +149,31 @@ describe('/api/mailboxes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
+      expect(mockPrisma.mailbox.update).toHaveBeenCalledWith({
+        where: { id: 'mb-1' },
+        data: { isActive: false },
+      });
+    });
+
+    it('stops the Gmail watch on disconnect (L4)', async () => {
+      mockPrisma.mailbox.findUnique.mockResolvedValueOnce(baseMailbox);
+      mockPrisma.mailbox.update.mockResolvedValueOnce({ ...baseMailbox, isActive: false });
+      stopMailboxWatch.mockResolvedValueOnce(undefined);
+
+      const res = await request(app).delete('/api/mailboxes/mb-1').set('Authorization', AUTH);
+
+      expect(res.status).toBe(200);
+      expect(stopMailboxWatch).toHaveBeenCalledWith('mb-1');
+    });
+
+    it('still disconnects when stopping the watch fails', async () => {
+      mockPrisma.mailbox.findUnique.mockResolvedValueOnce(baseMailbox);
+      mockPrisma.mailbox.update.mockResolvedValueOnce({ ...baseMailbox, isActive: false });
+      stopMailboxWatch.mockRejectedValueOnce(new Error('boom'));
+
+      const res = await request(app).delete('/api/mailboxes/mb-1').set('Authorization', AUTH);
+
+      expect(res.status).toBe(200);
       expect(mockPrisma.mailbox.update).toHaveBeenCalledWith({
         where: { id: 'mb-1' },
         data: { isActive: false },
@@ -395,6 +428,29 @@ describe('/api/mailboxes', () => {
       expect(res.status).toBe(403);
       expect(createServiceAccountClient).not.toHaveBeenCalled();
       expect(mockPrisma.mailbox.upsert).not.toHaveBeenCalled();
+    });
+
+    it('sets a Gmail watch for each connected workspace mailbox (L4)', async () => {
+      createServiceAccountClient.mockResolvedValue({
+        users: { messages: { list: vi.fn().mockResolvedValue({ data: { messages: [] } }) } },
+      });
+      serializeCredentials.mockImplementation((c: unknown) => JSON.stringify(c));
+      mockPrisma.mailbox.upsert.mockResolvedValueOnce({ ...baseMailbox, id: 'mb-new' });
+      syncMessages.mockResolvedValueOnce({ messagesSeen: 0, messagesStored: 0 });
+      watchMailbox.mockRejectedValueOnce(new Error('pubsub topic missing'));
+
+      const res = await request(app)
+        .post('/api/mailboxes/workspace/connect')
+        .set('Authorization', AUTH)
+        .send({ emailAddresses: ['a@archive.com'] });
+
+      expect(res.status).toBe(200);
+      expect(watchMailbox).toHaveBeenCalledWith('mb-new');
+      // A watch failure is logged but doesn't fail the connect — the 6h
+      // renew-watches cron retries it.
+      expect(res.body.data[0].success).toBe(true);
+      const events = mockPrisma.systemLog.create.mock.calls.map((c) => c[0].data.event);
+      expect(events).toContain('GMAIL_WATCH_SET_FAILED');
     });
 
     it('connects mailboxes when the authenticated user is an admin', async () => {
