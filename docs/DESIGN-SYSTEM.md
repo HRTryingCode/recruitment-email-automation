@@ -266,7 +266,7 @@ comments are ignored.
 Ownership: `R1` = everything not claimed below (pages, App, main, shell
 components, `lib/`, other hooks, and any **new** file) · `R2` = Dashboard,
 UnmonitoredSenders · `R3` = CandidateTable, LookupBar, LookupIntegrations,
-LeverBadge, AddToLeverButton, AddToLeverDialog, GemConnect · `R4` =
+LeverBadge, AddToLeverButton, AddToLeverDialog, JobCombobox, GemConnect, GemReturnToast · `R4` =
 EmailDrafts, DraftReviewPane, DraftCcSelect, useDraftKeyboardShortcuts. New
 feature files default to R1. If one belongs elsewhere, add it to
 `AREA_BY_FILE`.
@@ -282,9 +282,9 @@ regenerated it.
 |---|---|---:|
 | R1 | Shell — App, main, pages (Login, NotFound, route pages, settings), components/shell + settings, ThemeToggle, MailboxFilter, ProtectedRoute, lib, hooks | 0 |
 | R2 | Dashboard — Dashboard, UnmonitoredSenders | 180 |
-| R3 | Candidates — CandidateTable, LookupBar, LookupIntegrations, LeverBadge, AddToLever*, GemConnect | 309 |
+| R3 | Candidates — CandidateTable, LookupBar, LookupIntegrations, LeverBadge, AddToLever*, JobCombobox, Gem* | 278 |
 | R4 | Drafts — EmailDrafts, DraftReviewPane, DraftCcSelect, useDraftKeyboardShortcuts | 302 |
-| **Total** | | **791** |
+| **Total** | | **760** |
 
 ### R1 — Shell (0)
 
@@ -307,9 +307,9 @@ _none_
 | `ad-hoc-radius` (19) | 89, 95, 162, 171, 188, 196, 213, 239, 263, 297, 325, 335, 363, 569, 571, 582, 607, 609, 619 | `rounded-2xl` `rounded-xl` `rounded-full` `rounded-md` |
 | `arbitrary-value` (23) | 99, 108, 115, 117, 162, 167, 171, 178, 188, 213, 243, 246, 263, 297, 331, 335, 371, 374, 501, 504, 561 | `h-[18px]` `w-[18px]` `text-[34px]` `text-[13px]` |
 
-### R3 — Candidates (309)
+### R3 — Candidates (278)
 
-`legacy-token` 137 · `arbitrary-value` 56 · `palette-colour` 41 · `ad-hoc-radius` 25 · `raw-table` 19 · `raw-button` 12 · `input-adornment` 5 · `raw-select` 3 · `native-tooltip` 3 · `custom-spinner` 2 · `ad-hoc-shadow` 2 · `css-colour-fn` 2 · `custom-skeleton` 1 · `raw-input` 1
+`legacy-token` 120 · `arbitrary-value` 45 · `palette-colour` 35 · `ad-hoc-radius` 24 · `raw-table` 19 · `raw-button` 13 · `input-adornment` 5 · `custom-spinner` 3 · `raw-select` 3 · `native-tooltip` 3 · `ad-hoc-shadow` 2 · `css-colour-fn` 2 · `custom-skeleton` 1 · `raw-input` 1 · `custom-combobox` 1 · `custom-disclosure` 1
 
 **`src/components/AddToLeverButton.tsx`** (7)
 
@@ -320,15 +320,14 @@ _none_
 | `ad-hoc-radius` (1) | 49 | `rounded-md` |
 | `arbitrary-value` (1) | 49 | `text-[11.5px]` |
 
-**`src/components/AddToLeverDialog.tsx`** (47)
+**`src/components/AddToLeverDialog.tsx`** (11)
 
 | Rule | Lines | Examples |
 |---|---|---|
-| `custom-spinner` (2) | 91, 323 | `animate-spin` |
-| `palette-colour` (10) | 74, 194, 243, 315 | `text-red-600` `dark:text-red-400` `bg-amber-500/10` `text-amber-800` |
-| `legacy-token` (17) | 38, 90, 225, 232, 234, 239, 253, 287, 305, 308, 321 | `bg-fg-strong/[0.05]` `text-fg-default` `ring-fg-strong/[0.08]` `text-fg-muted` |
-| `ad-hoc-radius` (4) | 38, 194, 232, 308 | `rounded-md` `rounded-lg` `rounded` |
-| `arbitrary-value` (14) | 38, 66, 74, 90, 194, 232, 234, 239, 243, 287, 305, 308, 315, 321 | `text-[11.5px]` `max-h-[90vh]` `text-[13px]` `text-[12.5px]` |
+| `custom-spinner` (3) | 103, 258, 380 | `animate-spin` |
+| `palette-colour` (4) | 229 | `bg-amber-500/10` `text-amber-800` `ring-amber-500/20` `dark:text-amber-200` |
+| `ad-hoc-radius` (2) | 229, 365 | `rounded-lg` `rounded-2xl` |
+| `arbitrary-value` (2) | 77, 229 | `max-h-[90vh]` `text-[12.5px]` |
 
 **`src/components/CandidateTable.tsx`** (217)
 
@@ -352,11 +351,21 @@ _none_
 
 | Rule | Lines | Examples |
 |---|---|---|
-| `raw-button` (1) | 47 | `<button` |
-| `palette-colour` (2) | 44 | `text-amber-700` `dark:text-amber-300` |
-| `legacy-token` (6) | 44, 51 | `text-fg-default` `text-fg-muted` `text-accent-700` `ring-accent-500/20` |
-| `ad-hoc-radius` (1) | 51 | `rounded-md` |
-| `arbitrary-value` (2) | 43, 51 | `text-[13px]` `text-[12px]` |
+| `raw-button` (1) | 51 | `<button` |
+| `palette-colour` (2) | 48 | `text-amber-700` `dark:text-amber-300` |
+| `legacy-token` (6) | 48, 55 | `text-fg-default` `text-fg-muted` `text-accent-700` `ring-accent-500/20` |
+| `ad-hoc-radius` (1) | 55 | `rounded-md` |
+| `arbitrary-value` (2) | 47, 55 | `text-[13px]` `text-[12px]` |
+
+**`src/components/JobCombobox.tsx`** (5)
+
+| Rule | Lines | Examples |
+|---|---|---|
+| `raw-button` (1) | 68 | `<button` |
+| `custom-combobox` (1) | 70 | `role="combobox"` |
+| `custom-disclosure` (1) | 72 | `aria-expanded={` |
+| `ad-hoc-radius` (1) | 76 | `rounded-3xl` |
+| `arbitrary-value` (1) | 88 | `w-[--radix-popover-trigger-width]` |
 
 **`src/components/LeverBadge.tsx`** (24)
 

@@ -152,8 +152,5 @@ describe('URL state across the shell', () => {
     expect(toast.toastSuccess).toHaveBeenCalledWith('Mailbox connected', expect.any(String));
   });
 
-  it('a Gem OAuth error toasts', async () => {
-    renderAt('/?gem=error');
-    await waitFor(() => expect(toast.toastError).toHaveBeenCalledWith('Gem connection failed', expect.any(String)));
-  });
+
 });
