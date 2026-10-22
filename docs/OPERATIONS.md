@@ -18,12 +18,21 @@ that matter for diagnosing ingestion problems:
 
 | Field | What it tells you |
 |---|---|
+| `authStatus` / `lastAuthError` / `lastAuthErrorAt` | `NEEDS_REAUTH` means Google rejected the mailbox's OAuth grant (`invalid_grant` / 401). **Nothing is being ingested** for that mailbox until its owner reconnects — see [Mailbox needs reconnect](#mailbox-needs-reconnect-needs_reauth--invalid_grant). |
 | `watchExpiry` / `watchExpiresInHours` | When the Gmail watch lapses. The renewal cron should keep this >24h. If it's <0, push delivery has stopped for that mailbox. |
 | `lastSyncedMessageAt` | Timestamp of the most recent ingested message. If this is hours stale on an active mailbox, something is wrong. |
-| `lastReconciliationAt` / `lastReconciliationFoundMissing` | Did the hourly cron find messages the push had missed? Persistent non-zero `foundMissing` means the webhook path is unhealthy. |
+| `lastReconciliationAt` / `lastReconciliationFoundMissing` | Last successful hourly reconcile for this mailbox and how many messages it had to backfill. Older than 3h = the mailbox is not syncing. |
+| `consecutiveReconcileFailures` / `lastReconcileError` | `RECONCILIATION_FAILED` rows since the last success (48h window) and the newest error. 3+ = not syncing. |
 | `messagesLast24h` | Sanity-check volume per mailbox. Zeroes on a known-active inbox = problem. |
 | `pendingDrafts`, `candidatesNeedsReview` | Operational backlog. Helps spot whether the issue is ingestion or recruiters not clearing their queue. |
-| `isActive` | If `false`, the mailbox was disconnected (refresh-token revoked or hit a permanent auth error). User must re-OAuth. |
+| `isActive` | `false` only after a manual disconnect (`DELETE /api/mailboxes/:id`). A revoked token does **not** flip this — check `authStatus`. Inactive mailboxes are omitted from sync-health. |
+| `error` | `true` when the backend could not compute part of the row (count fields are then `null`, not `0`). Retry; persistent `true` = DB pool exhaustion. |
+
+The dashboard's health pill ranks states worst-first: rose **"N mailboxes:
+reconnect required"** (NEEDS_REAUTH or expired watch) → rose **"N mailboxes
+not syncing"** (3+ reconcile failures or no reconcile in 3h) → amber (incomplete
+data, ≥10 webhook errors/24h, drift ≥10, watch expiring <24h) → green. Any rose
+state auto-expands the Mailbox health accordion.
 
 ### Logs
 
@@ -31,27 +40,127 @@ Two surfaces:
 
 - **`SystemLog` rows** (the source of truth). Query in Prisma Studio or via SQL:
   ```sql
-  SELECT created_at, level, event, details FROM "SystemLog"
+  SELECT "createdAt", level, event, details FROM "SystemLog"
   WHERE level IN ('WARN', 'ERROR')
-  ORDER BY created_at DESC LIMIT 50;
+  ORDER BY "createdAt" DESC LIMIT 50;
   ```
 - **Vercel runtime logs.** Vercel dashboard → Project → Logs. Filter on the
   function path (`/api/webhooks/gmail`, `/api/internal/cron/reconcile`, etc.).
-  Useful for stack traces that didn't make it to `SystemLog`.
+  Useful for stack traces that didn't make it to `SystemLog`. **Retained for
+  under 24h** — anything you need later must be in `SystemLog` (or a log drain).
+  Errors are logged through `lib/safeError` (name/message/code/status only);
+  never `console.error(err)` a googleapis error — it carries OAuth tokens.
+
+## Alerting
+
+There is one alert path: the **watchdog cron** (`GET
+/api/internal/cron/watchdog`, every 15 min) posts to Slack via
+`SLACK_ALERT_WEBHOOK_URL`. It alerts **on state change only** — one message
+when issues appear, one "resolved" message when they clear — never every run.
+
+| Issue key | Severity | Fires when |
+|---|---|---|
+| `needs_reauth:<mailboxId>` | critical | Mailbox `authStatus = NEEDS_REAUTH`. |
+| `watch_expired:<mailboxId>` | critical | Active, auth-OK mailbox whose Gmail watch is missing or past `watchExpiry`. |
+| `reconcile_stale:<mailboxId>` | warning | No per-mailbox `RECONCILIATION_RUN` in 3h (mailbox older than 3h; suppressed while `reconcile_dead` fires). |
+| `reconcile_dead` | critical | Dead-man's switch: no `RECONCILIATION_RUN` at all in 2h (cron not running / function crashing). |
+| `reconcile_deadline` | warning | Last 3 reconcile summaries all hit the 45s start budget (mailboxes being skipped). |
+| `webhook_errors` | warning | ≥20 `WEBHOOK_HANDLER_ERROR` rows in the last hour. |
+
+State is the latest `WATCHDOG_STATE` row in `SystemLog` (`details.active` =
+issues already announced). An issue is only recorded as announced if the Slack
+post succeeded, so a Slack outage retries every 15 min.
+
+**If `SLACK_ALERT_WEBHOOK_URL` is unset**, alerting is a no-op (one
+`[Alert] … alerts are disabled` warning per function instance) and the
+watchdog response says `"alerting": "disabled"`. Nothing is recorded, so the
+moment the variable is set, every currently-open issue is announced once.
+
+To run it by hand (returns the current issue list):
+
+```bash
+curl -H "Authorization: Bearer ${CRON_SECRET}" \
+  https://recruiting-email-automation-api.vercel.app/api/internal/cron/watchdog
+```
+
+Thresholds live in `WATCHDOG_THRESHOLDS` (`backend/src/services/monitoring.service.ts`).
+Other services can send ad-hoc alerts with `sendAlert({ severity, title, text })`
+from `services/alert.service.ts` (never throws; no dedupe — callers on a
+schedule must dedupe themselves).
+
+### External uptime monitor
+
+`GET /api/health/deep` (public, no auth) evaluates the same issues and returns
+**503** with `status: "degraded"` (or `"unhealthy"` if the DB is down) and only
+counts by type, e.g. `{"issues":{"needs_reauth":1}}` — no addresses. Point an
+external uptime monitor (Better Stack, UptimeRobot, …) at it so you still get
+paged if Vercel cron or Slack itself is broken. Cached 60s per instance.
+`GET /api/health` remains the cheap liveness probe (DB + Claude key shape only).
 
 ## Common incidents
+
+### Mailbox needs reconnect (`NEEDS_REAUTH` / `invalid_grant`)
+
+**This is how sofia@ was lost for 5 months (2026-05-25 → 2026-10) and how
+aaronrampersad@ started failing on 2026-10-21.** Google stops honouring a
+mailbox's refresh token when the user revokes access, changes their password,
+an admin resets the account, or the grant expires. Every Gmail call then
+fails with `invalid_grant` (token endpoint) or 401.
+
+What the app does automatically:
+
+1. The first call that hits it (webhook, hourly reconcile, 6-hourly renew,
+   resync, draft send) sets `Mailbox.authStatus = 'NEEDS_REAUTH'`,
+   `lastAuthError`, `lastAuthErrorAt`, and writes **one**
+   `MAILBOX_AUTH_REVOKED` ERROR row (one per incident, not per run).
+2. Reconcile and renew-watches skip the mailbox from then on; API routes that
+   need it (resync, approve/send draft) return **409 "needs to be
+   reconnected"**.
+3. The watchdog posts a critical Slack alert within 15 min; the dashboard pill
+   turns rose ("reconnect required") and the account row shows **Reconnect**.
+
+What a human must do:
+
+1. The **mailbox owner** (signed in to Google as that address) clicks
+   **Reconnect** on the dashboard row, or Mailboxes → Connect Gmail. The
+   OAuth callback upserts by address, resets `authStatus` to `OK` (logs
+   `MAILBOX_AUTH_RESTORED`), re-creates the Gmail watch, and syncs the last
+   7 days.
+2. Click **Resync** on the mailbox (30-day backfill,
+   `POST /api/mailboxes/:id/resync`).
+3. **Gap check.** The hourly reconcile only looks back 24–48h and resync 30
+   days / 250 messages. If the mailbox was broken longer than that, the gap
+   needs a one-off wider backfill — do not assume it self-heals.
+4. The watchdog posts "Resolved" on its next run.
+
+Check state:
+
+```sql
+SELECT "emailAddress", "authStatus", "lastAuthError", "lastAuthErrorAt", "watchExpiry"
+FROM "Mailbox" WHERE "isActive" = true ORDER BY "authStatus" DESC, "emailAddress";
+
+SELECT "createdAt", details FROM "SystemLog"
+WHERE event IN ('MAILBOX_AUTH_REVOKED', 'MAILBOX_AUTH_RESTORED')
+ORDER BY "createdAt" DESC LIMIT 20;
+```
+
+Don't set `authStatus` back to `OK` by hand to "retry" — if the grant is still
+revoked, the next cron flips it straight back (and alerts again).
 
 ### Watch expired (`watchExpiresInHours` is negative)
 
 Symptom: no new inbound messages for a specific mailbox; `lastSyncedMessageAt`
 is stale but `reconcileMailbox` is still catching things up hourly.
 
-The 6-hourly renewal cron should prevent this, but if it failed (e.g. a deploy
-broke it), trigger it manually:
+First check `authStatus` — if it is `NEEDS_REAUTH`, follow the section above;
+renewing cannot work without a valid grant.
+
+The 6-hourly renewal cron should prevent this. Each failed renewal writes a
+`GMAIL_WATCH_RENEW_FAILED` ERROR row with the sanitized error; check those
+first. Then trigger renewal manually (crons are **GET**):
 
 ```bash
-curl -X POST \
-  -H "Authorization: Bearer ${CRON_SECRET}" \
+curl -H "Authorization: Bearer ${CRON_SECRET}" \
   https://recruiting-email-automation-api.vercel.app/api/internal/cron/renew-watches
 ```
 
@@ -61,16 +170,17 @@ Verify by re-fetching `/api/internal/sync-health` and confirming
 ### Drift detected (`lastReconciliationFoundMissing` > 0)
 
 By design — this is the reconciliation cron doing its job; the hourly run
-healed the gap automatically. Investigate only if `foundMissing` is **non-zero
-on multiple consecutive runs**, which means the primary push path is failing
-and the recon is masking it. Check Vercel logs for `/api/webhooks/gmail` 5xx or
+healed the gap automatically. As of the 2026-10 audit most mail arrives via
+reconcile rather than the webhook (see audit H4), so small non-zero drift on
+every run is currently **normal**. Investigate when drift is large (≥10 per
+run, amber on the dashboard) or the watchdog fires `reconcile_stale` /
+`reconcile_deadline`. Check Vercel logs for `/api/webhooks/gmail` 5xx or
 timeouts.
 
-To force an immediate reconciliation:
+To force an immediate reconciliation (crons are **GET**):
 
 ```bash
-curl -X POST \
-  -H "Authorization: Bearer ${CRON_SECRET}" \
+curl -H "Authorization: Bearer ${CRON_SECRET}" \
   https://recruiting-email-automation-api.vercel.app/api/internal/cron/reconcile
 ```
 
@@ -104,16 +214,11 @@ Options:
 
 ### Mailbox disconnected
 
-`Mailbox.isActive = false` and `/api/internal/sync-health` shows the entry as
-inactive. Almost always means the refresh token was revoked from Google's side
-(user removed the consent, password change, etc.). There is no server-side
-recovery — the recruiter must:
-
-1. Open the dashboard.
-2. Go to **Mailboxes**.
-3. Click **Reconnect** on the affected row (kicks off the OAuth flow again,
-   re-issues a refresh token, re-encrypts to `Mailbox.credentials`, re-runs
-   `watchMailbox`).
+`Mailbox.isActive = false` means someone **manually disconnected** it
+(`DELETE /api/mailboxes/:id`); it disappears from sync-health and the crons.
+It is *not* set by token revocation — that is `authStatus = NEEDS_REAUTH`
+(see [Mailbox needs reconnect](#mailbox-needs-reconnect-needs_reauth--invalid_grant)).
+To bring it back, the owner connects it again via Mailboxes → Connect Gmail.
 
 ## Deploys
 
@@ -166,7 +271,7 @@ generally safe.
 | `outputDirectory: "frontend/dist"` | What Vercel serves as static. |
 | `functions["api/index.ts"].includeFiles` | Bundles `backend/**` into the serverless function so the Express app can import its own modules at runtime. |
 | `rewrites` | `/api/:path*` → `/api/index` (the Express app); everything else → `/index.html` (SPA fallback), except the literal `/assets/` prefix used by Vite-built bundles. |
-| `crons` | `0 */6 * * *` → `/api/internal/cron/renew-watches`; `0 * * * *` → `/api/internal/cron/reconcile`. Vercel signs each call with `x-vercel-cron-signature`; our handler accepts that or a `Bearer <CRON_SECRET>` header. |
+| `crons` | `0 */6 * * *` → `/api/internal/cron/renew-watches`; `0 * * * *` → `/api/internal/cron/reconcile`; `*/15 * * * *` → `/api/internal/cron/watchdog`. All are **GET**. Vercel sends `Authorization: Bearer <CRON_SECRET>`; our handler also accepts `x-vercel-cron-signature` equal to the secret. |
 
 ## Required Vercel env vars
 
@@ -184,6 +289,7 @@ Set under **Project Settings → Environment Variables** (Production scope).
 | `JWT_SECRET` | 32+ random bytes for JWT signing. |
 | `ENCRYPTION_KEY` | 32 random bytes, base64. Used by `lib/crypto`. Rotating this **invalidates every stored mailbox credential** — don't rotate without a re-OAuth plan. |
 | `CRON_SECRET` | Bearer secret for `/api/internal/cron/*`. |
+| `SLACK_ALERT_WEBHOOK_URL` | Slack incoming-webhook URL for watchdog alerts. Optional — unset = alerting disabled (no-op, warned once). See [Alerting](#alerting). |
 | `DRAFT_CC_EMAIL` | Optional — defaults to `sofia@archive.com`. |
 | `FRONTEND_URL` | Not used in production (same-origin) but Express CORS config reads it — set to the prod domain to be safe. |
 

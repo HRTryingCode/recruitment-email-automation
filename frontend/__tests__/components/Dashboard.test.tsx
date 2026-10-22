@@ -19,6 +19,7 @@ vi.mock('../../src/lib/api', () => ({
   fetchMailboxes: vi.fn(),
   fetchSyncHealth: vi.fn(),
   approveDraft: vi.fn(),
+  addGmailMailbox: vi.fn(),
 }));
 
 const fetchCandidatesMock = vi.mocked(api.fetchCandidates);
@@ -147,15 +148,25 @@ const SYNC_HEALTH: MailboxSyncHealth[] = [
     emailAddress: MAILBOX.emailAddress,
     displayName: null,
     isActive: true,
+    authStatus: 'OK',
+    lastAuthError: null,
+    lastAuthErrorAt: null,
     watchExpiry: '2026-06-01T00:00:00.000Z',
     watchExpiresInHours: 240,
     lastSyncedMessageAt: '2026-05-20T11:00:00.000Z',
-    lastReconciliationAt: '2026-05-20T10:00:00.000Z',
+    // Relative to now: a reconcile older than 3h marks the mailbox as not syncing.
+    lastReconciliationAt: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
     lastReconciliationFoundMissing: 0,
+    lastReconcileError: null,
+    consecutiveReconcileFailures: 0,
     messagesLast24h: 12,
+    totalMessages: 100,
+    totalCandidates: 3,
     pendingDrafts: 2,
     candidatesNeedsReview: 1,
     webhookErrorsLast24h: 0,
+    lastWebhookError: null,
+    error: false,
   },
 ];
 
@@ -365,5 +376,39 @@ describe('<Dashboard />', () => {
     expect(
       await screen.findByText(/watch expires/i)
     ).toBeInTheDocument();
+  });
+
+  it('surfaces a revoked mailbox: rose pill, auto-expanded accordion, reconnect on the account row', async () => {
+    fetchSyncHealthMock.mockResolvedValue({
+      success: true,
+      data: [
+        {
+          ...SYNC_HEALTH[0],
+          authStatus: 'NEEDS_REAUTH',
+          lastAuthError: 'invalid_grant',
+          lastAuthErrorAt: '2026-05-25T17:51:00.000Z',
+          watchExpiresInHours: -3500,
+        },
+      ],
+    });
+    renderDashboard();
+
+    expect(await screen.findByText('1 mailbox: reconnect required')).toBeInTheDocument();
+    // Accordion opens itself when something is unhealthy.
+    const toggle = screen.getByRole('button', { name: /mailbox health/i });
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-expanded', 'true'));
+    const detail = document.getElementById('mailbox-health-detail')!;
+    expect(within(detail).getByText(/reconnect required/i)).toBeInTheDocument();
+    expect(within(detail).getByText(/invalid_grant/)).toBeInTheDocument();
+    // Account row offers a reconnect action.
+    expect(screen.getAllByRole('button', { name: /reconnect sofia@archive\.com/i }).length).toBeGreaterThan(0);
+  });
+
+  it('keeps the accordion collapsed and shows no reconnect action when healthy', async () => {
+    renderDashboard();
+    await screen.findAllByText('sofia@archive.com');
+    const toggle = screen.getByRole('button', { name: /mailbox health/i });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('button', { name: /reconnect sofia/i })).not.toBeInTheDocument();
   });
 });

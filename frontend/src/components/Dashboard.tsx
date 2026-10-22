@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   fetchCandidates,
@@ -10,6 +10,7 @@ import {
   resyncMailbox,
   reclassifyMailbox,
   debugCandidate,
+  addGmailMailbox,
   type Candidate,
   type Mailbox,
   type EmailDraft,
@@ -17,6 +18,7 @@ import {
   type ResyncResult,
 } from '../lib/api';
 import { cn } from '../lib/utils';
+import { summarizeHealth, mailboxHealthState, type HealthSummary } from '../lib/mailboxHealth';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './ui/empty';
 import { Skeleton } from './ui/skeleton';
 import {
@@ -211,15 +213,46 @@ function QuickTriageRow({
 
 // ---------- Account Pipelines (condensed row) ----------
 
+/**
+ * Start the Gmail OAuth flow. Reconnecting must be done while signed in to
+ * Google as the mailbox owner; handleCallback upserts by address and resets
+ * Mailbox.authStatus to OK.
+ */
+async function startGmailReconnect(): Promise<void> {
+  try {
+    const res = await addGmailMailbox();
+    window.location.href = res.data.authUrl;
+  } catch (err) {
+    toastError('Could not start reconnect', extractApiErrorMessage(err, 'Please try again from the Mailboxes page.'));
+  }
+}
+
+function ReconnectButton({ emailAddress }: { emailAddress: string }) {
+  return (
+    <button
+      onClick={() => void startGmailReconnect()}
+      aria-label={`Reconnect ${emailAddress}`}
+      title={`Sign in to Google as ${emailAddress} to restore syncing`}
+      className="flex flex-shrink-0 items-center gap-1.5 rounded-md bg-rose-500/10 px-2 py-1 text-[11px] font-medium text-rose-700 ring-1 ring-inset ring-rose-500/20 transition-colors hover:bg-rose-500/15 dark:text-rose-300"
+    >
+      <RefreshCw className="h-3 w-3" />
+      Reconnect
+    </button>
+  );
+}
+
 function AccountRow({
   mailbox,
   candidateCount,
   pendingDraftCount,
+  needsReconnect = false,
   onSwitchToDrafts,
 }: {
   mailbox: Mailbox;
   candidateCount: number;
   pendingDraftCount: number;
+  /** From sync-health: OAuth grant revoked or Gmail watch expired. */
+  needsReconnect?: boolean;
   onSwitchToDrafts?: () => void;
 }) {
   return (
@@ -238,8 +271,15 @@ function AccountRow({
           candidate{candidateCount !== 1 ? 's' : ''}
           <span className="mx-1.5 text-fg-subtle/40">·</span>
           <span className="tabular-nums">{pendingDraftCount}</span> pending draft{pendingDraftCount !== 1 ? 's' : ''}
+          {needsReconnect && (
+            <>
+              <span className="mx-1.5 text-fg-subtle/40">·</span>
+              <span className="font-medium text-rose-700 dark:text-rose-300">Not syncing — reconnect required</span>
+            </>
+          )}
         </p>
       </div>
+      {needsReconnect && <ReconnectButton emailAddress={mailbox.emailAddress} />}
       {pendingDraftCount > 0 && (
         <button
           onClick={onSwitchToDrafts}
@@ -270,31 +310,10 @@ function formatWatchExpiry(h: number | null): string {
   return `${Math.round(h / 24)}d`;
 }
 
-function summarizeHealth(data: MailboxSyncHealth[]): {
-  tone: 'emerald' | 'amber' | 'rose' | 'neutral';
-  label: string;
-} {
-  if (data.length === 0) return { tone: 'neutral', label: 'No mailbox health data' };
-  const expiringSoon = data.filter(
-    (d) => d.watchExpiresInHours !== null && d.watchExpiresInHours < 24
-  ).length;
-  const drift = data.some((d) => d.lastReconciliationFoundMissing > 0);
-  const webhookErrors = data.some((d) => d.webhookErrorsLast24h > 0);
-
-  if (webhookErrors) return { tone: 'rose', label: 'Webhook errors today' };
-  if (drift) return { tone: 'amber', label: 'Drift detected' };
-  if (expiringSoon > 0)
-    return {
-      tone: 'amber',
-      label: `${expiringSoon} watch${expiringSoon === 1 ? '' : 'es'} expiring soon`,
-    };
-  return { tone: 'emerald', label: 'All mailboxes healthy' };
-}
-
 function HealthPill({
   summary,
 }: {
-  summary: ReturnType<typeof summarizeHealth>;
+  summary: HealthSummary;
 }) {
   const toneClass = {
     emerald: 'bg-emerald-500/10 text-emerald-700 ring-emerald-500/20 dark:text-emerald-300',
@@ -327,14 +346,20 @@ function MailboxHealthAccordion({
   data,
   loading,
   error,
+  autoExpand = false,
   onResync,
 }: {
   data: MailboxSyncHealth[];
   loading: boolean;
   error?: boolean;
+  /** Open automatically when something is unhealthy (summary is rose). */
+  autoExpand?: boolean;
   onResync: (mailboxId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (autoExpand) setOpen(true);
+  }, [autoExpand]);
   const [resyncing, setResyncing] = useState<string | null>(null);
   const [reclassifying, setReclassifying] = useState<string | null>(null);
   const [reclassifyResult, setReclassifyResult] = useState<{ mailboxId: string; threadsFound: number; threadsClassified: number } | null>(null);
@@ -424,13 +449,14 @@ function MailboxHealthAccordion({
                 <tbody className="divide-y divide-line-soft">
                   {data.map((row) => {
                     const driftTone =
-                      row.lastReconciliationFoundMissing > 0
+                      row.lastReconciliationFoundMissing >= 10
                         ? 'text-amber-700 dark:text-amber-300'
                         : 'text-fg-subtle';
                     const webhookErrTone =
-                      row.webhookErrorsLast24h > 0
+                      row.webhookErrorsLast24h >= 10
                         ? 'text-rose-700 dark:text-rose-300'
                         : 'text-fg-subtle';
+                    const rowState = mailboxHealthState(row);
                     const recon = row.lastReconciliationAt
                       ? new Date(row.lastReconciliationAt).toLocaleString(undefined, {
                           month: 'short',
@@ -455,6 +481,29 @@ function MailboxHealthAccordion({
                             <span className="text-[10px] text-rose-700 dark:text-rose-300">
                               inactive
                             </span>
+                          )}
+                          {rowState === 'reconnect' && (
+                            <div className="mt-1 max-w-[260px] rounded-md bg-rose-500/10 px-2 py-1 text-[10.5px] text-rose-700 ring-1 ring-inset ring-rose-500/20 dark:text-rose-300">
+                              <p className="font-semibold">Reconnect required — not syncing</p>
+                              <p className="opacity-80">
+                                {row.authStatus === 'NEEDS_REAUTH'
+                                  ? `Google rejected the login (${row.lastAuthError ?? 'unknown error'})${row.lastAuthErrorAt ? ` since ${new Date(row.lastAuthErrorAt).toLocaleDateString()}` : ''}.`
+                                  : 'Gmail push watch expired.'}{' '}
+                                Sign in as this mailbox to reconnect, then Resync.
+                              </p>
+                              <div className="mt-1">
+                                <ReconnectButton emailAddress={row.emailAddress} />
+                              </div>
+                            </div>
+                          )}
+                          {rowState === 'failing' && (
+                            <p className="mt-1 max-w-[260px] text-[10.5px] text-rose-700 dark:text-rose-300">
+                              Not syncing: {row.consecutiveReconcileFailures} reconcile failure{row.consecutiveReconcileFailures === 1 ? '' : 's'} in a row
+                              {row.lastReconcileError ? ` — ${row.lastReconcileError.slice(0, 80)}` : ''}
+                            </p>
+                          )}
+                          {row.error && (
+                            <p className="mt-1 text-[10px] text-amber-700 dark:text-amber-300">Some counts unavailable</p>
                           )}
                           <button
                             onClick={() => {
@@ -538,10 +587,10 @@ function MailboxHealthAccordion({
                           {formatWatchExpiry(row.watchExpiresInHours)}
                         </td>
                         <td className={cn('hidden px-4 py-2.5 font-mono tabular-nums sm:table-cell', row.totalMessages === 0 ? 'text-rose-600' : 'text-fg-default')}>
-                          {row.totalMessages}
+                          {row.totalMessages ?? '—'}
                         </td>
                         <td className="hidden px-4 py-2.5 font-mono tabular-nums text-fg-default sm:table-cell">
-                          {row.totalCandidates}
+                          {row.totalCandidates ?? '—'}
                         </td>
                         <td className="hidden px-4 py-2.5 text-fg-muted md:table-cell">
                           {recon}
@@ -881,6 +930,9 @@ export default function Dashboard({
   }
 
   const healthSummary = summarizeHealth(syncHealth);
+  const reconnectMailboxIds = new Set(
+    syncHealth.filter((h) => mailboxHealthState(h) === 'reconnect').map((h) => h.mailboxId)
+  );
 
   const approveMutation = useMutation({
     mutationFn: approveDraft,
@@ -935,7 +987,7 @@ export default function Dashboard({
         </div>
         {!loadingSyncHealth && (
           syncHealthError
-            ? <HealthPill summary={{ tone: 'neutral', label: 'Health data unavailable' }} />
+            ? <HealthPill summary={{ tone: 'neutral', label: 'Health data unavailable', unhealthy: false }} />
             : <HealthPill summary={healthSummary} />
         )}
         {mailboxes.length > 0 && (
@@ -1053,6 +1105,7 @@ export default function Dashboard({
                 mailbox={mailbox}
                 candidateCount={(mailboxCandidateMap[mailbox.id] ?? []).length}
                 pendingDraftCount={pendingDraftCountByMailbox[mailbox.id] ?? 0}
+                needsReconnect={reconnectMailboxIds.has(mailbox.id)}
                 onSwitchToDrafts={onSwitchToDrafts}
               />
             ))}
@@ -1065,6 +1118,7 @@ export default function Dashboard({
         data={syncHealth}
         loading={loadingSyncHealth}
         error={syncHealthError}
+        autoExpand={healthSummary.unhealthy}
         onResync={async (mailboxId) => {
           try {
             await resyncMailbox(mailboxId);

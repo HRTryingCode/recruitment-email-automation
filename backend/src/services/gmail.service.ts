@@ -5,6 +5,8 @@ import { prisma } from '../db/client';
 import { classifyReply, generateDraftReply, generateHandoffDraftReply, getHandoffType, type ExampleReply } from './claude.service';
 import { logEvent } from './monitoring.service';
 import { decrypt, encrypt } from '../lib/crypto';
+import { safeError, isAuthRevokedError, MailboxNeedsReauthError } from '../lib/safeError';
+import { markMailboxNeedsReauth, AUTH_STATUS_NEEDS_REAUTH, AUTH_STATUS_OK } from './mailboxAuth.service';
 import type { Mailbox, EmailThread } from '@prisma/client';
 
 /**
@@ -64,13 +66,32 @@ function getAuthenticatedClient(credentials: Record<string, unknown>): OAuth2Cli
 /**
  * Return an authenticated Gmail client for any mailbox, handling both
  * OAuth mailboxes (personal) and service-account DWD mailboxes (workspace).
+ *
+ * OAuth mailboxes get their access token resolved up front (a no-op when the
+ * stored one is still valid) so a revoked refresh token surfaces here as
+ * invalid_grant: the mailbox is flipped to NEEDS_REAUTH and every caller gets
+ * a MailboxNeedsReauthError. Mailboxes already in NEEDS_REAUTH fail fast
+ * without calling Google until a human reconnects them.
  */
 async function getGmailClient(mailbox: Mailbox): Promise<ReturnType<typeof google.gmail>> {
+  if (mailbox.authStatus === AUTH_STATUS_NEEDS_REAUTH) {
+    throw new MailboxNeedsReauthError(mailbox.emailAddress);
+  }
   const credentials = parseCredentials(mailbox);
   if (credentials.type === 'service_account') {
     return createServiceAccountClient(mailbox.emailAddress);
   }
-  return google.gmail({ version: 'v1', auth: getAuthenticatedClient(credentials) });
+  const auth = getAuthenticatedClient(credentials);
+  try {
+    await auth.getAccessToken();
+  } catch (err) {
+    if (isAuthRevokedError(err)) {
+      await markMailboxNeedsReauth(mailbox, err, 'getGmailClient');
+      throw new MailboxNeedsReauthError(mailbox.emailAddress);
+    }
+    throw err;
+  }
+  return google.gmail({ version: 'v1', auth });
 }
 
 export function getAuthUrl(state: string): string {
@@ -144,6 +165,7 @@ export async function handleCallback(code: string, mailboxId?: string): Promise<
   // in flight, so overwriting lastHistoryId would lose messages between the
   // old baseline and now. Only reset baseline on a genuinely-new connect.
   const existing = await prisma.mailbox.findUnique({ where: { emailAddress } });
+  const wasNeedsReauth = existing?.authStatus === AUTH_STATUS_NEEDS_REAUTH;
   const isRefresh =
     !!existing &&
     existing.isActive &&
@@ -156,6 +178,10 @@ export async function handleCallback(code: string, mailboxId?: string): Promise<
       credentials: encryptedCreds,
       displayName: resolvedDisplayName,
       isActive: true,
+      // Fresh OAuth tokens: the grant is healthy again.
+      authStatus: AUTH_STATUS_OK,
+      lastAuthError: null,
+      lastAuthErrorAt: null,
       // Preserve baseline on refresh; reset only on a fresh (re)connect.
       ...(isRefresh ? {} : { lastHistoryId: baselineHistoryId }),
       updatedAt: new Date(),
@@ -180,6 +206,13 @@ export async function handleCallback(code: string, mailboxId?: string): Promise<
     },
     'INFO'
   );
+  if (wasNeedsReauth) {
+    await logEvent(
+      'MAILBOX_AUTH_RESTORED',
+      { mailboxId: mailbox.id, emailAddress, previousError: existing?.lastAuthError ?? null },
+      'INFO'
+    );
+  }
   return mailbox;
 }
 
@@ -932,7 +965,7 @@ async function fetchAndStoreMessage(
     }
     return true;
   } catch (err) {
-    console.error(`[Gmail] Failed to process message ${externalMessageId}:`, err);
+    console.error(`[Gmail] Failed to process message ${externalMessageId}:`, safeError(err));
     await logEvent(
       'MESSAGE_PROCESSING_FAILED',
       {
@@ -1047,7 +1080,7 @@ export async function syncMessages(
       });
     }
   } catch (err) {
-    console.warn(`[Gmail] Failed to capture historyId after full sync:`, err);
+    console.warn(`[Gmail] Failed to capture historyId after full sync:`, safeError(err));
   }
 
   await logEvent(
@@ -1229,14 +1262,23 @@ export async function watchMailbox(mailboxId: string): Promise<void> {
 
   const gmail = await getGmailClient(mailbox);
 
-  const res = await gmail.users.watch({
-    userId: 'me',
-    requestBody: {
-      topicName: config.gmail.pubsubTopic,
-      // No labelIds filter — we want notifications for both inbound and
-      // outbound mail so we can track recruiter replies for repliedAt.
-    },
-  });
+  let res;
+  try {
+    res = await gmail.users.watch({
+      userId: 'me',
+      requestBody: {
+        topicName: config.gmail.pubsubTopic,
+        // No labelIds filter — we want notifications for both inbound and
+        // outbound mail so we can track recruiter replies for repliedAt.
+      },
+    });
+  } catch (err) {
+    if (isAuthRevokedError(err)) {
+      await markMailboxNeedsReauth(mailbox, err, 'watchMailbox');
+      throw new MailboxNeedsReauthError(mailbox.emailAddress);
+    }
+    throw err;
+  }
 
   const expiry = res.data.expiration
     ? new Date(parseInt(res.data.expiration))
@@ -1355,6 +1397,8 @@ export async function renewGmailWatches(): Promise<number> {
     where: {
       provider: 'GMAIL',
       isActive: true,
+      // Revoked grants can't be renewed; the watchdog alerts on them instead.
+      authStatus: { not: AUTH_STATUS_NEEDS_REAUTH },
     },
   });
 
@@ -1368,7 +1412,23 @@ export async function renewGmailWatches(): Promise<number> {
         renewed += 1;
         console.log(`[Gmail] Renewed watch for ${mailbox.emailAddress}`);
       } catch (err) {
-        console.error(`[Gmail] Failed to renew watch for ${mailbox.emailAddress}:`, err);
+        // Auth failures were already recorded (NEEDS_REAUTH + MAILBOX_AUTH_REVOKED)
+        // by getGmailClient/watchMailbox; still record the renew failure itself.
+        const safe = safeError(err);
+        console.error(`[Gmail] Failed to renew watch for ${mailbox.emailAddress}:`, safe);
+        await logEvent(
+          'GMAIL_WATCH_RENEW_FAILED',
+          {
+            mailboxId: mailbox.id,
+            emailAddress: mailbox.emailAddress,
+            watchExpiry: mailbox.watchExpiry,
+            authRevoked: isAuthRevokedError(err),
+            error: safe.message,
+            code: safe.code,
+            status: safe.status,
+          },
+          'ERROR'
+        );
       }
     }
   }
@@ -1916,6 +1976,13 @@ export async function processWebhook(data: { message: { data: string } }): Promi
 
     if (!mailbox) {
       console.warn(`[Gmail Webhook] No mailbox found for ${notification.emailAddress}`);
+      // M27: runtime logs are kept <24h; persist so pushes for unknown /
+      // deleted mailboxes are visible in SystemLog.
+      await logEvent(
+        'WEBHOOK_UNKNOWN_MAILBOX',
+        { emailAddress: notification.emailAddress, historyId: notification.historyId },
+        'WARN'
+      );
       return;
     }
 
@@ -1936,7 +2003,7 @@ export async function processWebhook(data: { message: { data: string } }): Promi
     // so the webhook handler is a thin wrapper around the sync call.
     await syncIncremental(mailbox.id, notification.historyId);
   } catch (err) {
-    console.error('[Gmail Webhook] Failed to process notification:', err);
+    console.error('[Gmail Webhook] Failed to process notification:', safeError(err));
     throw err;
   }
 }
@@ -2022,7 +2089,7 @@ export async function reclassifyOrphanedThreads(mailboxId: string): Promise<{ th
       await classifyAndDraft({ mailbox, thread, parsed });
       classified += 1;
     } catch (err) {
-      console.error(`[reclassifyOrphanedThreads] Failed for thread ${thread.id}:`, err);
+      console.error(`[reclassifyOrphanedThreads] Failed for thread ${thread.id}:`, safeError(err));
     }
   }
 

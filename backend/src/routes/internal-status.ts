@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../db/client';
 import { logEvent } from '../services/monitoring.service';
+import { safeError } from '../lib/safeError';
 
 const router = Router();
 
@@ -9,18 +10,40 @@ interface MailboxSyncHealth {
   emailAddress: string;
   displayName: string | null;
   isActive: boolean;
+  /** "OK" | "NEEDS_REAUTH" — see Mailbox.authStatus. */
+  authStatus: string;
+  lastAuthError: string | null;
+  lastAuthErrorAt: string | null;
   watchExpiry: string | null;
   watchExpiresInHours: number | null;
   lastSyncedMessageAt: string | null;
   lastReconciliationAt: string | null;
   lastReconciliationFoundMissing: number;
-  messagesLast24h: number;
-  totalMessages: number;
-  totalCandidates: number;
-  pendingDrafts: number;
-  candidatesNeedsReview: number;
+  /** Error of the latest RECONCILIATION_FAILED, if it is newer than the last success. */
+  lastReconcileError: string | null;
+  /** RECONCILIATION_FAILED rows since the last successful run (48h window). */
+  consecutiveReconcileFailures: number;
+  // Count fields are null when `error` is true (stats query failed) so the
+  // UI never mistakes "unknown" for "zero".
+  messagesLast24h: number | null;
+  totalMessages: number | null;
+  totalCandidates: number | null;
+  pendingDrafts: number | null;
+  candidatesNeedsReview: number | null;
   webhookErrorsLast24h: number;
   lastWebhookError: string | null;
+  /** True when part of this row could not be computed. */
+  error: boolean;
+}
+
+interface MailboxStatsRow {
+  mailboxId: string;
+  lastSyncedMessageAt: Date | null;
+  messagesLast24h: bigint | number;
+  totalMessages: bigint | number;
+  totalCandidates: bigint | number;
+  pendingDrafts: bigint | number;
+  candidatesNeedsReview: bigint | number;
 }
 
 /**
@@ -41,135 +64,126 @@ function parseDetails(raw: string): Record<string, unknown> {
 
 // GET /api/internal/sync-health
 // Auth-gated by the user JWT (mounted with requireAuth in app.ts). Returns
-// per-mailbox sync health for the dashboard / debug tooling: watch-expiry
-// countdown, last sync time, last reconciliation result, message + draft +
-// review + webhook-error counts. Read-only — does not trigger any sync work.
+// per-mailbox sync health for the dashboard / debug tooling: auth status,
+// watch-expiry countdown, last sync time, last reconciliation result and
+// failure streak, message + draft + review + webhook-error counts.
+// Read-only — does not trigger any sync work.
+//
+// Exactly 3 queries regardless of mailbox count (audit M2: the old per-mailbox
+// fan-out was 6×N queries on a 1-connection pool and timed out into zeroed,
+// healthy-looking rows). Partial failures set `error: true` on the row.
 router.get('/sync-health', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const now = Date.now();
     const dayAgo = new Date(now - 24 * 60 * 60 * 1000);
+    const twoDaysAgo = new Date(now - 48 * 60 * 60 * 1000);
 
-    // Fetch all shared data in one round-trip before the per-mailbox fan-out.
-    const [mailboxes, recentWebhookErrors, recentReconciliations] = await Promise.all([
-      prisma.mailbox.findMany({
-        where: { isActive: true },
-        orderBy: { createdAt: 'asc' },
-      }),
+    const mailboxes = await prisma.mailbox.findMany({
+      where: { isActive: true },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const [statsResult, logsResult] = await Promise.allSettled([
+      prisma.$queryRaw<MailboxStatsRow[]>`
+        SELECT m."id" AS "mailboxId",
+          (SELECT MAX(e."receivedAt") FROM "EmailMessage" e WHERE e."mailboxId" = m."id") AS "lastSyncedMessageAt",
+          (SELECT COUNT(*) FROM "EmailMessage" e WHERE e."mailboxId" = m."id" AND e."receivedAt" >= ${dayAgo}) AS "messagesLast24h",
+          (SELECT COUNT(*) FROM "EmailMessage" e WHERE e."mailboxId" = m."id") AS "totalMessages",
+          (SELECT COUNT(*) FROM "Candidate" c WHERE c."mailboxId" = m."id") AS "totalCandidates",
+          (SELECT COUNT(*) FROM "EmailDraft" d JOIN "EmailThread" t ON t."id" = d."threadId"
+             WHERE t."mailboxId" = m."id" AND d."status" = 'PENDING') AS "pendingDrafts",
+          (SELECT COUNT(*) FROM "Candidate" c WHERE c."mailboxId" = m."id" AND c."status" = 'NEEDS_REVIEW') AS "candidatesNeedsReview"
+        FROM "Mailbox" m
+        WHERE m."isActive" = true`,
       prisma.systemLog.findMany({
-        where: { event: 'WEBHOOK_HANDLER_ERROR', createdAt: { gte: dayAgo } },
-        select: { details: true },
+        where: {
+          event: { in: ['RECONCILIATION_RUN', 'RECONCILIATION_FAILED', 'WEBHOOK_HANDLER_ERROR'] },
+          createdAt: { gte: twoDaysAgo },
+        },
+        select: { event: true, details: true, createdAt: true },
         orderBy: { createdAt: 'desc' },
-        take: 500,
-      }),
-      // Fetched once here and shared across all mailboxes below — no need to
-      // re-query inside each mailbox's Promise.all.
-      prisma.systemLog.findMany({
-        where: { event: 'RECONCILIATION_RUN' },
-        orderBy: { createdAt: 'desc' },
-        select: { details: true, createdAt: true },
-        take: 200,
+        take: 5000,
       }),
     ]);
 
+    if (statsResult.status === 'rejected') {
+      console.error('[sync-health] stats query failed:', safeError(statsResult.reason));
+    }
+    if (logsResult.status === 'rejected') {
+      console.error('[sync-health] SystemLog query failed:', safeError(logsResult.reason));
+    }
+    const statsById = new Map<string, MailboxStatsRow>(
+      statsResult.status === 'fulfilled' ? statsResult.value.map((r) => [r.mailboxId, r]) : []
+    );
+    const logs = logsResult.status === 'fulfilled' ? logsResult.value : [];
+
+    // Single pass over logs (newest first).
     const errorsByEmail = new Map<string, number>();
     const lastErrorByEmail = new Map<string, string>();
-    for (const log of recentWebhookErrors) {
+    const lastRunByMailbox = new Map<string, { at: Date; details: Record<string, unknown> }>();
+    const failuresByMailbox = new Map<string, { count: number; lastError: string | null }>();
+    for (const log of logs) {
       const details = parseDetails(log.details);
-      const email = typeof details.emailAddress === 'string' ? details.emailAddress : null;
-      if (!email) continue;
-      errorsByEmail.set(email, (errorsByEmail.get(email) ?? 0) + 1);
-      // recentWebhookErrors is ordered desc, so first occurrence = most recent
-      if (!lastErrorByEmail.has(email) && typeof details.error === 'string') {
-        lastErrorByEmail.set(email, details.error);
+      if (log.event === 'WEBHOOK_HANDLER_ERROR') {
+        if (log.createdAt < dayAgo) continue;
+        const email = typeof details.emailAddress === 'string' ? details.emailAddress : null;
+        if (!email) continue;
+        errorsByEmail.set(email, (errorsByEmail.get(email) ?? 0) + 1);
+        if (!lastErrorByEmail.has(email) && typeof details.error === 'string') {
+          lastErrorByEmail.set(email, details.error);
+        }
+        continue;
+      }
+      const mailboxId = typeof details.mailboxId === 'string' ? details.mailboxId : null;
+      if (!mailboxId) continue; // summary rows
+      if (log.event === 'RECONCILIATION_RUN') {
+        if (!lastRunByMailbox.has(mailboxId)) lastRunByMailbox.set(mailboxId, { at: log.createdAt, details });
+      } else if (!lastRunByMailbox.has(mailboxId)) {
+        // RECONCILIATION_FAILED newer than any success seen so far.
+        const f = failuresByMailbox.get(mailboxId) ?? { count: 0, lastError: null };
+        f.count += 1;
+        if (f.lastError === null && typeof details.error === 'string') f.lastError = details.error;
+        failuresByMailbox.set(mailboxId, f);
       }
     }
 
-    const health: MailboxSyncHealth[] = await Promise.all(
-      mailboxes.map(async (mb) => {
-        try {
-          const [lastMessage, messagesLast24h, totalMessages, totalCandidates, pendingDrafts, candidatesNeedsReview] =
-            await Promise.all([
-              prisma.emailMessage.findFirst({
-                where: { mailboxId: mb.id },
-                orderBy: { receivedAt: 'desc' },
-                select: { receivedAt: true },
-              }),
-              prisma.emailMessage.count({
-                where: { mailboxId: mb.id, receivedAt: { gte: dayAgo } },
-              }),
-              prisma.emailMessage.count({ where: { mailboxId: mb.id } }),
-              prisma.candidate.count({ where: { mailboxId: mb.id } }),
-              prisma.emailDraft.count({
-                where: {
-                  status: 'PENDING',
-                  thread: { mailboxId: mb.id },
-                },
-              }),
-              prisma.candidate.count({
-                where: { mailboxId: mb.id, status: 'NEEDS_REVIEW' },
-              }),
-            ]);
+    const toNum = (v: bigint | number | undefined): number | null =>
+      v === undefined ? null : Number(v);
 
-          const lastReconForMailbox = recentReconciliations.find((log) => {
-            const d = parseDetails(log.details);
-            return d.mailboxId === mb.id;
-          });
-          const lastReconDetails = lastReconForMailbox
-            ? parseDetails(lastReconForMailbox.details)
-            : {};
-          const missingFromLast =
-            typeof lastReconDetails.missingBefore === 'number'
-              ? lastReconDetails.missingBefore
-              : 0;
-
-          const watchExpiresInHours = mb.watchExpiry
-            ? Math.round(((mb.watchExpiry.getTime() - now) / (60 * 60 * 1000)) * 10) / 10
-            : null;
-
-          return {
-            mailboxId: mb.id,
-            emailAddress: mb.emailAddress,
-            displayName: mb.displayName,
-            isActive: mb.isActive,
-            watchExpiry: mb.watchExpiry ? mb.watchExpiry.toISOString() : null,
-            watchExpiresInHours,
-            lastSyncedMessageAt: lastMessage ? lastMessage.receivedAt.toISOString() : null,
-            lastReconciliationAt: lastReconForMailbox
-              ? lastReconForMailbox.createdAt.toISOString()
-              : null,
-            lastReconciliationFoundMissing: missingFromLast,
-            messagesLast24h,
-            totalMessages,
-            totalCandidates,
-            pendingDrafts,
-            candidatesNeedsReview,
-            webhookErrorsLast24h: errorsByEmail.get(mb.emailAddress) ?? 0,
-            lastWebhookError: lastErrorByEmail.get(mb.emailAddress) ?? null,
-          };
-        } catch (mbErr) {
-          // Return a degraded row rather than failing the whole response.
-          console.error(`[sync-health] Failed to compute health for mailbox ${mb.emailAddress}:`, mbErr);
-          return {
-            mailboxId: mb.id,
-            emailAddress: mb.emailAddress,
-            displayName: mb.displayName,
-            isActive: mb.isActive,
-            watchExpiry: mb.watchExpiry ? mb.watchExpiry.toISOString() : null,
-            watchExpiresInHours: null,
-            lastSyncedMessageAt: null,
-            lastReconciliationAt: null,
-            lastReconciliationFoundMissing: 0,
-            messagesLast24h: 0,
-            totalMessages: 0,
-            totalCandidates: 0,
-            pendingDrafts: 0,
-            candidatesNeedsReview: 0,
-            webhookErrorsLast24h: 0,
-            lastWebhookError: null,
-          };
-        }
-      })
-    );
+    const health: MailboxSyncHealth[] = mailboxes.map((mb) => {
+      const stats = statsById.get(mb.id);
+      const lastRun = lastRunByMailbox.get(mb.id);
+      const failures = failuresByMailbox.get(mb.id);
+      return {
+        mailboxId: mb.id,
+        emailAddress: mb.emailAddress,
+        displayName: mb.displayName,
+        isActive: mb.isActive,
+        authStatus: mb.authStatus,
+        lastAuthError: mb.lastAuthError,
+        lastAuthErrorAt: mb.lastAuthErrorAt ? mb.lastAuthErrorAt.toISOString() : null,
+        watchExpiry: mb.watchExpiry ? mb.watchExpiry.toISOString() : null,
+        watchExpiresInHours: mb.watchExpiry
+          ? Math.round(((mb.watchExpiry.getTime() - now) / (60 * 60 * 1000)) * 10) / 10
+          : null,
+        lastSyncedMessageAt: stats?.lastSyncedMessageAt
+          ? new Date(stats.lastSyncedMessageAt).toISOString()
+          : null,
+        lastReconciliationAt: lastRun ? lastRun.at.toISOString() : null,
+        lastReconciliationFoundMissing:
+          typeof lastRun?.details.missingBefore === 'number' ? lastRun.details.missingBefore : 0,
+        lastReconcileError: failures?.lastError ?? null,
+        consecutiveReconcileFailures: failures?.count ?? 0,
+        messagesLast24h: toNum(stats?.messagesLast24h),
+        totalMessages: toNum(stats?.totalMessages),
+        totalCandidates: toNum(stats?.totalCandidates),
+        pendingDrafts: toNum(stats?.pendingDrafts),
+        candidatesNeedsReview: toNum(stats?.candidatesNeedsReview),
+        webhookErrorsLast24h: errorsByEmail.get(mb.emailAddress) ?? 0,
+        lastWebhookError: lastErrorByEmail.get(mb.emailAddress) ?? null,
+        error: !stats || logsResult.status === 'rejected',
+      };
+    });
 
     res.status(200).json({ success: true, data: health });
   } catch (err) {

@@ -201,6 +201,300 @@ describe('/api/internal/cron', () => {
     });
   });
 
+  describe('GET /api/internal/cron/reconcile — auth revocation (H1)', () => {
+    const mb = {
+      id: 'mb-sofia',
+      provider: 'GMAIL',
+      emailAddress: 'sofia@archive.com',
+      displayName: 'Sofia',
+      isActive: true,
+      authStatus: 'OK',
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+    };
+
+    function invalidGrant(): Error {
+      const err = new Error('invalid_grant') as Error & Record<string, unknown>;
+      err.name = 'GaxiosError';
+      err.config = { data: 'refresh_token=1//0SECRET-REFRESH&client_secret=GOCSPX-shh' };
+      err.response = { status: 400, data: { error: 'invalid_grant' } };
+      return err;
+    }
+
+    it('skips NEEDS_REAUTH mailboxes', async () => {
+      mockPrisma.mailbox.findMany.mockResolvedValueOnce([]);
+      await request(app)
+        .get('/api/internal/cron/reconcile')
+        .set('Authorization', `Bearer ${CRON_SECRET}`);
+      expect(mockPrisma.mailbox.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ authStatus: { not: 'NEEDS_REAUTH' } }),
+        })
+      );
+    });
+
+    it('marks the mailbox NEEDS_REAUTH on invalid_grant and never logs the raw GaxiosError', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      mockPrisma.mailbox.findMany.mockResolvedValueOnce([mb]);
+      mockPrisma.mailbox.updateMany.mockResolvedValueOnce({ count: 1 });
+      reconcileMailbox.mockRejectedValueOnce(invalidGrant());
+
+      const res = await request(app)
+        .get('/api/internal/cron/reconcile')
+        .set('Authorization', `Bearer ${CRON_SECRET}`);
+
+      expect(res.status).toBe(200);
+      expect(mockPrisma.mailbox.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'mb-sofia', authStatus: { not: 'NEEDS_REAUTH' } },
+          data: expect.objectContaining({ authStatus: 'NEEDS_REAUTH' }),
+        })
+      );
+      const events = mockPrisma.systemLog.create.mock.calls.map((c) => c[0].data);
+      expect(events.filter((e) => e.event === 'MAILBOX_AUTH_REVOKED')).toHaveLength(1);
+      const failed = events.find((e) => e.event === 'RECONCILIATION_FAILED');
+      expect(failed.level).toBe('ERROR');
+      expect(JSON.parse(failed.details)).toMatchObject({ authRevoked: true, error: 'invalid_grant' });
+
+      const dumped = JSON.stringify(errorSpy.mock.calls);
+      expect(dumped).not.toContain('SECRET');
+      expect(dumped).not.toContain('GOCSPX');
+      errorSpy.mockRestore();
+    });
+
+    it('logs transient failures as WARN without touching authStatus', async () => {
+      mockPrisma.mailbox.findMany.mockResolvedValueOnce([mb]);
+      reconcileMailbox.mockRejectedValueOnce(new Error('Gmail 503'));
+
+      await request(app)
+        .get('/api/internal/cron/reconcile')
+        .set('Authorization', `Bearer ${CRON_SECRET}`);
+
+      expect(mockPrisma.mailbox.updateMany).not.toHaveBeenCalled();
+      const failed = mockPrisma.systemLog.create.mock.calls
+        .map((c) => c[0].data)
+        .find((e) => e.event === 'RECONCILIATION_FAILED');
+      expect(failed.level).toBe('WARN');
+    });
+  });
+
+  describe('GET /api/internal/cron/watchdog (H3)', () => {
+    const HOOK = 'https://hooks.slack.com/services/T/B/X';
+    const NOW = new Date('2026-10-22T12:00:00Z');
+    const originalHook = process.env.SLACK_ALERT_WEBHOOK_URL;
+    let fetchMock: ReturnType<typeof vi.fn>;
+
+    const healthy = {
+      id: 'mb-ok',
+      emailAddress: 'ok@archive.com',
+      authStatus: 'OK',
+      lastAuthError: null,
+      watchExpiry: new Date(NOW.getTime() + 5 * 24 * 3600_000),
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+    };
+    const revoked = {
+      id: 'mb-aaron',
+      emailAddress: 'aaronrampersad@archive.com',
+      authStatus: 'NEEDS_REAUTH',
+      lastAuthError: 'invalid_grant',
+      watchExpiry: new Date(NOW.getTime() + 2 * 24 * 3600_000),
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+    };
+
+    function reconRun(mailboxId: string, minutesAgo: number) {
+      return {
+        event: 'RECONCILIATION_RUN',
+        details: JSON.stringify({ mailboxId, ingested: 0 }),
+        createdAt: new Date(NOW.getTime() - minutesAgo * 60_000),
+      };
+    }
+    function summary(minutesAgo: number, deadlineReached = false) {
+      return {
+        event: 'RECONCILIATION_RUN',
+        details: JSON.stringify({ summary: true, deadlineReached }),
+        createdAt: new Date(NOW.getTime() - minutesAgo * 60_000),
+      };
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(NOW);
+      fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+      vi.stubGlobal('fetch', fetchMock);
+      process.env.SLACK_ALERT_WEBHOOK_URL = HOOK;
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+      if (originalHook === undefined) delete process.env.SLACK_ALERT_WEBHOOK_URL;
+      else process.env.SLACK_ALERT_WEBHOOK_URL = originalHook;
+    });
+
+    function slackTexts(): string[] {
+      return fetchMock.mock.calls.map((c) => JSON.parse(c[1].body).text as string);
+    }
+
+    function stateRowsWritten() {
+      return mockPrisma.systemLog.create.mock.calls
+        .map((c) => c[0].data)
+        .filter((d) => d.event === 'WATCHDOG_STATE');
+    }
+
+    it('returns 401 without the cron secret', async () => {
+      const res = await request(app).get('/api/internal/cron/watchdog');
+      expect(res.status).toBe(401);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('stays silent when everything is healthy', async () => {
+      mockPrisma.mailbox.findMany.mockResolvedValueOnce([healthy]);
+      mockPrisma.systemLog.findMany.mockResolvedValueOnce([summary(20), reconRun('mb-ok', 20)]);
+      mockPrisma.systemLog.findFirst.mockResolvedValueOnce(null);
+
+      const res = await request(app)
+        .get('/api/internal/cron/watchdog')
+        .set('Authorization', `Bearer ${CRON_SECRET}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.issues).toEqual([]);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(stateRowsWritten()).toHaveLength(0);
+    });
+
+    it('alerts once when a mailbox flips to NEEDS_REAUTH, then stays quiet while it persists', async () => {
+      // Run 1: new issue -> alert + state row.
+      mockPrisma.mailbox.findMany.mockResolvedValueOnce([healthy, revoked]);
+      mockPrisma.systemLog.findMany.mockResolvedValueOnce([summary(20), reconRun('mb-ok', 20)]);
+      mockPrisma.systemLog.findFirst.mockResolvedValueOnce(null);
+
+      const r1 = await request(app)
+        .get('/api/internal/cron/watchdog')
+        .set('Authorization', `Bearer ${CRON_SECRET}`);
+
+      expect(r1.status).toBe(200);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(slackTexts()[0]).toContain('aaronrampersad@archive.com');
+      expect(slackTexts()[0]).toMatch(/reconnect/i);
+      const state = stateRowsWritten();
+      expect(state).toHaveLength(1);
+      const stored = JSON.parse(state[0].details);
+      expect(stored.active.map((a: { key: string }) => a.key)).toEqual(['needs_reauth:mb-aaron']);
+
+      // Run 2: same state persisted -> no alert, no new state row.
+      mockPrisma.systemLog.create.mockClear();
+      mockPrisma.mailbox.findMany.mockResolvedValueOnce([healthy, revoked]);
+      mockPrisma.systemLog.findMany.mockResolvedValueOnce([summary(5), reconRun('mb-ok', 5)]);
+      mockPrisma.systemLog.findFirst.mockResolvedValueOnce({ details: state[0].details });
+
+      await request(app)
+        .get('/api/internal/cron/watchdog')
+        .set('Authorization', `Bearer ${CRON_SECRET}`);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(stateRowsWritten()).toHaveLength(0);
+    });
+
+    it('sends a resolved message when an issue clears', async () => {
+      mockPrisma.mailbox.findMany.mockResolvedValueOnce([healthy]);
+      mockPrisma.systemLog.findMany.mockResolvedValueOnce([summary(5), reconRun('mb-ok', 5)]);
+      mockPrisma.systemLog.findFirst.mockResolvedValueOnce({
+        details: JSON.stringify({
+          active: [{ key: 'needs_reauth:mb-aaron', title: 'aaronrampersad@archive.com needs reconnect' }],
+        }),
+      });
+
+      await request(app)
+        .get('/api/internal/cron/watchdog')
+        .set('Authorization', `Bearer ${CRON_SECRET}`);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(slackTexts()[0]).toMatch(/resolved/i);
+      expect(slackTexts()[0]).toContain('aaronrampersad@archive.com');
+      expect(JSON.parse(stateRowsWritten()[0].details).active).toEqual([]);
+    });
+
+    it("fires the dead-man's switch when no reconcile has run in 2h", async () => {
+      mockPrisma.mailbox.findMany.mockResolvedValueOnce([healthy]);
+      mockPrisma.systemLog.findMany.mockResolvedValueOnce([summary(150), reconRun('mb-ok', 150)]);
+      mockPrisma.systemLog.findFirst.mockResolvedValueOnce(null);
+
+      const res = await request(app)
+        .get('/api/internal/cron/watchdog')
+        .set('Authorization', `Bearer ${CRON_SECRET}`);
+
+      const keys = res.body.data.issues.map((i: { key: string }) => i.key);
+      expect(keys).toContain('reconcile_dead');
+      // Per-mailbox staleness is implied by the dead cron; don't spam it.
+      expect(keys).not.toContain('reconcile_stale:mb-ok');
+      expect(slackTexts()[0]).toMatch(/reconcile/i);
+    });
+
+    it('detects expired watches, stale per-mailbox reconcile, deadline streaks and webhook error bursts', async () => {
+      const expired = { ...healthy, id: 'mb-exp', emailAddress: 'exp@archive.com', watchExpiry: new Date(NOW.getTime() - 3600_000) };
+      const stale = { ...healthy, id: 'mb-stale', emailAddress: 'stale@archive.com' };
+      const webhookErrors = Array.from({ length: 25 }, (_, i) => ({
+        event: 'WEBHOOK_HANDLER_ERROR',
+        details: '{}',
+        createdAt: new Date(NOW.getTime() - i * 60_000),
+      }));
+      mockPrisma.mailbox.findMany.mockResolvedValueOnce([healthy, expired, stale]);
+      mockPrisma.systemLog.findMany.mockResolvedValueOnce([
+        summary(10, true),
+        summary(70, true),
+        summary(130, true),
+        reconRun('mb-ok', 10),
+        reconRun('mb-exp', 10),
+        reconRun('mb-stale', 200),
+        ...webhookErrors,
+      ]);
+      mockPrisma.systemLog.findFirst.mockResolvedValueOnce(null);
+
+      const res = await request(app)
+        .get('/api/internal/cron/watchdog')
+        .set('Authorization', `Bearer ${CRON_SECRET}`);
+
+      const keys = res.body.data.issues.map((i: { key: string }) => i.key).sort();
+      expect(keys).toEqual(
+        ['reconcile_deadline', 'reconcile_stale:mb-stale', 'watch_expired:mb-exp', 'webhook_errors'].sort()
+      );
+      // All new issues go out in one Slack message.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not record issues as notified when Slack is unconfigured (no-op), so they alert once configured', async () => {
+      delete process.env.SLACK_ALERT_WEBHOOK_URL;
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      mockPrisma.mailbox.findMany.mockResolvedValueOnce([revoked]);
+      mockPrisma.systemLog.findMany.mockResolvedValueOnce([summary(5)]);
+      mockPrisma.systemLog.findFirst.mockResolvedValueOnce(null);
+
+      const res = await request(app)
+        .get('/api/internal/cron/watchdog')
+        .set('Authorization', `Bearer ${CRON_SECRET}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.alerting).toBe('disabled');
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(stateRowsWritten()).toHaveLength(0);
+      warnSpy.mockRestore();
+    });
+
+    it('retries next run if the Slack post fails', async () => {
+      fetchMock.mockResolvedValueOnce({ ok: false, status: 500 });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      mockPrisma.mailbox.findMany.mockResolvedValueOnce([revoked]);
+      mockPrisma.systemLog.findMany.mockResolvedValueOnce([summary(5)]);
+      mockPrisma.systemLog.findFirst.mockResolvedValueOnce(null);
+
+      await request(app)
+        .get('/api/internal/cron/watchdog')
+        .set('Authorization', `Bearer ${CRON_SECRET}`);
+
+      expect(stateRowsWritten()).toHaveLength(0);
+      warnSpy.mockRestore();
+    });
+  });
+
   // Vercel Cron only issues GET. A POST must never trigger a job, even with
   // a valid CRON_SECRET — otherwise the "401" tests above could pass for the
   // wrong reason (falling through to the JWT-guarded internal-status router).

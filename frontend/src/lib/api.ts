@@ -330,18 +330,26 @@ export interface MailboxSyncHealth {
   emailAddress: string;
   displayName: string | null;
   isActive: boolean;
+  /** "OK" | "NEEDS_REAUTH" (OAuth grant revoked/expired — human must reconnect). */
+  authStatus: string;
+  lastAuthError: string | null;
+  lastAuthErrorAt: string | null;
   watchExpiry: string | null;
   watchExpiresInHours: number | null;
   lastSyncedMessageAt: string | null;
   lastReconciliationAt: string | null;
   lastReconciliationFoundMissing: number;
-  messagesLast24h: number;
-  totalMessages: number;
-  totalCandidates: number;
-  pendingDrafts: number;
-  candidatesNeedsReview: number;
+  lastReconcileError: string | null;
+  consecutiveReconcileFailures: number;
+  // Counts are null when `error` is true (backend could not compute them).
+  messagesLast24h: number | null;
+  totalMessages: number | null;
+  totalCandidates: number | null;
+  pendingDrafts: number | null;
+  candidatesNeedsReview: number | null;
   webhookErrorsLast24h: number;
   lastWebhookError: string | null;
+  error: boolean;
 }
 
 export async function fetchSyncHealth(): Promise<SingleResponse<MailboxSyncHealth[]>> {

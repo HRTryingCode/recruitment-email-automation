@@ -2,6 +2,7 @@ import { config } from './config';
 import app from './app';
 import { prisma } from './db/client';
 import { renewGmailWatches } from './services/gmail.service';
+import { safeError } from './lib/safeError';
 
 async function startServer() {
   try {
@@ -21,7 +22,7 @@ async function startServer() {
           try {
             await renewGmailWatches();
           } catch (err) {
-            console.error('[Cron] Gmail watch renewal failed:', err);
+            console.error('[Cron] Gmail watch renewal failed:', safeError(err));
           }
         },
         6 * 60 * 60 * 1000
@@ -29,7 +30,7 @@ async function startServer() {
 
       // Initial watch renewal on startup
       renewGmailWatches().catch((err) =>
-        console.warn('[Cron] Initial Gmail watch renewal failed:', err)
+        console.warn('[Cron] Initial Gmail watch renewal failed:', safeError(err))
       );
     }
 
@@ -39,7 +40,7 @@ async function startServer() {
       );
     });
   } catch (err) {
-    console.error('[Server] Failed to start:', err);
+    console.error('[Server] Failed to start:', safeError(err));
     process.exit(1);
   }
 }
