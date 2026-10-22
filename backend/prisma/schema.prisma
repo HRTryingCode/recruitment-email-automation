@@ -292,8 +292,8 @@ model GemConnection {
 
 /// One row per accepted Lever webhook delivery (H2), keyed by the delivery's
 /// dedupe key (Lever's `id` when sent, else `event:opportunityId:triggeredAt`)
-/// so a redelivery doesn't refresh twice. Pruned after 30 days by the
-/// systemlog-retention cron.
+/// so a redelivery doesn't refresh twice. A few hundred tiny rows a day at
+/// most; not pruned yet.
 model LeverWebhookEvent {
   id            String   @id
   event         String

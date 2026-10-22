@@ -102,7 +102,7 @@ Algorithm: insert `leverWebhookEvent` (P2002 → `{duplicate:true}`, other error
 **Files:**
 - Modify: `backend/src/services/monitoring.service.ts` (`HealthIssueType` += `'lever_webhook_silent'`; `WATCHDOG_THRESHOLDS.leverWebhookSilentMs = 24h`; in `collectHealthIssues`, when tokens set, `systemLog.findFirst({ event: 'LEVER_WEBHOOK_RECEIVED', createdAt >= now-24h })` null → warning)
 - Modify: `backend/src/routes/internal-status.ts` (sync-health response gains `meta: { leverWebhooksLast24h, lastLeverWebhookAt }`, via `systemLog.count` + `findFirst`, failures → nulls)
-- Modify: `backend/src/services/systemLogRetention.service.ts` or the retention cron: prune `LeverWebhookEvent` older than 30 days (only if trivially additive)
+- (Pruning `LeverWebhookEvent` deferred: retention deletes are human-gated and the table is tiny.)
 - Modify: `docs/OPERATIONS.md` ("Lever webhooks" section, env table row, sync-health meta, watchdog row)
 - Test: `monitoring.service` test, `internal-status.test.ts`
 
