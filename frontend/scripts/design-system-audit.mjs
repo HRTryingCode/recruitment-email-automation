@@ -16,13 +16,13 @@ const SRC = path.join(root, 'src');
 export const AREAS = {
   R1: 'Shell — App, main, pages (Login, Index, NotFound), nav, ThemeToggle, MailboxFilter, ProtectedRoute, lib',
   R2: 'Dashboard — Dashboard, UnmonitoredSenders',
-  R3: 'Candidates — CandidateTable, LookupBar, LookupIntegrations, LeverBadge',
+  R3: 'Candidates — CandidateTable, LookupBar, LookupIntegrations, LeverBadge, AddToLever*, GemConnect',
   R4: 'Drafts — EmailDrafts, DraftReviewPane, DraftCcSelect, useDraftKeyboardShortcuts',
 };
 
 const AREA_BY_FILE = [
   [/^components\/(Dashboard|UnmonitoredSenders)\.tsx$/, 'R2'],
-  [/^components\/(CandidateTable|LookupBar|LookupIntegrations|LeverBadge)\.tsx$/, 'R3'],
+  [/^components\/(CandidateTable|LookupBar|LookupIntegrations|LeverBadge|AddToLeverButton|AddToLeverDialog|GemConnect)\.tsx$/, 'R3'],
   [/^components\/(EmailDrafts|DraftReviewPane|DraftCcSelect)\.tsx$/, 'R4'],
   [/^hooks\/useDraftKeyboardShortcuts\.ts$/, 'R4'],
   // Everything else (pages, App, main, shell components, lib, other hooks,
