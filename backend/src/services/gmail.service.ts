@@ -17,7 +17,7 @@ import {
 import { COMPANY_DOMAIN, isCompanyEmail } from '../lib/accessPolicy';
 import { createError } from '../middleware/error';
 import { composeDraftHtml, encodeHeaderValue, escapeHtml, isRfcMessageId, sanitizeReferences, stripHeaderBreaks } from '../lib/draftBody';
-import { normalizeEmail, resolveCandidateStatus, shouldSkipNotRecruiting } from '../lib/candidateState';
+import { normalizeEmail, resolveCandidateStatus, shouldSkipNotRecruiting, LOW_CONFIDENCE_THRESHOLD } from '../lib/candidateState';
 import { loopInSentence } from '../lib/handoffLoopIn';
 import { ccFirstName, resolveDraftCc, NO_CC } from './draftCc.service';
 import type { Mailbox, EmailThread, Prisma } from '@prisma/client';
@@ -661,7 +661,7 @@ export async function classifyAndDraft(opts: {
     return;
   }
 
-  const lowConfidence = confidence < 0.7;
+  const lowConfidence = confidence < LOW_CONFIDENCE_THRESHOLD;
   // The candidate-level status we want to write. NEEDS_REVIEW for any low-trust
   // signal so a human looks before we auto-draft.
   const desiredStatus =

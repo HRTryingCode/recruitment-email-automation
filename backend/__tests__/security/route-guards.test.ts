@@ -79,6 +79,13 @@ const MANIFEST: Record<string, Guard> = {
   'POST /api/drafts/:id/approve': 'auth',
   'POST /api/drafts/:id/discard': 'auth',
   'POST /api/drafts/:id/send': 'auth',
+  // U0 inbox actions; the editing lock (423) is enforced in-handler.
+  'POST /api/drafts/:id/undo-send': 'auth',
+  'POST /api/drafts/:id/dismiss': 'auth',
+  'POST /api/drafts/:id/snooze': 'auth',
+  'POST /api/drafts/:id/unsnooze': 'auth',
+  'POST /api/drafts/:id/presence': 'auth',
+  'DELETE /api/drafts/:id/presence': 'auth',
 
   'GET /api/internal/sync-health': 'auth',
 
