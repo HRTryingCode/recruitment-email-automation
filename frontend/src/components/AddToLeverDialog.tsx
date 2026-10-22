@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, ExternalLink, FileText, Loader2 } from 'lucide-react';
+import { AlertTriangle, ExternalLink, FileText, Loader2, Sparkles } from 'lucide-react';
 import {
   createLeverOpportunity,
   fetchLeverPostings,
@@ -13,11 +13,16 @@ import {
   type LeverTarget,
 } from '@/lib/leverApi';
 import { extractApiErrorMessage, toastSuccess } from '@/lib/toast';
+import { useGemConnectPopup } from '@/lib/gemOAuth';
+import { normalizeLinkedinUrl } from '@/lib/linkedin';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
+import { Badge } from './ui/badge';
+import { Alert, AlertAction, AlertDescription } from './ui/alert';
+import JobCombobox from './JobCombobox';
 
 interface Props {
   open: boolean;
@@ -26,18 +31,20 @@ interface Props {
   onCreated?: (result: CreateLeverResult) => void;
 }
 
-const GEM_HINT: Record<string, string> = {
-  NOT_CONNECTED: 'Connect Gem (account menu) to prefill from Gem',
-  NEEDS_REAUTH: 'Gem needs reconnecting (account menu) — fill in manually for now',
-  NOT_FOUND: 'Not found in Gem — fill in manually',
+/** Muted one-liners; NOT_CONNECTED / NEEDS_REAUTH get the Connect callout instead. */
+const GEM_HINT: Partial<Record<LeverPrefill['gem']['status'], string>> = {
+  NOT_FOUND: 'Not found in Gem',
   UNAVAILABLE: 'Gem unavailable — paste LinkedIn manually',
 };
 
-function Chip({ children }: { children: React.ReactNode }) {
+type GemField = 'name' | 'headline' | 'location' | 'linkedinUrl';
+
+function FilledFromGem() {
   return (
-    <span className="inline-flex items-center gap-1 rounded-md bg-fg-strong/[0.05] px-2 py-0.5 text-[11.5px] text-fg-default ring-1 ring-inset ring-fg-strong/[0.08]">
-      {children}
-    </span>
+    <Badge variant="secondary" className="ml-1.5">
+      <Sparkles className="size-3" />
+      Filled from Gem
+    </Badge>
   );
 }
 
@@ -48,7 +55,11 @@ export default function AddToLeverDialog({ open, onOpenChange, target, onCreated
     queryKey: ['lever-prefill', key],
     queryFn: () => fetchLeverPrefill(target),
     enabled: open,
+    // Gem connection state may have changed since the last open (prod
+    // 2026-10-22: a pre-connect prefill was reused) — always fetch fresh.
     staleTime: 0,
+    gcTime: 0,
+    refetchOnMount: 'always',
     retry: false,
   });
   const postingsQ = useQuery({
@@ -71,13 +82,14 @@ export default function AddToLeverDialog({ open, onOpenChange, target, onCreated
           </DialogDescription>
         </DialogHeader>
         {loadError ? (
-          <p role="alert" className="text-[13px] text-red-600 dark:text-red-400">
+          <p role="alert" className="text-sm text-destructive">
             {extractApiErrorMessage(loadError, 'Could not load Lever data.')}
           </p>
         ) : prefillQ.data && postingsQ.data ? (
           <AddToLeverForm
             target={target}
             prefill={prefillQ.data}
+            refreshPrefill={() => void prefillQ.refetch()}
             postings={postingsQ.data.postings}
             stages={postingsQ.data.stages}
             defaultStageId={prefillQ.data.stageId ?? postingsQ.data.defaultStageId}
@@ -87,7 +99,7 @@ export default function AddToLeverDialog({ open, onOpenChange, target, onCreated
             }}
           />
         ) : (
-          <div className="flex items-center gap-2 py-6 text-[13px] text-fg-muted">
+          <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" /> Looking up Lever and Gem…
           </div>
         )}
@@ -99,6 +111,7 @@ export default function AddToLeverDialog({ open, onOpenChange, target, onCreated
 function AddToLeverForm({
   target,
   prefill,
+  refreshPrefill,
   postings,
   stages,
   defaultStageId,
@@ -106,6 +119,7 @@ function AddToLeverForm({
 }: {
   target: LeverTarget;
   prefill: LeverPrefill;
+  refreshPrefill: () => void;
   postings: LeverPosting[];
   stages: LeverStage[];
   defaultStageId: string | null;
@@ -123,18 +137,35 @@ function AddToLeverForm({
     postings.some((p) => p.id === prefill.suggestedPostingId) ? prefill.suggestedPostingId : null
   );
   const [stageId, setStageId] = useState<string | null>(defaultStageId);
-  const [search, setSearch] = useState('');
+  const [filledFromGem, setFilledFromGem] = useState<ReadonlySet<GemField>>(new Set());
 
-  // Suggested job first, then alphabetical; the search box narrows the list.
-  const ordered = useMemo(() => {
-    const sorted = [...postings].sort((a, b) => a.title.localeCompare(b.title));
-    const i = sorted.findIndex((p) => p.id === prefill.suggestedPostingId);
-    if (i > 0) sorted.unshift(...sorted.splice(i, 1));
-    const q = search.trim().toLowerCase();
-    return q
-      ? sorted.filter((p) => [p.title, p.team, p.location].some((f) => f?.toLowerCase().includes(q)))
-      : sorted;
-  }, [postings, prefill.suggestedPostingId, search]);
+  // A re-fetched prefill (after connecting Gem) fills only the fields the
+  // recruiter left empty — never overwrites what they typed.
+  const lastPrefill = useRef(prefill);
+  useEffect(() => {
+    if (lastPrefill.current === prefill) return;
+    lastPrefill.current = prefill;
+    const fields: Array<[GemField, string, (v: string) => void, string | null]> = [
+      ['name', name, setName, prefill.name],
+      ['headline', headline, setHeadline, prefill.headline],
+      ['location', location, setLocation, prefill.location],
+      ['linkedinUrl', linkedinUrl, setLinkedinUrl, prefill.linkedinUrl],
+    ];
+    const filled = fields.filter(([, current, , next]) => !current.trim() && !!next?.trim());
+    for (const [, , set, next] of filled) set(next!);
+    if (prefill.gem.status === 'FOUND' && filled.length > 0) {
+      setFilledFromGem((prev) => new Set([...prev, ...filled.map(([f]) => f)]));
+    }
+    // Only a new prefill triggers this; the field values are read, not watched.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill]);
+
+  const gemConnect = useGemConnectPopup({
+    onConnected: () => {
+      void queryClient.invalidateQueries({ queryKey: ['gem-status'] });
+      refreshPrefill();
+    },
+  });
 
   const posting = postings.find((p) => p.id === postingId) ?? null;
   const stage = stages.find((s) => s.id === stageId) ?? null;
@@ -147,7 +178,7 @@ function AddToLeverForm({
         headline: headline.trim() || null,
         location: location.trim() || null,
         phone: prefill.phone,
-        linkedinUrl: linkedinUrl.trim() || null,
+        linkedinUrl: normalizeLinkedinUrl(linkedinUrl),
         postingId: postingId!,
         stageId,
         tags: prefill.tags,
@@ -175,9 +206,13 @@ function AddToLeverForm({
     },
   });
 
-  const canSubmit = prefill.createEnabled && !!name.trim() && !!posting && !sameJob && !mutation.isPending;
+  const linkedinInvalid = !!linkedinUrl.trim() && normalizeLinkedinUrl(linkedinUrl) === null;
+  const canSubmit =
+    prefill.createEnabled && !!name.trim() && !!posting && !sameJob && !linkedinInvalid && !mutation.isPending;
   const confirmLabel = `Add ${name.trim() || '…'} to ${posting?.title ?? 'a job'}`;
-  const gemHint = prefill.gem.status === 'FOUND' ? null : (prefill.gem.message ?? GEM_HINT[prefill.gem.status]);
+  const gemStatus = prefill.gem.status;
+  const needsConnect = gemStatus === 'NOT_CONNECTED' || gemStatus === 'NEEDS_REAUTH';
+  const gemHint = needsConnect ? null : (prefill.gem.message ?? GEM_HINT[gemStatus] ?? null);
 
   return (
     <form
@@ -210,47 +245,44 @@ function AddToLeverForm({
         </div>
       )}
 
+      {needsConnect && (
+        <Alert className="has-[[data-slot=alert-action]]:pr-40">
+          <AlertDescription>
+            {gemStatus === 'NEEDS_REAUTH'
+              ? 'Gem needs reconnecting to fill in LinkedIn, title, location and résumé'
+              : 'Connect Gem to fill in LinkedIn, title, location and résumé'}
+            {gemConnect.error && <span className="mt-1 block text-destructive">{gemConnect.error}</span>}
+          </AlertDescription>
+          <AlertAction>
+            <Button type="button" size="sm" variant="secondary" disabled={gemConnect.waiting} onClick={gemConnect.connect}>
+              {gemConnect.waiting && <Loader2 className="animate-spin" data-icon="inline-start" />}
+              {gemConnect.waiting ? 'Waiting for Gem…' : gemStatus === 'NEEDS_REAUTH' ? 'Reconnect Gem' : 'Connect Gem'}
+            </Button>
+          </AlertAction>
+        </Alert>
+      )}
+
       <div className="grid gap-1.5">
-        <span className="text-sm font-medium">Job</span>
-        <Input
-          id="atl-job-search"
-          aria-label="Search jobs"
-          placeholder="Search jobs…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="h-8"
+        <Label>Job</Label>
+        <JobCombobox
+          postings={postings}
+          value={postingId}
+          onChange={setPostingId}
+          suggestedId={prefill.suggestedPostingId}
+          invalid={!!sameJob}
         />
-        <Select value={postingId ?? undefined} onValueChange={setPostingId}>
-          <SelectTrigger aria-label="Job" className="w-full">
-            <SelectValue>{posting?.title ?? <span className="text-fg-muted">Pick a job</span>}</SelectValue>
-          </SelectTrigger>
-          <SelectContent position="popper" align="start">
-            {ordered.map((p) => (
-              <SelectItem key={p.id} value={p.id}>
-                <span>{p.title}</span>
-                {p.id === prefill.suggestedPostingId && (
-                  <span className="rounded bg-accent-500/10 px-1 text-[10.5px] text-accent-700 dark:text-accent-300">Suggested</span>
-                )}
-                <span className="text-[11px] text-fg-muted">
-                  {[p.team, p.location, p.state === 'internal' ? 'internal' : null].filter(Boolean).join(' · ')}
-                </span>
-              </SelectItem>
-            ))}
-            {ordered.length === 0 && <div className="px-2 py-1.5 text-[12px] text-fg-muted">No matching jobs</div>}
-          </SelectContent>
-        </Select>
         {sameJob && (
-          <p className="text-[12px] text-red-600 dark:text-red-400">
+          <p className="text-xs text-destructive">
             {prefill.email} already has an opportunity for this job — pick another job.
           </p>
         )}
       </div>
 
       <div className="grid gap-1.5">
-        <span className="text-sm font-medium">Stage</span>
+        <Label>Stage</Label>
         <Select value={stageId ?? undefined} onValueChange={setStageId}>
           <SelectTrigger aria-label="Stage" className="w-full">
-            <SelectValue>{stage?.text ?? <span className="text-fg-muted">Lever default (New lead)</span>}</SelectValue>
+            <SelectValue placeholder="Lever default (New lead)">{stage?.text}</SelectValue>
           </SelectTrigger>
           <SelectContent position="popper" align="start">
             {stages.map((s) => (
@@ -264,61 +296,86 @@ function AddToLeverForm({
 
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="grid gap-1.5">
-          <Label htmlFor="atl-name">Name</Label>
+          <div className="flex items-center">
+            <Label htmlFor="atl-name">Name</Label>
+            {filledFromGem.has('name') && <FilledFromGem />}
+          </div>
           <Input id="atl-name" value={name} onChange={(e) => setName(e.target.value)} required />
         </div>
         <div className="grid gap-1.5">
-          <Label htmlFor="atl-location">Location</Label>
+          <div className="flex items-center">
+            <Label htmlFor="atl-location">Location</Label>
+            {filledFromGem.has('location') && <FilledFromGem />}
+          </div>
           <Input id="atl-location" value={location} onChange={(e) => setLocation(e.target.value)} />
         </div>
         <div className="grid gap-1.5 sm:col-span-2">
-          <Label htmlFor="atl-headline">Headline</Label>
+          <div className="flex items-center">
+            <Label htmlFor="atl-headline">Headline</Label>
+            {filledFromGem.has('headline') && <FilledFromGem />}
+          </div>
           <Input id="atl-headline" value={headline} onChange={(e) => setHeadline(e.target.value)} />
         </div>
         <div className="grid gap-1.5 sm:col-span-2">
-          <Label htmlFor="atl-linkedin">LinkedIn</Label>
+          <div className="flex items-center">
+            <Label htmlFor="atl-linkedin">LinkedIn</Label>
+            {filledFromGem.has('linkedinUrl') && <FilledFromGem />}
+          </div>
+          {/* type=text: Gem and recruiters paste "www.linkedin.com/in/…" without a scheme. */}
           <Input
             id="atl-linkedin"
-            type="url"
-            placeholder="https://www.linkedin.com/in/…"
+            inputMode="url"
+            autoComplete="off"
+            placeholder="linkedin.com/in/…"
             value={linkedinUrl}
+            aria-invalid={linkedinInvalid || undefined}
+            aria-describedby={linkedinInvalid ? 'atl-linkedin-error' : undefined}
             onChange={(e) => setLinkedinUrl(e.target.value)}
           />
-          {gemHint && <p className="text-[12px] text-fg-muted">{gemHint}</p>}
+          {linkedinInvalid && (
+            <p id="atl-linkedin-error" className="text-xs text-destructive">
+              Enter a linkedin.com URL
+            </p>
+          )}
+          {gemHint && <p className="text-xs text-muted-foreground">{gemHint}</p>}
         </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5">
-        <Chip>
-          <FileText className="h-3 w-3" />
-          {prefill.resume.available ? `From Gem: ${prefill.resume.source ?? 'résumé'}` : 'No résumé'}
-        </Chip>
+        <Badge variant="outline">
+          <FileText className="size-3" />
+          {prefill.resume.available ? `From Gem: ${prefill.resume.filename ?? prefill.resume.source ?? 'résumé'}` : 'No résumé'}
+        </Badge>
         {prefill.sources.map((s) => (
-          <Chip key={`s-${s}`}>{s}</Chip>
+          <Badge key={`s-${s}`} variant="outline">
+            {s}
+          </Badge>
         ))}
         {prefill.tags.map((t) => (
-          <Chip key={`t-${t}`}>{t}</Chip>
+          <Badge key={`t-${t}`} variant="outline">
+            {t}
+          </Badge>
         ))}
       </div>
 
       <div className="grid gap-1.5">
-        <span className="text-[12px] font-medium text-fg-muted">Note added to Lever</span>
+        <span className="text-xs font-medium text-muted-foreground">Note added to Lever</span>
         <pre
           data-testid="lever-note-preview"
-          className="max-h-32 overflow-y-auto whitespace-pre-wrap rounded-lg bg-fg-strong/[0.03] p-2 font-sans text-[12px] text-fg-default ring-1 ring-inset ring-fg-strong/[0.06]"
+          className="max-h-32 overflow-y-auto whitespace-pre-wrap rounded-2xl bg-muted/50 p-3 font-sans text-xs text-foreground"
         >
           {prefill.note}
         </pre>
       </div>
 
       {mutation.isError && (
-        <p role="alert" className="text-[13px] text-red-600 dark:text-red-400">
+        <p role="alert" className="text-sm text-destructive">
           {extractApiErrorMessage(mutation.error, 'Could not add to Lever.')}
         </p>
       )}
 
       <DialogFooter className="items-center">
-        {!prefill.createEnabled && <span className="mr-auto text-[12px] text-fg-muted">Add to Lever is turned off</span>}
+        {!prefill.createEnabled && <span className="mr-auto text-xs text-muted-foreground">Add to Lever is turned off</span>}
         <Button type="submit" disabled={!canSubmit}>
           {mutation.isPending && <Loader2 className="animate-spin" data-icon="inline-start" />}
           {confirmLabel}

@@ -31,6 +31,7 @@ import { encrypt, decrypt } from '../lib/crypto';
 import { createOAuthState } from '../lib/oauthState';
 import { safeError } from '../lib/safeError';
 import { logEvent } from './monitoring.service';
+import { normalizeLinkedinUrl } from '../lib/linkedin';
 
 export const GEM_MCP_URL = process.env.GEM_MCP_URL ?? 'https://mcp.gem.com/mcp';
 export const GEM_UNAVAILABLE_MESSAGE = 'Gem unavailable — paste LinkedIn manually';
@@ -325,20 +326,6 @@ function allStrings(list: unknown, keys: string[]): string[] {
   return out.map((s) => s.trim().toLowerCase());
 }
 
-/** Only an https linkedin.com URL is kept (it's stored and rendered as a link). */
-export function safeLinkedinUrl(raw: unknown): string | null {
-  const s = str(raw);
-  if (!s) return null;
-  try {
-    const u = new URL(s);
-    if (u.protocol !== 'https:') return null;
-    if (u.hostname !== 'linkedin.com' && !u.hostname.endsWith('.linkedin.com')) return null;
-    return u.toString();
-  } catch {
-    return null;
-  }
-}
-
 /** Maps a `get_person` entity to GemPerson; null when it has no usable name. */
 export function parseGemPerson(entity: unknown): GemPerson | null {
   if (!entity || typeof entity !== 'object' || Array.isArray(entity)) return null;
@@ -368,7 +355,7 @@ export function parseGemPerson(entity: unknown): GemPerson | null {
     company: str(e.company),
     location: str(e.location),
     phone: firstString(e.phone_numbers, ['number', 'phone_number', 'value']),
-    linkedinUrl: safeLinkedinUrl(e.linkedin_url),
+    linkedinUrl: normalizeLinkedinUrl(e.linkedin_url),
     resume,
   };
 }

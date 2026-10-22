@@ -167,6 +167,9 @@
 
   * {
     box-sizing: border-box;
+    /* Bare `border` (shadcn Alert, Card…) uses the theme token, not Tailwind's
+       default gray-200 — which was near-white on the dark theme. */
+    @apply border-border;
   }
 
   html {

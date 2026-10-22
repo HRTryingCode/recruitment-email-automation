@@ -26,7 +26,7 @@ const mockPrisma = injected as unknown as MockPrisma;
 const USER = 'ckuser000000000000000001';
 
 // ── Fake Gem OAuth server (fetch) — no request leaves the process ─────────
-function fakeAuthFetch(opts: { tokenStatus?: number } = {}) {
+function fakeAuthFetch(opts: { tokenStatus?: number; omitRefreshToken?: boolean } = {}) {
   const calls: Array<{ url: string; method: string; body: string }> = [];
   const json = (b: unknown, status = 200) =>
     new Response(JSON.stringify(b), { status, headers: { 'content-type': 'application/json' } });
@@ -55,7 +55,12 @@ function fakeAuthFetch(opts: { tokenStatus?: number } = {}) {
     }
     if (url.pathname === '/oauth/mcp/token') {
       if (opts.tokenStatus && opts.tokenStatus >= 400) return json({ error: 'invalid_grant' }, opts.tokenStatus);
-      return json({ access_token: 'at-new', refresh_token: 'rt-new', token_type: 'Bearer', expires_in: 3600 });
+      return json({
+        access_token: 'at-new',
+        ...(!opts.omitRefreshToken && { refresh_token: 'rt-new' }),
+        token_type: 'Bearer',
+        expires_in: 3600,
+      });
     }
     return json({ detail: 'Not Found' }, 404);
   });
@@ -215,6 +220,14 @@ describe('getGemAccessToken', () => {
     expect(log[0].data.details).not.toMatch(/rt-1|at-1/);
   });
 
+  it('keeps the old refresh token when Gem does not rotate it on refresh', async () => {
+    mockPrisma.gemConnection.findUnique.mockResolvedValueOnce(okConnection({ expiresAt: new Date(Date.now() - 1000) }));
+    const f = fakeAuthFetch({ omitRefreshToken: true });
+    expect(await getGemAccessToken(USER, { fetchFn: f.fn })).toEqual({ ok: true, token: 'at-new' });
+    const upd = mockPrisma.gemConnection.update.mock.calls[0]![0];
+    expect(JSON.parse(decrypt(upd.data.tokens)).refresh_token).toBe('rt-1');
+  });
+
   it('a NEEDS_REAUTH row fails fast', async () => {
     mockPrisma.gemConnection.findUnique.mockResolvedValueOnce(okConnection({ status: 'NEEDS_REAUTH' }));
     expect(await getGemAccessToken(USER)).toEqual({ ok: false, status: 'NEEDS_REAUTH' });
@@ -283,6 +296,35 @@ describe('lookupGemPerson (fake GeMCP server)', () => {
     expect(gem.seen).toEqual([]);
   });
 
+  it('an expired access token (Gem issues 5-minute tokens) is refreshed before the MCP call, which then succeeds', async () => {
+    mockPrisma.gemConnection.findUnique.mockResolvedValueOnce(okConnection({ expiresAt: new Date(Date.now() - 60_000) }));
+    const f = fakeAuthFetch();
+    const gem = fakeGemMcp({ search: () => ({ results: [{ ext_id: 'g-1' }] }), get_person: () => PERSON });
+    const tokensUsed: string[] = [];
+    const out = await lookupGemPerson(USER, 'jane@example.com', {
+      fetchFn: f.fn,
+      transportFactory: (token) => {
+        tokensUsed.push(token);
+        return gem.factory();
+      },
+    });
+    expect(out.status).toBe('FOUND');
+    expect(tokensUsed).toEqual(['at-new']);
+    expect(f.calls.some((c) => c.url.endsWith('/token'))).toBe(true);
+  });
+
+  it('an expired token whose refresh fails → NEEDS_REAUTH, Gem MCP never called', async () => {
+    mockPrisma.gemConnection.findUnique.mockResolvedValueOnce(okConnection({ expiresAt: new Date(Date.now() - 60_000) }));
+    const gem = fakeGemMcp({ search: () => ({ results: [] }), get_person: () => PERSON });
+    const out = await lookupGemPerson(USER, 'jane@example.com', {
+      fetchFn: fakeAuthFetch({ tokenStatus: 400 }).fn,
+      transportFactory: gem.factory,
+    });
+    expect(out).toEqual({ status: 'NEEDS_REAUTH' });
+    expect(gem.seen).toEqual([]);
+    expect(mockPrisma.gemConnection.updateMany.mock.calls[0]![0].data.status).toBe('NEEDS_REAUTH');
+  });
+
   it('a search that matched a different person by name is ignored (email must match when emails are present)', async () => {
     mockPrisma.gemConnection.findUnique.mockResolvedValueOnce(okConnection());
     const gem = fakeGemMcp({
@@ -302,6 +344,12 @@ describe('parseGemPerson (defensive)', () => {
       resumes: [{ download_url: 'http://insecure/x.pdf', filename: 'x.pdf' }],
     });
     expect(p).toMatchObject({ name: 'A B', phone: '123', resume: null, linkedinUrl: null });
+  });
+
+  it('accepts Gem\'s scheme-less linkedin_url (prod shape) and canonicalizes it', () => {
+    expect(
+      parseGemPerson({ display_name: 'A', linkedin_url: 'www.linkedin.com/in/alexander-betit-0ab8302a' })?.linkedinUrl
+    ).toBe('https://www.linkedin.com/in/alexander-betit-0ab8302a');
   });
 
   it('rejects a non-LinkedIn linkedin_url', () => {
