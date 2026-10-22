@@ -23,6 +23,12 @@ export interface DraftShortcutHandlers {
 
 interface Options {
   enabled?: boolean;
+  /**
+   * Whether the review pane is open. The single-letter actions (a / x / d /
+   * r / e) act on the open draft only, so they're ignored while it's closed —
+   * a stray "a" on the list must never approve the focused row (M21).
+   */
+  paneOpen?: boolean;
 }
 
 function isTypingInEditable(target: EventTarget | null): boolean {
@@ -48,6 +54,18 @@ function isBlockingDialogOpen(paneSelector: string): boolean {
   return false;
 }
 
+/**
+ * Enter/Space on a focused button or link must activate *that* control —
+ * never be swallowed by the open-draft shortcut (M21).
+ */
+function isInteractiveControl(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el || typeof el.closest !== 'function') return false;
+  return (
+    el.closest('button, a[href], summary, [role="button"], [role="link"], [role="menuitem"], [role="tab"], [role="checkbox"], [role="switch"]') !== null
+  );
+}
+
 const PANE_SELECTOR = '[data-draft-pane="true"]';
 
 /**
@@ -61,7 +79,7 @@ export function useDraftKeyboardShortcuts(
   handlers: DraftShortcutHandlers,
   options: Options = {}
 ) {
-  const { enabled = true } = options;
+  const { enabled = true, paneOpen = true } = options;
 
   useEffect(() => {
     if (!enabled) return;
@@ -91,6 +109,7 @@ export function useDraftKeyboardShortcuts(
         return;
       }
       if (key === 'Enter' || key === 'o') {
+        if (key === 'Enter' && isInteractiveControl(e.target)) return;
         if (handlers.onOpen) {
           e.preventDefault();
           handlers.onOpen();
@@ -105,8 +124,8 @@ export function useDraftKeyboardShortcuts(
         return;
       }
 
-      // Single-letter actions — only apply when pane is open
-      // (handler authors decide; we just guard typing/dialog above).
+      // Single-letter actions — only apply when the pane is open.
+      if (!paneOpen) return;
       if (key === 'a') {
         if (handlers.onApprove) {
           e.preventDefault();
@@ -139,7 +158,7 @@ export function useDraftKeyboardShortcuts(
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [enabled, handlers]);
+  }, [enabled, paneOpen, handlers]);
 }
 
 export const DRAFT_PANE_DATA_ATTR = { 'data-draft-pane': 'true' } as const;

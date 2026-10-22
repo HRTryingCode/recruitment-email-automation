@@ -43,7 +43,12 @@ import {
 import DraftReviewPane from './DraftReviewPane';
 import { useDraftKeyboardShortcuts } from '../hooks/useDraftKeyboardShortcuts';
 
-type DraftStatus = 'PENDING' | 'APPROVED' | 'SENT';
+// EXPIRED is a view, not a DB status: PENDING drafts past their expiry
+// window (createdAt + 21 days), served by GET /drafts?expired=true (M16).
+type DraftStatus = 'PENDING' | 'APPROVED' | 'SENT' | 'EXPIRED';
+
+const PAGE_SIZE = 50;
+const REFETCH_INTERVAL_MS = 60_000;
 
 interface Props {
   mailboxId?: string;
@@ -176,6 +181,12 @@ function EmptyDraftsState({ status }: { status: DraftStatus }) {
       description:
         'Approved drafts that you choose to send will land here, along with the timestamp of delivery.',
     },
+    EXPIRED: {
+      icon: FileText,
+      title: 'No expired drafts',
+      description:
+        'Pending drafts older than 21 days move here so the review queue stays current. You can still approve or discard them.',
+    },
   }[status];
 
   const Icon = config.icon;
@@ -266,25 +277,38 @@ export default function EmailDrafts({ mailboxId }: Props) {
   const [activeDraftId, setActiveDraftId] = useState<string | null>(null);
   const [editNonce, setEditNonce] = useState(0);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [page, setPage] = useState(1);
+
+  // A different mailbox is a different list — start again from page 1 (M22).
+  useEffect(() => {
+    setPage(1);
+  }, [mailboxId]);
 
   const deepLinkCandidateId = searchParams.get('candidateId');
   const deepLinkDraftId = searchParams.get('draftId');
 
+  const isExpiredView = activeStatus === 'EXPIRED';
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ['drafts', activeStatus, mailboxId],
+    queryKey: ['drafts', activeStatus, mailboxId, page],
     queryFn: () => fetchDrafts({
-      status: activeStatus,
-      limit: 100,
+      status: isExpiredView ? 'PENDING' : activeStatus,
+      ...(isExpiredView ? { expired: true } : {}),
+      page,
+      limit: PAGE_SIZE,
       mailboxId,
       // Always include approved/sent drafts regardless of repliedAt so
       // intentionally approved work is never hidden from the recruiter.
-      includeReplied: activeStatus !== 'PENDING',
+      includeReplied: activeStatus !== 'PENDING' && !isExpiredView,
     }),
     staleTime: 15_000,
+    // New drafts arrive from the hourly reconcile / webhook; keep the queue
+    // fresh without a manual reload. Pauses while the tab is hidden (L15).
+    refetchInterval: REFETCH_INTERVAL_MS,
   });
 
   const drafts = data?.data ?? [];
   const total = data?.meta.total ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   // Resolve deep-linked draft id from either candidateId or draftId.
   const targetDraftId = useMemo(() => {
@@ -405,7 +429,7 @@ export default function EmailDrafts({ mailboxId }: Props) {
       const d = drafts.find((x) => x.id === id);
       const to =
         d?.thread?.candidate?.name ?? d?.thread?.candidate?.email ?? 'candidate';
-      toastSuccess(`Email sent to ${to}`, 'Cc: sofia@archive.com');
+      toastSuccess(`Email sent to ${to}`, d?.ccAddress ? `Cc: ${d.ccAddress}` : undefined);
       void queryClient.invalidateQueries({ queryKey: ['drafts'] });
       void queryClient.invalidateQueries({ queryKey: ['candidates'] });
     },
@@ -548,12 +572,12 @@ export default function EmailDrafts({ mailboxId }: Props) {
     setActiveDraftId(null);
   }, [shortcutsOpen]);
 
+  // Approve acts on the open draft only — never on the merely-focused row (M21).
   const shortcutApprove = useCallback(() => {
-    const target = activeDraft ?? drafts[focusedIndex];
-    if (target && target.status === 'PENDING') {
-      approveMutation.mutate(target.id);
+    if (activeDraft && activeDraft.status === 'PENDING') {
+      approveMutation.mutate(activeDraft.id);
     }
-  }, [activeDraft, drafts, focusedIndex, approveMutation]);
+  }, [activeDraft, approveMutation]);
 
   const shortcutDiscard = useCallback(() => {
     if (!activeDraft) return;
@@ -589,7 +613,7 @@ export default function EmailDrafts({ mailboxId }: Props) {
       onRegenerate: shortcutRegenerate,
       onEdit: shortcutEdit,
     },
-    { enabled: true }
+    { enabled: true, paneOpen: activeDraft !== null }
   );
 
   // `?` to open shortcuts help
@@ -610,6 +634,7 @@ export default function EmailDrafts({ mailboxId }: Props) {
     { id: 'PENDING', label: 'Pending' },
     { id: 'APPROVED', label: 'Approved' },
     { id: 'SENT', label: 'Sent' },
+    { id: 'EXPIRED', label: 'Expired' },
   ];
 
   if (error) {
@@ -656,6 +681,7 @@ export default function EmailDrafts({ mailboxId }: Props) {
                 setActiveStatus(tab.id);
                 setFocusedIndex(0);
                 setActiveDraftId(null);
+                setPage(1);
               }}
               className={cn(
                 'rounded-md px-3.5 py-1.5 text-[13px] font-medium transition-all',
@@ -670,6 +696,7 @@ export default function EmailDrafts({ mailboxId }: Props) {
         </div>
         <span className="font-mono text-[12px] tabular-nums text-fg-subtle">
           {total} {activeStatus.toLowerCase()}
+          {pageCount > 1 ? ` · page ${page} of ${pageCount}` : ''}
         </span>
       </div>
 
@@ -697,6 +724,35 @@ export default function EmailDrafts({ mailboxId }: Props) {
           </div>
         )}
       </div>
+
+      {pageCount > 1 && (
+        <div className="flex items-center justify-end gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            aria-label="Previous page"
+            disabled={page <= 1}
+            onClick={() => {
+              setPage((p) => Math.max(1, p - 1));
+              setFocusedIndex(0);
+            }}
+          >
+            Previous
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            aria-label="Next page"
+            disabled={page >= pageCount}
+            onClick={() => {
+              setPage((p) => Math.min(pageCount, p + 1));
+              setFocusedIndex(0);
+            }}
+          >
+            Next
+          </Button>
+        </div>
+      )}
 
       {/* Side-pane */}
       <DraftReviewPane

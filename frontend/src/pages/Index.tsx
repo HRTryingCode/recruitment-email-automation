@@ -184,16 +184,18 @@ export default function Index() {
     staleTime: 60_000,
   });
 
-  const { data: draftsData } = useQuery({
-    queryKey: ['drafts'],
-    queryFn: () => fetchDrafts({ limit: 500 }),
+  // Badge count = the Pending tab's total for the selected mailbox. Uses the
+  // server's count instead of downloading up to 500 drafts and filtering
+  // client-side, which ignored the mailbox filter and capped the number (M22).
+  const { data: pendingDraftsData } = useQuery({
+    queryKey: ['drafts', 'pending-count', selectedMailboxId],
+    queryFn: () => fetchDrafts({ status: 'PENDING', mailboxId: selectedMailboxId, limit: 1 }),
     staleTime: 30_000,
+    refetchInterval: 60_000,
   });
 
   const mailboxes = mailboxesData?.data ?? [];
-  const pendingDraftCount = (draftsData?.data ?? []).filter(
-    (d) => d.status === 'PENDING'
-  ).length;
+  const pendingDraftCount = pendingDraftsData?.meta.total ?? 0;
 
   const handleAddMailbox = async () => {
     try {

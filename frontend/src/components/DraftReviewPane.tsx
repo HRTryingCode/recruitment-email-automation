@@ -199,6 +199,30 @@ function DiscardConfirm({
   );
 }
 
+// Unsaved edits are mirrored to sessionStorage so they survive closing the
+// pane, switching drafts, or a 401 bounce through /login (L17). Storage can
+// be unavailable (private mode, blocked site data) — every access is guarded.
+const EDIT_STORAGE_PREFIX = 'draftEdit:';
+
+function readStoredEdit(draftId: string | undefined): string | null {
+  if (!draftId) return null;
+  try {
+    return window.sessionStorage.getItem(EDIT_STORAGE_PREFIX + draftId);
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredEdit(draftId: string | undefined, body: string | null): void {
+  if (!draftId) return;
+  try {
+    if (body === null) window.sessionStorage.removeItem(EDIT_STORAGE_PREFIX + draftId);
+    else window.sessionStorage.setItem(EDIT_STORAGE_PREFIX + draftId, body);
+  } catch {
+    // ignore — persistence is best-effort
+  }
+}
+
 export default function DraftReviewPane({
   draft,
   open,
@@ -238,11 +262,15 @@ export default function DraftReviewPane({
   });
 
   // Keep the snapshot in sync with the editor's current state (without
-  // running on every keystroke — refs don't trigger renders).
+  // running on every keystroke — refs don't trigger renders), and mirror an
+  // in-progress edit to sessionStorage.
   useEffect(() => {
     if (draft?.id === prevDraftRef.current.id) {
       prevDraftRef.current.editedBody = editedBody;
       prevDraftRef.current.editing = editing;
+      if (editing) {
+        writeStoredEdit(draft?.id, editedBody !== prevDraftRef.current.originalBody ? editedBody : null);
+      }
     }
   }, [editedBody, editing, draft?.id]);
 
@@ -252,14 +280,16 @@ export default function DraftReviewPane({
   useEffect(() => {
     const prev = prevDraftRef.current;
     if (draft?.id === prev.id) return; // same draft — handled by effect below
-    if (prev.editing && prev.id !== undefined && prev.editedBody !== prev.originalBody) {
+    if (prev.editing && prev.id !== undefined && draft?.id !== undefined && prev.editedBody !== prev.originalBody) {
       toastError(
-        'Unsaved changes discarded',
-        'You switched to another draft before saving your edits.'
+        'Unsaved changes kept',
+        'You switched drafts before saving — reopen that draft to continue editing.'
       );
     }
-    setEditing(false);
-    setEditedBody(draft?.bodyText ?? '');
+    // Restore an unsaved edit for this draft, if one was left behind.
+    const stored = draft?.status === 'PENDING' ? readStoredEdit(draft?.id) : null;
+    setEditing(stored !== null);
+    setEditedBody(stored ?? draft?.bodyText ?? '');
     setDictateOpen(false);
     setDictateNotes('');
     if (recognitionRef.current) {
@@ -270,8 +300,8 @@ export default function DraftReviewPane({
     prevDraftRef.current = {
       id: draft?.id,
       originalBody: draft?.bodyText ?? '',
-      editedBody: draft?.bodyText ?? '',
-      editing: false,
+      editedBody: stored ?? draft?.bodyText ?? '',
+      editing: stored !== null,
     };
   }, [draft?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -279,10 +309,16 @@ export default function DraftReviewPane({
   // regenerate), sync editedBody — but only when not actively editing so we
   // don't clobber in-progress keystrokes.
   useEffect(() => {
-    if (editing) return;
+    // The ref check covers the render where the switch effect above just
+    // restored a stored edit (its setEditing(true) isn't visible here yet).
+    if (editing || prevDraftRef.current.editing) return;
     setEditedBody(draft?.bodyText ?? '');
     prevDraftRef.current.originalBody = draft?.bodyText ?? '';
-  }, [draft?.bodyText, editing]);
+    // A save landed (server body now matches the stored edit) — drop it.
+    if (draft?.id && readStoredEdit(draft.id) === (draft.bodyText ?? '')) {
+      writeStoredEdit(draft.id, null);
+    }
+  }, [draft?.bodyText, draft?.id, editing]);
 
   // Honor imperative edit requests (driven by `e` keyboard shortcut)
   useEffect(() => {
@@ -446,12 +482,14 @@ export default function DraftReviewPane({
                   <span className="inline-block h-px w-3 bg-accent-500/70" />
                   Your reply
                 </p>
-                <p className="mb-2 text-[11px] text-fg-subtle">
-                  Will Cc{' '}
-                  <span className="font-mono text-fg-muted">
-                    sofia@archive.com
-                  </span>
-                </p>
+                {draft.ccAddress && (
+                  <p className="mb-2 text-[11px] text-fg-subtle">
+                    Will Cc{' '}
+                    <span className="font-mono text-fg-muted">
+                      {draft.ccAddress}
+                    </span>
+                  </p>
+                )}
                 {editing ? (
                   <div className="flex flex-col gap-3">
                     <textarea
@@ -473,6 +511,7 @@ export default function DraftReviewPane({
                         onClick={() => {
                           setEditing(false);
                           setEditedBody(draft.bodyText);
+                          writeStoredEdit(draft.id, null);
                         }}
                       >
                         Cancel
