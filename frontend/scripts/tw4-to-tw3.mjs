@@ -97,6 +97,8 @@ function convertUtility(u) {
     important = '!';
     u = u.slice(1);
   }
+  // Tailwind 4 theme functions inside arbitrary values: `--spacing(6)`.
+  u = u.replace(/--spacing\(([\d.]+)\)/g, 'calc(0.25rem*$1)');
   // `max-h-(--x)` → `max-h-[var(--x)]`; `-z-(--x)` likewise.
   u = u.replace(/^(-?[a-z-]+)-\((--[\w-]+)\)$/, '$1-[var($2)]');
   return important + u;
@@ -131,10 +133,22 @@ export function convertSource(source) {
   });
 }
 
+// Not idempotent (variant order is reversed), so converted files carry a
+// marker and are skipped on later runs.
+export const MARKER = '// @tw3-converted by scripts/tw4-to-tw3.mjs — do not re-run on this file';
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   for (const file of process.argv.slice(2)) {
     const before = fs.readFileSync(file, 'utf8');
-    const after = convertSource(before);
+    if (before.includes('@tw3-converted')) {
+      console.log(`skip ${file} (already converted)`);
+      continue;
+    }
+    const converted = convertSource(before);
+    // After a leading "use client" directive, else at the top.
+    const after = /^["']use client["'];?\n/.test(converted)
+      ? converted.replace(/^(["']use client["'];?\n)/, `$1\n${MARKER}\n`)
+      : `${MARKER}\n${converted}`;
     if (after !== before) {
       fs.writeFileSync(file, after);
       console.log(`rewrote ${file}`);

@@ -47,5 +47,9 @@ export function candidateTokens(source) {
 const MARKERS = /^(group|peer)\/[\w-]+$|^@container(\/[\w-]+)?$/;
 
 export function findDeadClasses(source) {
-  return candidateTokens(source).filter((t) => !MARKERS.test(t) && !compiles(t));
+  // Tailwind 4 CSS functions (`--spacing(6)`, `--alpha(…)`) compile inside an
+  // arbitrary property but produce invalid CSS under Tailwind 3.
+  return candidateTokens(source).filter(
+    (t) => !MARKERS.test(t) && (/--(spacing|alpha)\(/.test(t) || !compiles(t))
+  );
 }

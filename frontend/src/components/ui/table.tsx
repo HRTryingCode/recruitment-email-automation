@@ -1,7 +1,8 @@
 "use client"
 
-import * as React from "react"
+// @tw3-converted by scripts/tw4-to-tw3.mjs — do not re-run on this file
 
+import * as React from "react"
 import { cn } from "@/lib/utils"
 
 function Table({ className, ...props }: React.ComponentProps<"table">) {

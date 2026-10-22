@@ -1,9 +1,7 @@
-"use client"
-
+// @tw3-converted by scripts/tw4-to-tw3.mjs — do not re-run on this file
 import * as React from "react"
-import { Separator as SeparatorPrimitive } from "radix-ui"
-
 import { cn } from "@/lib/utils"
+import { Separator as SeparatorPrimitive } from "radix-ui"
 
 function Separator({
   className,

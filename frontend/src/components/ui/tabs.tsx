@@ -1,10 +1,8 @@
-"use client"
-
+// @tw3-converted by scripts/tw4-to-tw3.mjs — do not re-run on this file
 import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
-import { Tabs as TabsPrimitive } from "radix-ui"
-
 import { cn } from "@/lib/utils"
+import { Tabs as TabsPrimitive } from "radix-ui"
 
 function Tabs({
   className,
