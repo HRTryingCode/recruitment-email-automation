@@ -148,6 +148,7 @@ describe('Triage draft flow', () => {
     const interestedLink = within(rail()).getByRole('link', { name: /^Interested\s*2/ });
     expect(within(interestedLink).getByText('2')).toHaveAttribute('data-changed', 'true');
     expect(screen.getByRole('list', { name: 'Needs review replies' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Needs review' }).nextElementSibling).toHaveTextContent('1');
 
     // 4. Toast as a secondary signal.
     expect(await screen.findByText('Draft created for Eli Mock in Interested')).toBeInTheDocument();

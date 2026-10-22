@@ -165,10 +165,10 @@ export default function InboxPage() {
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [batchOpen, setBatchOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [checkedFor, setCheckedFor] = useState(`${view}|${mailboxId ?? ''}`);
+  const [checkedFor, setCheckedFor] = useState(`${listView}|${mailboxId ?? ''}`);
   // Selection belongs to one view: switching view or mailbox clears it.
-  if (checkedFor !== `${view}|${mailboxId ?? ''}`) {
-    setCheckedFor(`${view}|${mailboxId ?? ''}`);
+  if (checkedFor !== `${listView}|${mailboxId ?? ''}`) {
+    setCheckedFor(`${listView}|${mailboxId ?? ''}`);
     setChecked(new Set());
   }
   const recipients = items
@@ -272,7 +272,7 @@ export default function InboxPage() {
         <InboxList
           view={listView}
           items={items}
-          total={counts?.[view]}
+          total={counts?.[listView]}
           loading={inboxQ.isLoading}
           error={inboxQ.isError}
           onRetry={() => void inboxQ.refetch()}
