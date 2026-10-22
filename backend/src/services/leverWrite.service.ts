@@ -122,7 +122,7 @@ export class LeverWriteClient {
     for (const [k, v] of params) url.searchParams.append(k, v);
 
     const headers: Record<string, string> = { Authorization: `Bearer ${this.apiKey}`, Accept: 'application/json' };
-    let payload: BodyInit | undefined;
+    let payload: RequestInit["body"];
     if (body instanceof FormData) payload = body;
     else if (body !== undefined) {
       headers['Content-Type'] = 'application/json';

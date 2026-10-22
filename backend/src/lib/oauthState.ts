@@ -20,6 +20,10 @@
 // callback only succeeds for a state we issued — and it lets the callback
 // attribute the connect to (and authorize it for) the user who started it,
 // without a schema change.
+//
+// Kinds (F3): Gem connect states are `gem-<64 hex>.<userId>`. Each callback
+// only consumes its own kind, so a state issued for one provider can't be
+// spent at the other provider's callback.
 
 import crypto from 'crypto';
 import { prisma } from '../db/client';
@@ -38,15 +42,28 @@ export async function storeOAuthState(state: string): Promise<void> {
   await prisma.oAuthState.create({ data: { state } });
 }
 
-export async function createOAuthState(userId: string): Promise<string> {
-  const state = `${crypto.randomBytes(32).toString('hex')}.${userId}`;
+export type OAuthStateKind = 'gmail' | 'gem';
+
+function kindPrefix(kind: OAuthStateKind): string {
+  return kind === 'gmail' ? '' : `${kind}-`;
+}
+
+function isKind(state: string, kind: OAuthStateKind): boolean {
+  if (kind === 'gmail') return !/^[a-z]+-/.test(state);
+  return state.startsWith(kindPrefix(kind));
+}
+
+export async function createOAuthState(userId: string, kind: OAuthStateKind = 'gmail'): Promise<string> {
+  const state = `${kindPrefix(kind)}${crypto.randomBytes(32).toString('hex')}.${userId}`;
   await storeOAuthState(state);
   return state;
 }
 
 export async function consumeOAuthState(
-  state: string
+  state: string,
+  kind: OAuthStateKind = 'gmail'
 ): Promise<{ userId: string | null } | null> {
+  if (!isKind(state, kind)) return null;
   const cutoff = new Date(Date.now() - OAUTH_STATE_TTL_MS);
   const { count } = await prisma.oAuthState.updateMany({
     where: { state, consumedAt: null, createdAt: { gte: cutoff } },

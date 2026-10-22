@@ -91,4 +91,26 @@ describe('lib/oauthState (Prisma-backed)', () => {
       expect(await consumeOAuthState('c'.repeat(64))).toEqual({ userId: null });
     });
   });
+
+  describe('namespaced states (F3: Gem connect)', () => {
+    it('createOAuthState(userId, "gem") prefixes the state with gem-', async () => {
+      const s = await createOAuthState('user_1', 'gem');
+      expect(s).toMatch(/^gem-[0-9a-f]{64}\.user_1$/);
+    });
+
+    it('a gem- state is refused by the default (Gmail) consumer without touching the row', async () => {
+      expect(await consumeOAuthState(`gem-${'a'.repeat(64)}.user_1`)).toBeNull();
+      expect(mockPrisma.oAuthState.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('a plain state is refused by the gem consumer', async () => {
+      expect(await consumeOAuthState(`${'a'.repeat(64)}.user_1`, 'gem')).toBeNull();
+      expect(mockPrisma.oAuthState.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('the gem consumer returns the bound user', async () => {
+      mockPrisma.oAuthState.updateMany.mockResolvedValueOnce({ count: 1 });
+      expect(await consumeOAuthState(`gem-${'a'.repeat(64)}.user_1`, 'gem')).toEqual({ userId: 'user_1' });
+    });
+  });
 });
