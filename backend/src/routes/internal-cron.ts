@@ -414,4 +414,28 @@ router.get(
   }
 );
 
+// GET /api/internal/cron/lever-sync-new
+// Every 15 min (H1): checks ONLY candidates never checked against Lever, so
+// new rows don't sit at "Checking Lever…" until the next 3h run. Cheap: the
+// set is usually empty. Logs LEVER_SYNC_RUN only when it did work or aborted,
+// so an idle or unconfigured run doesn't write 96 rows a day.
+router.get(
+  '/lever-sync-new',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!isAuthorized(req)) {
+        res.status(401).json({ success: false, error: 'Unauthorized' });
+        return;
+      }
+      const result = await syncStaleLever({ deadline: Date.now() + 50_000, neverCheckedOnly: true });
+      if (result.checked > 0 || result.aborted) {
+        await logEvent('LEVER_SYNC_RUN', { mode: 'never-checked', ...result }, result.aborted ? 'WARN' : 'INFO');
+      }
+      res.status(200).json({ success: true, data: result });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 export default router;
