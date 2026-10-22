@@ -25,9 +25,10 @@ vi.mock('googleapis', () => {
 });
 
 vi.mock('../../src/db/client', () => {
-  const prisma = buildPrismaMock() as MockPrisma & Record<string, Record<string, unknown>>;
-  prisma.emailThread.upsert = vi.fn();
-  prisma.emailMessage.create = vi.fn();
+  const prisma = buildPrismaMock();
+  // fetchAndStoreMessage also writes threads/messages; not in the shared mock.
+  (prisma.emailThread as Record<string, unknown>).upsert = vi.fn();
+  (prisma.emailMessage as Record<string, unknown>).create = vi.fn();
   return { prisma, default: prisma };
 });
 
