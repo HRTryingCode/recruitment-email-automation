@@ -101,7 +101,7 @@ describe('<CandidateTable /> Lever badge (F2)', () => {
     const row2 = screen.getByText('Nobody Known').closest('tr')!;
     expect(within(row2).getByTestId('lever-badge')).toHaveTextContent('Not in Lever');
     const row3 = screen.getByText('Never Checked').closest('tr')!;
-    expect(within(row3).getByTestId('lever-badge')).toHaveAttribute('data-state', 'UNKNOWN');
+    expect(within(row3).getByTestId('lever-badge')).toHaveAttribute('data-state', 'CHECKING');
   });
 
   it('F3: "Add to Lever" on not-in-Lever rows, "Add to another job" on in-Lever rows, none when unchecked', async () => {
