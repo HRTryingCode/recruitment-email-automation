@@ -3,12 +3,14 @@ import {
   VIEWS,
   customSnooze,
   diffWords,
+  draftedLine,
   formatAge,
   highlightSegments,
   labelFor,
   nextItemId,
   sendLine,
   snoozePresets,
+  viewForClass,
 } from '../../src/lib/inbox';
 
 describe('labelFor', () => {
@@ -110,5 +112,30 @@ describe('messagePlainText', () => {
     expect(messagePlainText('hello', '<p>x</p>')).toBe('hello');
     expect(messagePlainText(null, '<p>Hi&nbsp;there</p><p>Bye &amp; thanks</p>')).toBe('Hi there\nBye & thanks');
     expect(messagePlainText(null, null)).toBe('');
+  });
+});
+
+describe('triage draft helpers (H8)', () => {
+  it('maps a triage decision to the view the draft lands in', () => {
+    expect(viewForClass('INTERESTED')).toBe('interested');
+    expect(viewForClass('NOT_INTERESTED')).toBe('not_interested');
+  });
+
+  it('describes a hand-off draft by CC first name and mailbox local part', () => {
+    expect(draftedLine({ classification: 'INTERESTED', mailbox: 'paul.b@archive.com', ccEmail: 'sofia@archive.com', ccFirstName: 'Sofia' })).toBe(
+      'Hand-off to Sofia from paul.b@'
+    );
+    // No CC options loaded yet: fall back to the CC's local part.
+    expect(draftedLine({ classification: 'INTERESTED', mailbox: 'paul.b@archive.com', ccEmail: 'Sofia@archive.com' })).toBe(
+      'Hand-off to Sofia from paul.b@'
+    );
+  });
+
+  it('describes anything else as a reply from the mailbox', () => {
+    expect(draftedLine({ classification: 'INTERESTED', mailbox: 'sofia@archive.com', ccEmail: '' })).toBe('Reply from sofia@archive.com');
+    expect(draftedLine({ classification: 'INTERESTED', mailbox: 'sofia@archive.com', ccEmail: 'SOFIA@archive.com' })).toBe('Reply from sofia@archive.com');
+    expect(draftedLine({ classification: 'NOT_INTERESTED', mailbox: 'paul.b@archive.com', ccEmail: 'sofia@archive.com' })).toBe(
+      'Reply from paul.b@archive.com'
+    );
   });
 });

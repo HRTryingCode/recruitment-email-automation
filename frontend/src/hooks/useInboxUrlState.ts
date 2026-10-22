@@ -54,8 +54,13 @@ export function useInboxUrlState() {
   const setView = useCallback((v: InboxView) => update({ view: v, item: undefined, status: undefined }), [update]);
   const setMailbox = useCallback((id?: string) => update({ mailboxId: id, item: undefined }), [update]);
   const setItem = useCallback((id?: string) => update({ item: id }, true), [update]);
+  /** View and item together (H8: a triage draft lands in another view). */
+  const setPlace = useCallback(
+    (v: InboxView, id?: string) => update({ view: v, item: id, status: undefined }, true),
+    [update]
+  );
   /** Replace a legacy ?candidateId= with the item it resolved to (or nothing). */
   const resolveCandidate = useCallback((key?: string) => update({ candidateId: undefined, item: key }, true), [update]);
 
-  return { view, mailboxId, itemId, legacyCandidateId, setView, setMailbox, setItem, resolveCandidate };
+  return { view, mailboxId, itemId, legacyCandidateId, setView, setMailbox, setItem, setPlace, resolveCandidate };
 }

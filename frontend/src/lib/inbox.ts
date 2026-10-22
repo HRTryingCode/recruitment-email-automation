@@ -169,3 +169,28 @@ export function messagePlainText(bodyText: string | null | undefined, bodyHtml: 
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
+
+// ── Triage drafts (H8) ───────────────────────────────────────────────────
+
+/** A recruiter's decision on a draftless Needs-review candidate. */
+export type TriageClass = 'INTERESTED' | 'NOT_INTERESTED';
+
+/** The view a triage draft lands in (it has confidence 1, so never Needs review). */
+export function viewForClass(c: TriageClass): 'interested' | 'not_interested' {
+  return c === 'INTERESTED' ? 'interested' : 'not_interested';
+}
+
+/** "Hand-off to Sofia from paul.b@" for a hand-off draft, else "Reply from <mailbox>". */
+export function draftedLine(opts: {
+  classification: string;
+  mailbox: string;
+  ccEmail?: string | null;
+  ccFirstName?: string | null;
+}): string {
+  const { classification, mailbox, ccEmail } = opts;
+  const handoff = classification === 'INTERESTED' && !!ccEmail && ccEmail.toLowerCase() !== mailbox.toLowerCase();
+  if (!handoff) return `Reply from ${mailbox}`;
+  const local = ccEmail.split('@')[0];
+  const cc = opts.ccFirstName ?? local.charAt(0).toUpperCase() + local.slice(1);
+  return `Hand-off to ${cc} from ${mailbox.split('@')[0]}@`;
+}

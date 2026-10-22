@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { MousePointerClick } from 'lucide-react';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import BatchSendDialog from '@/components/inbox/BatchSendDialog';
 import CandidatePane from '@/components/inbox/CandidatePane';
 import DismissMenu from '@/components/inbox/DismissMenu';
+import DraftedBanner from '@/components/inbox/DraftedBanner';
 import { focusEditor } from '@/components/inbox/DraftEditor';
 import InboxList, { itemKey } from '@/components/inbox/InboxList';
 import InboxRail from '@/components/inbox/InboxRail';
@@ -18,17 +19,33 @@ import { useDraftPresence } from '@/hooks/useDraftPresence';
 import { useInboxActions } from '@/hooks/useInboxActions';
 import { useInboxShortcuts } from '@/hooks/useInboxShortcuts';
 import { useInboxUrlState } from '@/hooks/useInboxUrlState';
+import { useTriageDraft, type TriageResult } from '@/hooks/useTriageDraft';
 import { fetchCandidate, fetchDraft, fetchInbox, type InboxView } from '@/lib/api';
 import { fetchLeverMe } from '@/lib/leverApi';
 import { prefetchAddToLever } from '@/lib/leverQueries';
 import { toastWarning } from '@/lib/toast';
-import { VIEWS, isInboxView } from '@/lib/inbox';
+import { VIEWS, isInboxView, nextItemId } from '@/lib/inbox';
 import { cn } from '@/lib/utils';
 
 export const INBOX_POLL_MS = 15_000;
 
 /** Draft statuses a legacy ?candidateId= link can land on. */
 const LIVE_STATUSES = new Set(['PENDING', 'APPROVED', 'FAILED', 'SCHEDULED', 'SENDING']);
+
+/** How long a row that just arrived in a view stays highlighted. */
+const HIGHLIGHT_MS = 4000;
+
+/** A triage draft just written (H8): where it went and whether the list stays put. */
+interface TriageState {
+  result: TriageResult;
+  /** The view the recruiter was working through. */
+  from: InboxView;
+  /** Keep listing `from` while the draft is open, until "Go to …". */
+  stay: boolean;
+  banner: boolean;
+  /** The draft has been open at least once; leaving it ends the flow. */
+  seen: boolean;
+}
 
 function isTyping(el: Element | null): el is HTMLElement {
   return el instanceof HTMLElement && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
@@ -41,10 +58,30 @@ function isTyping(el: Element | null): el is HTMLElement {
  */
 export default function InboxPage() {
   const qc = useQueryClient();
-  const { view, mailboxId, itemId, legacyCandidateId, setView, setItem, resolveCandidate } = useInboxUrlState();
+  const { view, mailboxId, itemId, legacyCandidateId, setView, setItem, setPlace, resolveCandidate } = useInboxUrlState();
+
+  // H8: after a triage draft the URL already names the draft's new view (so a
+  // refresh lands on it), but the list stays on the view being worked through.
+  const [triage, setTriage] = useState<TriageState | null>(null);
+  const [highlight, setHighlight] = useState<string>();
+  const onTriageDraft = !!triage && itemId === triage.result.draft.id;
+  const listView = triage?.stay && onTriageDraft ? triage.from : view;
+  if (triage && onTriageDraft && !triage.seen) setTriage({ ...triage, seen: true });
+  if (triage?.seen && !onTriageDraft) setTriage(null);
+  useEffect(() => {
+    if (!highlight) return;
+    const t = window.setTimeout(() => setHighlight(undefined), HIGHLIGHT_MS);
+    return () => window.clearTimeout(t);
+  }, [highlight]);
+  /** Open an item in the list being shown (which may differ from the URL's view mid-flow). */
+  const openItem = useCallback(
+    (key?: string) => (listView !== view ? setPlace(listView, key) : setItem(key)),
+    [listView, view, setPlace, setItem]
+  );
+
   const inboxQ = useQuery({
-    queryKey: ['inbox', view, mailboxId ?? null],
-    queryFn: () => fetchInbox({ view, mailboxId }),
+    queryKey: ['inbox', listView, mailboxId ?? null],
+    queryFn: () => fetchInbox({ view: listView, mailboxId }),
     refetchInterval: INBOX_POLL_MS,
   });
   const items = useMemo(() => inboxQ.data?.data.items ?? [], [inboxQ.data]);
@@ -62,7 +99,28 @@ export default function InboxPage() {
   const draft = draftQ.data?.data;
   const editor = useDraftEditor(draft);
   const presence = useDraftPresence(draftId, editor.focused || editor.dirty ? 'editing' : 'viewing');
-  const actions = useInboxActions({ keys, setItem });
+  const actions = useInboxActions({ keys, setItem: openItem });
+
+  const itemIdRef = useRef(itemId);
+  const listViewRef = useRef(listView);
+  useEffect(() => {
+    itemIdRef.current = itemId;
+    listViewRef.current = listView;
+  });
+  const showDraft = (result: TriageResult, stay: boolean) => {
+    setTriage({ result, from: listViewRef.current, stay, banner: true, seen: false });
+    setPlace(result.view, result.draft.id);
+  };
+  const triageDraft = useTriageDraft({
+    currentKey: () => itemIdRef.current,
+    onDrafted: (result, inPlace) => {
+      if (inPlace) showDraft(result, true);
+    },
+    onOpen: (result) => {
+      showDraft(result, false);
+      setHighlight(result.draft.id);
+    },
+  });
 
   // Legacy ?candidateId= (old Drafts tab, Today, Slack): open that
   // candidate's row if it's in this view, else their newest live draft.
@@ -130,7 +188,7 @@ export default function InboxPage() {
     const base = itemId ?? cursor;
     const at = base ? keys.indexOf(base) : -1;
     const next = keys[Math.min(Math.max(at + delta, 0), keys.length - 1)];
-    if (itemId) setItem(next);
+    if (itemId) openItem(next);
     else setCursor(next);
   };
 
@@ -141,7 +199,7 @@ export default function InboxPage() {
     }
     if (itemId) {
       setCursor(itemId);
-      setItem(undefined);
+      openItem(undefined);
     }
   };
 
@@ -149,7 +207,7 @@ export default function InboxPage() {
     next: () => move(1),
     prev: () => move(-1),
     open: () => {
-      if (!itemId && cursor) setItem(cursor);
+      if (!itemId && cursor) openItem(cursor);
     },
     edit: () => {
       if (sendable && draft) focusEditor(draft.id);
@@ -184,7 +242,7 @@ export default function InboxPage() {
 
   const mobileHeader = (
     <div className="flex gap-2 xl:hidden">
-      <Select value={view} onValueChange={(v) => isInboxView(v) && setView(v as InboxView)}>
+      <Select value={listView} onValueChange={(v) => isInboxView(v) && setView(v as InboxView)}>
         <SelectTrigger size="sm" aria-label="View" className="w-full">
           <SelectValue />
         </SelectTrigger>
@@ -202,7 +260,7 @@ export default function InboxPage() {
   return (
     <div className="flex min-h-0 w-full flex-1 bg-background text-foreground">
       <aside aria-label="Inbox" className="w-52 shrink-0 overflow-y-auto border-r border-border max-xl:hidden 2xl:w-56">
-        <InboxRail view={view} counts={counts} />
+        <InboxRail view={listView} counts={counts} />
       </aside>
 
       <div
@@ -212,7 +270,7 @@ export default function InboxPage() {
         )}
       >
         <InboxList
-          view={view}
+          view={listView}
           items={items}
           total={counts?.[view]}
           loading={inboxQ.isLoading}
@@ -220,7 +278,8 @@ export default function InboxPage() {
           onRetry={() => void inboxQ.refetch()}
           selectedKey={itemId}
           focusedKey={itemId ? undefined : cursor}
-          onOpen={(key) => setItem(key)}
+          highlightKey={highlight}
+          onOpen={(key) => openItem(key)}
           checked={checked}
           onCheckedChange={setChecked}
           onBatchSend={() => setBatchOpen(true)}
@@ -233,34 +292,58 @@ export default function InboxPage() {
           <CandidatePane
             item={current}
             onClose={close}
-            onDrafted={(id) => setItem(id)}
-            onDone={() => setItem(keys.filter((k) => k !== itemId)[0])}
+            onReply={(threadId, classification) => triageDraft.start(itemId!, current, threadId, classification)}
+            pending={triageDraft.pendingFor(itemId!)}
+            error={triageDraft.errorFor(itemId!)}
+            onRetry={() => triageDraft.retry(itemId!)}
+            onDone={() => openItem(nextItemId(keys, itemId!) ?? undefined)}
           />
         ) : itemId ? (
-          <ReplyPane
-            item={current}
-            draft={draft?.id === draftId ? draft : undefined}
-            loading={draftQ.isLoading}
-            error={draftQ.isError}
-            onRetry={() => void draftQ.refetch()}
-            editor={editor}
-            presence={presence}
-            lock={actions.lock}
-            onCancelLock={actions.clearLock}
-            onClose={() => {
-              setCursor(itemId);
-              setItem(undefined);
-            }}
-            onSend={doSend}
-            sending={actions.sending}
-            onUndo={() => draft && void actions.undo(draft.id)}
-            onUnsnooze={() => draft && void actions.unsnooze(draft.id)}
-            onRewrite={(instruction) => draft && actions.rewrite(draft, editor.body, editor.dirty, instruction, editor.reset)}
-            onRegenerate={() => draft && actions.regenerate(draft, editor.body, editor.dirty, editor.reset)}
-            rewriting={actions.rewriting}
-            onChangeCc={(cc) => draft && actions.changeCc(draft, cc)}
-            menus={menus}
-          />
+          <div className="flex h-full min-h-0 flex-col">
+            {triage?.banner && onTriageDraft && (
+              <div className="px-4 pt-4">
+                <DraftedBanner
+                  result={triage.result}
+                  onReview={() => focusEditor(triage.result.draft.id)}
+                  onGo={
+                    listView !== triage.result.view
+                      ? () => {
+                          setTriage({ ...triage, stay: false });
+                          setHighlight(triage.result.draft.id);
+                        }
+                      : undefined
+                  }
+                  onDismiss={() => setTriage({ ...triage, banner: false })}
+                />
+              </div>
+            )}
+            <div className="min-h-0 flex-1">
+              <ReplyPane
+                item={current}
+                draft={draft?.id === draftId ? draft : undefined}
+                loading={draftQ.isLoading}
+                error={draftQ.isError}
+                onRetry={() => void draftQ.refetch()}
+                editor={editor}
+                presence={presence}
+                lock={actions.lock}
+                onCancelLock={actions.clearLock}
+                onClose={() => {
+                  setCursor(itemId);
+                  openItem(undefined);
+                }}
+                onSend={doSend}
+                sending={actions.sending}
+                onUndo={() => draft && void actions.undo(draft.id)}
+                onUnsnooze={() => draft && void actions.unsnooze(draft.id)}
+                onRewrite={(instruction) => draft && actions.rewrite(draft, editor.body, editor.dirty, instruction, editor.reset)}
+                onRegenerate={() => draft && actions.regenerate(draft, editor.body, editor.dirty, editor.reset)}
+                rewriting={actions.rewriting}
+                onChangeCc={(cc) => draft && actions.changeCc(draft, cc)}
+                menus={menus}
+              />
+            </div>
+          </div>
         ) : (
           <Empty className="h-full">
             <EmptyHeader>
