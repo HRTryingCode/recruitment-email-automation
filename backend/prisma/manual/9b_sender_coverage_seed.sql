@@ -1,7 +1,7 @@
 -- =====================================================================
 -- Audit B3 (H2): seed the admin-maintained expected-senders list.
 -- NOT RUN. Requires explicit authorization; run ONLY after migration
--- 10_sender_coverage has been applied. Idempotent (ON CONFLICT DO NOTHING).
+-- 9b_sender_coverage has been applied. Idempotent (ON CONFLICT DO NOTHING).
 -- Alternative with no SQL: add each address in Dashboard → Sender coverage
 -- (admin), or POST /api/coverage/expected-senders.
 --
