@@ -40,3 +40,13 @@ export async function requireAdmin(
     next(err);
   }
 }
+
+/** True when the user exists and has the admin role. For in-handler checks. */
+export async function isAdminUser(userId: string | undefined): Promise<boolean> {
+  if (!userId) return false;
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { role: true },
+  });
+  return user?.role === 'admin';
+}

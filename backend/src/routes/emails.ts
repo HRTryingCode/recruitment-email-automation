@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../db/client';
 import { createError } from '../middleware/error';
+import { isAdminUser } from '../middleware/requireAdmin';
 import { serializeEmailMessages } from '../lib/emailMessageSerializer';
 import {
   fetchExamplesForMailbox,
@@ -58,9 +59,17 @@ router.get('/threads', async (req: Request, res: Response, next: NextFunction) =
     const { page, limit } = paged.data;
     const skip = (page - 1) * limit;
 
+    // H8: only candidate-linked threads by default. Unlinked threads hold
+    // non-recruiting (often internal) mail; admins can opt in explicitly.
+    const includeUnlinked = qs(req.query.includeUnlinked) === 'true';
+    if (includeUnlinked && !(await isAdminUser(req.userId))) {
+      return next(createError('Admin role required to list unlinked threads', 403));
+    }
+
     const where: Record<string, unknown> = {};
     if (mailboxId) where.mailboxId = mailboxId;
     if (candidateId) where.candidateId = candidateId;
+    else if (!includeUnlinked) where.candidateId = { not: null };
 
     const [threads, total] = await Promise.all([
       prisma.emailThread.findMany({
@@ -107,7 +116,9 @@ router.get(
         },
       });
 
-      if (!thread) {
+      // H8: a thread with no candidate is not visible to non-admins (404, so
+      // its existence isn't confirmed either).
+      if (!thread || (!thread.candidateId && !(await isAdminUser(req.userId)))) {
         return next(createError('Thread not found', 404));
       }
 
