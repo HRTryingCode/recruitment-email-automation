@@ -39,6 +39,7 @@ vi.mock('../../src/db/client', () => {
 });
 
 import { prisma as injectedPrisma } from '../../src/db/client';
+import { serializeCredentials } from '../../src/services/gmail.service';
 const mockPrisma = injectedPrisma as unknown as MockPrisma;
 
 const AUTH = bearer('test-user-1');
@@ -53,7 +54,8 @@ const mailbox = {
   displayName: 'Aaron Rampersad',
   provider: 'GMAIL',
   isActive: true,
-  credentials: JSON.stringify({ access_token: 'x', refresh_token: 'y' }),
+  // Encrypted at rest, exactly as handleCallback stores it (no plaintext fallback).
+  credentials: serializeCredentials({ access_token: 'x', refresh_token: 'y' }),
 };
 const candidate = { id: 'cand-1', name: 'Jane Doe', email: 'jane@example.com' };
 const thread = {
