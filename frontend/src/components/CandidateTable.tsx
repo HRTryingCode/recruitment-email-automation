@@ -53,6 +53,7 @@ import { Button } from './ui/button';
 import { Skeleton } from './ui/skeleton';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './ui/empty';
 import { CandidateLeverBadge } from './LeverBadge';
+import AddToLeverButton from './AddToLeverButton';
 
 function ReplyStatusBadge({ candidate }: { candidate: Candidate }) {
   const derived: NonNullable<Candidate['replyStatus']> =
@@ -733,7 +734,15 @@ function CandidateRow({
                   </span>
                 )}
               </div>
-              <div className="mt-1"><CandidateLeverBadge candidate={candidate} /></div>
+              <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                <CandidateLeverBadge candidate={candidate} />
+                {candidate.leverState && candidate.leverState !== 'ERROR' && (
+                  <AddToLeverButton
+                    target={{ candidateId: candidate.id }}
+                    inLever={candidate.leverState !== 'NOT_FOUND'}
+                  />
+                )}
+              </div>
             </div>
           </div>
         </td>

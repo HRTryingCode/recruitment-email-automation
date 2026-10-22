@@ -132,7 +132,7 @@ function AnswerCard({ result, onOpen }: { result: LookupResult; onOpen: () => vo
         {drafts.total > 0 && <Row label="Drafts">{draftCounts}</Row>}
       </dl>
 
-      <LookupIntegrations data={result.integrations} />
+      <LookupIntegrations data={result.integrations} email={result.email} candidateId={candidate?.id ?? null} />
 
       {candidate && (
         <div className="flex justify-end">

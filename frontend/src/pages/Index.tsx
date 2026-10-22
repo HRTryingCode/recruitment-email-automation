@@ -12,6 +12,7 @@ import CandidateTable from '../components/CandidateTable';
 import MailboxFilter from '../components/MailboxFilter';
 import LookupBar from '../components/LookupBar';
 import ThemeToggle from '../components/ThemeToggle';
+import GemConnect from '../components/GemConnect';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { cn } from '../lib/utils';
@@ -102,6 +103,23 @@ export default function Index() {
     const next = new URLSearchParams(searchParams);
     next.delete('mailbox');
     next.delete('reason');
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Gem (F3) OAuth callback feedback.
+  useEffect(() => {
+    const gemParam = searchParams.get('gem');
+    if (!gemParam) return;
+    if (gemParam === 'connected') {
+      toastSuccess('Gem connected', 'Add to Lever will now prefill from Gem.');
+    } else if (gemParam === 'denied') {
+      toastError('Gem connection cancelled');
+    } else {
+      toastError('Gem connection failed', 'Try connecting again from the account menu.');
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete('gem');
     setSearchParams(next, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -319,6 +337,7 @@ export default function Index() {
                       </div>
                     </div>
                   )}
+                  <GemConnect className="border-b border-line" />
                   <DropdownMenu.Item
                     onSelect={handleLogout}
                     className="m-1 flex cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-fg-default outline-none data-[highlighted]:bg-fg-strong/[0.06] data-[highlighted]:text-fg-strong"
