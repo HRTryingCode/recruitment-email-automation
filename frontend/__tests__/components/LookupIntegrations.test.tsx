@@ -1,6 +1,16 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import LookupIntegrations from '../../src/components/LookupIntegrations';
+
+vi.mock('../../src/lib/leverApi', () => ({
+  fetchLeverMe: vi.fn().mockResolvedValue({
+    configured: true,
+    createEnabled: true,
+    appEmail: 'paul.b@archive.com',
+    leverUser: { id: 'lu', name: 'Paul' },
+  }),
+}));
 
 const primary = {
   id: 'opp1',
@@ -54,5 +64,27 @@ describe('<LookupIntegrations /> (F2 Lever slot)', () => {
       />
     );
     expect(screen.getByTestId('lever-badge')).toHaveTextContent('Not in Lever');
+  });
+
+  it('F3: offers "Add to Lever" for a looked-up email that is not in Lever', async () => {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <LookupIntegrations
+          email="new@example.com"
+          candidateId={null}
+          data={{
+            lever: {
+              status: 'NOT_FOUND',
+              state: 'NOT_FOUND',
+              primary: null,
+              opportunities: [],
+              opportunityCount: 0,
+              checkedAt: '2026-10-22T12:00:00.000Z',
+            },
+          }}
+        />
+      </QueryClientProvider>
+    );
+    expect(await screen.findByRole('button', { name: 'Add to Lever' })).toBeInTheDocument();
   });
 });

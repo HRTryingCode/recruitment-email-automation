@@ -17,10 +17,14 @@ import internalCronRouter from './routes/internal-cron';
 import internalStatusRouter from './routes/internal-status';
 import coverageRouter from './routes/coverage';
 import lookupRouter from './routes/lookup';
+import leverRouter from './routes/lever';
+import integrationsGemRouter from './routes/integrations-gem';
 import { handleCallback, watchMailbox, syncMessages } from './services/gmail.service';
 import { consumeOAuthState } from './lib/oauthState';
 import { createError } from './middleware/error';
 import { logEvent } from './services/monitoring.service';
+import { completeGemAuth, appBaseUrl } from './services/gem.service';
+import { safeError } from './lib/safeError';
 
 const app = express();
 
@@ -183,6 +187,35 @@ app.get(
   }
 );
 
+// Gem (GeMCP) OAuth callback (F3). Public for the same reason as the Gmail
+// one; authorized by the one-time `gem-` state, which also names the user.
+// Always redirects back to the SPA so a failure isn't a raw JSON page.
+app.get(
+  '/api/integrations/gem/callback',
+  async (req: Request, res: Response, next: NextFunction) => {
+    const frontendUrl = appBaseUrl();
+    try {
+      const code = qs(req.query.code);
+      const state = qs(req.query.state);
+      if (qs(req.query.error)) return res.redirect(`${frontendUrl}/?gem=denied`);
+      if (!code) return next(createError('Missing authorization code', 400));
+      if (!state) return next(createError('Missing OAuth state parameter', 400));
+      const consumed = await consumeOAuthState(state, 'gem');
+      if (!consumed?.userId) return next(createError('Invalid or expired OAuth state', 400));
+      try {
+        await completeGemAuth(consumed.userId, code);
+      } catch (err) {
+        console.warn('[Gem] callback exchange failed:', safeError(err).message);
+        await logEvent('GEM_CONNECT_FAILED', { userId: consumed.userId, error: safeError(err).message }, 'WARN');
+        return res.redirect(`${frontendUrl}/?gem=error`);
+      }
+      res.redirect(`${frontendUrl}/?gem=connected`);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // ── Authenticated API routes ─────────────────────────────────────────────
 app.use('/api/mailboxes', requireAuth, mailboxesRouter);
 app.use('/api/candidates', requireAuth, candidatesRouter, candidateLeverRouter);
@@ -190,6 +223,8 @@ app.use('/api/emails', requireAuth, emailsRouter);
 app.use('/api/drafts', requireAuth, draftsRouter);
 app.use('/api/coverage', requireAuth, coverageRouter);
 app.use('/api/lookup', requireAuth, lookupRouter);
+app.use('/api/lever', requireAuth, leverRouter);
+app.use('/api/integrations', requireAuth, integrationsGemRouter);
 // Sync-health is JWT-auth-gated (dashboard/debug), not CRON_SECRET. Mounted
 // under /api/internal/ alongside the cron router but using requireAuth.
 app.use('/api/internal', requireAuth, internalStatusRouter);

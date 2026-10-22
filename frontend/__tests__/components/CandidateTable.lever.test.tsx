@@ -19,6 +19,16 @@ vi.mock('../../src/lib/api', () => ({
   unignoreCandidate: vi.fn(),
 }));
 
+// F3: the Add to Lever button asks /api/lever/me whether it may show.
+vi.mock('../../src/lib/leverApi', () => ({
+  fetchLeverMe: vi.fn().mockResolvedValue({
+    configured: true,
+    createEnabled: true,
+    appEmail: 'paul.b@archive.com',
+    leverUser: { id: 'lu', name: 'Paul' },
+  }),
+}));
+
 const base = { mailboxId: 'mb-1', createdAt: '2026-05-19T10:00:00.000Z', updatedAt: '2026-05-20T10:00:00.000Z' };
 const CANDIDATES: Candidate[] = [
   {
@@ -92,5 +102,20 @@ describe('<CandidateTable /> Lever badge (F2)', () => {
     expect(within(row2).getByTestId('lever-badge')).toHaveTextContent('Not in Lever');
     const row3 = screen.getByText('Never Checked').closest('tr')!;
     expect(within(row3).getByTestId('lever-badge')).toHaveAttribute('data-state', 'UNKNOWN');
+  });
+
+  it('F3: "Add to Lever" on not-in-Lever rows, "Add to another job" on in-Lever rows, none when unchecked', async () => {
+    vi.mocked(api.fetchCandidates).mockResolvedValue({
+      success: true,
+      data: CANDIDATES,
+      meta: { total: CANDIDATES.length, page: 1, limit: 100 },
+    });
+    renderTable();
+    const row2 = (await screen.findByText('Nobody Known')).closest('tr')!;
+    expect(await within(row2).findByRole('button', { name: 'Add to Lever' })).toBeInTheDocument();
+    const row1 = screen.getByText('Arron Gould').closest('tr')!;
+    expect(within(row1).getByRole('button', { name: 'Add to another job' })).toBeInTheDocument();
+    const row3 = screen.getByText('Never Checked').closest('tr')!;
+    expect(within(row3).queryByRole('button', { name: /Add to/ })).toBeNull();
   });
 });

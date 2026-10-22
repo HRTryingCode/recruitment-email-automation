@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { getToken, clearToken, clearUser, type User } from './auth';
 
-const api = axios.create({
+export const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL ?? '/api',
   headers: { 'Content-Type': 'application/json' },
 });
@@ -620,6 +620,8 @@ export interface LeverCandidateFields {
 
 export interface LeverOpportunity {
   id: string;
+  /** Posting of the opportunity (F3 "already in Lever for this job" check). */
+  postingId?: string | null;
   postingTitle: string | null;
   stage: string | null;
   archived: boolean;

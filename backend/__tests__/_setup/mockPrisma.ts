@@ -36,6 +36,7 @@ export interface MockPrisma {
   expectedSender: MockedMethods<'findMany' | 'findUnique' | 'upsert' | 'update' | 'delete'>;
   systemLog: MockedMethods<'create' | 'findMany' | 'findFirst'>;
   oAuthState: MockedMethods<'create' | 'findUnique' | 'update' | 'updateMany' | 'deleteMany'>;
+  gemConnection: MockedMethods<'findUnique' | 'upsert' | 'update' | 'updateMany' | 'deleteMany'>;
   $transaction: Mock;
   $queryRaw: Mock;
 }
@@ -83,6 +84,7 @@ export function buildPrismaMock(): MockPrisma {
     expectedSender: methods('findMany', 'findUnique', 'upsert', 'update', 'delete'),
     systemLog: methods('create', 'findMany', 'findFirst'),
     oAuthState: methods('create', 'findUnique', 'update', 'updateMany', 'deleteMany'),
+    gemConnection: methods('findUnique', 'upsert', 'update', 'updateMany', 'deleteMany'),
     $transaction: vi.fn(),
     $queryRaw: vi.fn(),
   };

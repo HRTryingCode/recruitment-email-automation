@@ -109,7 +109,7 @@ Gem sequences are often sent from executive send-aliases (e.g. `ethan@`, `p.beni
 
 ## Lever status (read-only)
 
-Every candidate shows whether they are in Lever (badge in the Candidates table; live in `GET /api/lookup` under `integrations.lever`). The app **only reads** Lever: `services/lever.service.ts` issues GET requests to `https://api.lever.co/v1` and nothing else.
+Every candidate shows whether they are in Lever (badge in the Candidates table; live in `GET /api/lookup` under `integrations.lever`). Status checks only read Lever: `services/lever.service.ts` issues GET requests to `https://api.lever.co/v1` and nothing else. The only Lever writes in the app are F3 [Add to Lever](#add-to-lever-f3) (`services/leverWrite.service.ts`), behind `LEVER_CREATE_ENABLED`.
 
 - **Env var**: `LEVER_API_KEY` (Vercel, Production). Bearer auth. Never logged. Unset = the cron logs `LEVER_SYNC_RUN` as `skipped: unconfigured` (WARN) and leaves candidate rows untouched, and the lookup omits `integrations.lever`.
 - **Cached columns** on `Candidate`: `leverState` (`ACTIVE` | `ARCHIVED` | `HIRED` | `NOT_FOUND` | `ERROR`), `leverOpportunityId`, `leverPostingTitle`, `leverStage`, `leverArchivedReason`, `leverCheckedAt`, `leverError` (short reason code like `http_503`, `timeout`). Primary opportunity = most recently updated active one, else most recently updated archived one. `HIRED` = archived with a hired-type archive reason.
@@ -137,6 +137,30 @@ Failure modes:
 | `leverError = http_429` on many rows | Another integration is sharing the Lever rate budget | Rows retry automatically after 3h; if persistent, lower the cron frequency. |
 | `deadlineReached: true` every run | More stale candidates than one run can check | Fine — the oldest are checked first, so all rows rotate through. |
 | Badge says "Lever unknown" with "not checked yet" | Candidate created since the last run | Wait for the next run or use the refresh endpoint. |
+
+## Add to Lever (F3)
+
+Recruiters add a candidate who isn't in Lever (or add them to another job) from the Candidates table or the ⌘K lookup card. The dialog proposes the payload; the recruiter confirms the job (suggested from `Candidate.role`), stage (default **Interest Call**), name/headline/location/LinkedIn. The opportunity is created **as the clicking recruiter** (`perform_as` = their Lever user, matched by app email; owner = same), with `origin: sourced`, source `Gem outreach`, a tag for the sourcing inbox (`paul.b`), one posting, and a note linking back to the conversation with the candidate's latest reply (≤ 500 chars).
+
+- **Flag**: `LEVER_CREATE_ENABLED=true` turns creation on. Anything else → `403 "Add to Lever is turned off"` and the button is shown disabled. Turn it on only after a supervised first create.
+- **Key scopes**: `LEVER_API_KEY` must allow `opportunities:write:admin` and `notes:write` (plus the reads: `postings`, `users`, `stages`). A read-only key makes creates fail with "the API key lacks permission".
+- **Endpoints** (all `requireAuth`): `GET /api/lever/postings` (published + internal postings, both channels, cached 10 min per instance, plus stages), `GET /api/lever/me`, `GET /api/candidates/:id/lever/prefill`, `POST /api/candidates/:id/lever`, `GET /api/lookup/lever-prefill?email=`, `POST /api/lookup/lever`.
+- **Guards on create**: the posting must still be open (400), the stage must exist (400), the clicker must have an active Lever user (`409 "Your Lever account wasn't found for <email>"`), Lever must answer the duplicate check (502 otherwise — never created blind), and the email must not already have an opportunity on **that** posting (409 with a link). Other postings are fine ("Add to another job"). Note: Lever dedupes contacts by email, so a new opportunity on an existing contact keeps the contact's existing data.
+- **Idempotency**: the dialog sends one `idempotencyKey` per open. The same key within 10 min returns the first result: in-process via a shared in-flight promise, across instances via the `LEVER_OPPORTUNITY_CREATED` SystemLog row (which carries the key). Writes are never retried on timeout/5xx (Lever may have processed them); 429 is retried once.
+- **Audit**: `LEVER_OPPORTUNITY_CREATED` SystemLog `{actorUserId, candidateId, opportunityId, postingId, idempotencyKey}` — ids only.
+- **Résumé**: if the recruiter's Gem connection finds the person and has a résumé, it is downloaded from Gem's presigned URL (https only, PDF/DOC/DOCX, ≤ 10 MB, 15 s) and streamed into a multipart create with `parse=true`. Nothing is stored. Any problem → create without it (`resumeAttached: false`). Phones are sent on the JSON path only; on the multipart path Lever's résumé parser fills them (Lever doesn't document multipart phone encoding).
+- **After create**: the note is added (failure is reported, not fatal), `Candidate.linkedinUrl` is saved, and the candidate's Lever columns are refreshed so the badge updates.
+
+### Gem enrichment (GeMCP)
+
+Each recruiter connects **their own** Gem account (account menu → Gem: Connect). The app talks to Gem's MCP server `https://mcp.gem.com/mcp` with the official MCP TypeScript SDK (`@modelcontextprotocol/sdk`, pinned) and only calls the read-only tools `search` (kind `person`, by email) and `get_person` (`work_history`, `resumes`).
+
+- **OAuth**: MCP OAuth 2.1. Gem publishes RFC 9728 metadata (`authorization_servers: ["https://www.gem.com"]`) and an authorization server with a `registration_endpoint`, PKCE `S256` and `token_endpoint_auth_method: none` (checked 2026-10-22). So **no pre-registered client**: the first connect dynamically registers a public client for redirect URI **`<FRONTEND_URL>/api/integrations/gem/callback`** (prod: `https://recruiting-email-automation-api.vercel.app/api/integrations/gem/callback`). The registration is stored per user on `GemConnection.clientRegistration`.
+- **Storage**: `GemConnection` (one per user): tokens encrypted with `ENCRYPTION_KEY` (lib/crypto), PKCE verifier encrypted while an authorize is in flight, `status` `PENDING` | `OK` | `NEEDS_REAUTH`, `lastError` (sanitized). State is bound to the user with a one-time `gem-` OAuthState row; the Gmail callback refuses `gem-` states and vice versa.
+- **Refresh**: tokens expiring within 60 s are refreshed; a failed refresh (or a 401 from the MCP server) flips the row to `NEEDS_REAUTH` once and logs `GEM_AUTH_REVOKED` (WARN). The account menu then shows "Gem: reconnect needed".
+- **Degrade**: Gem is optional and not a versioned API. Every lookup is time-boxed at 10 s and parsed defensively; any surprise → "Gem unavailable — paste LinkedIn manually" and the dialog still works.
+- **Stored from Gem**: only the LinkedIn URL (`Candidate.linkedinUrl`). Presigned résumé URLs never reach the browser or the logs.
+- **Events**: `GEM_CONNECTED`, `GEM_DISCONNECTED`, `GEM_CONNECT_FAILED`, `GEM_AUTH_REVOKED` (userId only).
 
 ## Common incidents
 
@@ -336,7 +360,10 @@ Set under **Project Settings → Environment Variables** (Production scope).
 | `PUBSUB_SERVICE_ACCOUNT_EMAIL` | Push subscription's service account; required `email` claim on webhook JWTs when `PUBSUB_AUDIENCE` is set. |
 | `ORPHAN_BODY_RETENTION_DAYS` | Optional, destructive. Enables the daily orphan-body purge (integer ≥ 7). Unset = no-op. |
 | `CRON_SECRET` | Bearer secret for `/api/internal/cron/*`. |
-| `LEVER_API_KEY` | Lever API key (read-only use, Bearer). Optional — unset = Lever status disabled. See [Lever status](#lever-status-read-only). |
+| `LEVER_API_KEY` | Lever API key (Bearer). Optional — unset = Lever status and Add to Lever disabled. Add to Lever needs `opportunities:write:admin` + `notes:write`. See [Lever status](#lever-status-read-only) and [Add to Lever](#add-to-lever-f3). |
+| `LEVER_CREATE_ENABLED` | `true` enables Add to Lever creates (F3). Anything else = off (403, button disabled). |
+| `GEM_MCP_URL` | Optional — defaults to `https://mcp.gem.com/mcp`. |
+| `GEM_OAUTH_REDIRECT_BASE` | Optional — origin for the Gem OAuth redirect URI; defaults to `FRONTEND_URL`, else the prod domain on Vercel. |
 | `SLACK_ALERT_WEBHOOK_URL` | Slack incoming-webhook URL for watchdog alerts. Optional — unset = alerting disabled (no-op, warned once). See [Alerting](#alerting). |
 | `DRAFT_CC_EMAIL` | Optional — defaults to `sofia@archive.com`. The default CC stored on each new draft (`EmailDraft.ccEmail`); drafts created before migration `9e_draft_cc` (NULL) keep using it. |
 | `DRAFT_CC_OPTIONS` | Comma-separated recruitment-team addresses offered in the draft CC dropdown and accepted by `PATCH /api/drafts/:id { ccEmail }` (plus "No CC"). Deliberately **not** derived from `ADMIN_EMAILS`/admin role. Unset = only `DRAFT_CC_EMAIL`. Prod: `sofia@archive.com,andriy.korzhenevskyy@archive.com,catalina.roman@archive.com`. Read per request. |

@@ -19,7 +19,8 @@ function status(state: LeverStatus['state'], extra: Partial<LeverStatus> = {}): 
     state === 'ACTIVE' || state === 'ARCHIVED' || state === 'HIRED'
       ? {
           id: 'opp1',
-          postingTitle: 'Founding Engineer',
+          postingId: 'post-1',
+  postingTitle: 'Founding Engineer',
           stage: 'Interest Call',
           archived: state !== 'ACTIVE',
           hired: state === 'HIRED',

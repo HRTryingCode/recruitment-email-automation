@@ -4,10 +4,15 @@ import axios from 'axios';
 const ERROR_DURATION = 6000;
 const SUCCESS_DURATION = 4000;
 
-export function toastSuccess(message: string, description?: string) {
+export function toastSuccess(
+  message: string,
+  description?: string,
+  action?: { label: string; onClick: () => void }
+) {
   return sonner.success(message, {
     description,
-    duration: SUCCESS_DURATION,
+    duration: action ? ERROR_DURATION : SUCCESS_DURATION,
+    ...(action && { action }),
   });
 }
 

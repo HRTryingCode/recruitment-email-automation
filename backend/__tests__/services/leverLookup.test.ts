@@ -4,6 +4,7 @@ import type { LeverStatus } from '../../src/services/lever.service';
 
 const primary = {
   id: 'opp1',
+  postingId: 'post-1',
   postingTitle: 'Founding Engineer',
   stage: 'Interest Call',
   archived: false,

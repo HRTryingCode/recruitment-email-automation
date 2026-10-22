@@ -1,5 +1,5 @@
-// Read-only Lever client (F2). GET requests only — this batch must never
-// create or modify anything in Lever.
+// Read-only Lever client (F2). GET requests only. The only Lever writes in
+// the app (F3 Add to Lever) live in leverWrite.service.ts.
 //
 // Auth: `Authorization: Bearer <LEVER_API_KEY>` against https://api.lever.co/v1.
 // Lever allows ~10 req/s (bursts of 20), so every request goes through a
@@ -15,6 +15,8 @@ export type LeverState = 'ACTIVE' | 'ARCHIVED' | 'HIRED' | 'NOT_FOUND' | 'ERROR'
 
 export interface LeverOpportunity {
   id: string;
+  /** Posting of the opportunity's first application (F3 duplicate check). */
+  postingId: string | null;
   postingTitle: string | null;
   stage: string | null;
   archived: boolean;
@@ -71,7 +73,7 @@ export class TokenBucket {
 }
 
 // Module-wide so concurrent lookups in one function instance share the budget.
-const sharedBucket = new TokenBucket(8, 8);
+export const sharedBucket = new TokenBucket(8, 8);
 
 class LeverError extends Error {
   constructor(readonly reason: string) {
@@ -243,6 +245,7 @@ export class LeverClient {
     const stage = typeof raw.stage === 'string' ? null : raw.stage?.text ?? null;
     return {
       id: raw.id,
+      postingId,
       postingTitle: postingId ? await this.postingTitle(postingId) : null,
       stage,
       archived,
