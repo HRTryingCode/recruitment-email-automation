@@ -87,7 +87,8 @@ export default function JobCombobox({ postings, value, onChange, suggestedId, in
       </PopoverTrigger>
       <PopoverContent align="start" className="w-[--radix-popover-trigger-width] p-0">
         <Command filter={jobFilter}>
-          <CommandInput aria-label="Search jobs" placeholder="Search jobs…" />
+          {/* bg-transparent: the raw cmdk input otherwise paints the UA white box in light mode. */}
+          <CommandInput aria-label="Search jobs" placeholder="Search jobs…" className="bg-transparent" />
           <CommandList>
             <CommandEmpty>No open jobs match</CommandEmpty>
             {suggested && <CommandGroup heading="Suggested">{item(suggested)}</CommandGroup>}

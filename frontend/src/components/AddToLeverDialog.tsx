@@ -246,7 +246,7 @@ function AddToLeverForm({
       )}
 
       {needsConnect && (
-        <Alert className="border-border pr-36">
+        <Alert className="has-[[data-slot=alert-action]]:pr-40">
           <AlertDescription>
             {gemStatus === 'NEEDS_REAUTH'
               ? 'Gem needs reconnecting to fill in LinkedIn, title, location and résumé'
