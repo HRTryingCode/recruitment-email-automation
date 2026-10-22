@@ -19,6 +19,9 @@ vi.mock('../../src/services/claude.service', async (importOriginal) => {
 // H2: new candidates get a background Lever check.
 const { scheduleLeverRefresh } = vi.hoisted(() => ({ scheduleLeverRefresh: vi.fn() }));
 vi.mock('../../src/services/leverRealtime.service', () => ({ scheduleLeverRefresh }));
+// H5: and a background Gem lookup (cache for the Add to Lever dialog).
+const { scheduleGemEnrichment } = vi.hoisted(() => ({ scheduleGemEnrichment: vi.fn() }));
+vi.mock('../../src/services/gemEnrichment.service', () => ({ scheduleGemEnrichment }));
 
 import { prisma as injectedPrisma } from '../../src/db/client';
 import {
@@ -150,6 +153,7 @@ describe('classifyAndDraft — Lever check on create (H2)', () => {
     resetPrismaMock(mockPrisma);
     classifyReply.mockReset();
     scheduleLeverRefresh.mockReset();
+    scheduleGemEnrichment.mockReset();
   });
 
   it('schedules a Lever refresh for a newly created candidate', async () => {
@@ -160,11 +164,19 @@ describe('classifyAndDraft — Lever check on create (H2)', () => {
     expect(scheduleLeverRefresh).toHaveBeenCalledWith('cand-1', 'created');
   });
 
+  it('schedules a background Gem lookup as the mailbox owner for a newly created candidate', async () => {
+    const thread = setup();
+    classifyReply.mockResolvedValue(classification({ classification: 'INTERESTED' }));
+    await classifyAndDraft({ mailbox, thread, parsed: parsed() });
+    expect(scheduleGemEnrichment).toHaveBeenCalledWith('cand-1', 'created', { mailboxEmail: mailbox.emailAddress });
+  });
+
   it('does not schedule one for an existing candidate', async () => {
     const thread = setup({ existing: { id: 'cand-1', email: 'cand@example.com', status: 'NEUTRAL', role: 'X', lastInboundAt: null } });
     classifyReply.mockResolvedValue(classification({}));
     await classifyAndDraft({ mailbox, thread, parsed: parsed() });
     expect(scheduleLeverRefresh).not.toHaveBeenCalled();
+    expect(scheduleGemEnrichment).not.toHaveBeenCalled();
   });
 });
 
