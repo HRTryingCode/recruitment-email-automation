@@ -87,26 +87,36 @@ jobs:
   # itself (see e2e/playwright.config.ts) against a throwaway Postgres.
   # Every secret below is a CI-only dummy; nothing here talks to Gmail,
   # Anthropic, Supabase or Vercel.
+  #
+  # Runs inside the official Playwright image so Chromium and its OS deps
+  # are preinstalled (installing them per run cost 20s–10min of apt-get).
+  # The image tag MUST match the @playwright/test version in
+  # package-lock.json, or Playwright won't find its browser build.
+  # No `needs:` — this job builds its own stack, so it runs in parallel
+  # with backend/frontend.
   e2e:
     runs-on: ubuntu-latest
-    needs: [backend, frontend]
+    timeout-minutes: 10
+    container:
+      image: mcr.microsoft.com/playwright:v1.60.0-noble
     services:
+      # Reached as host `postgres` from inside the job container.
       postgres:
         image: postgres:16
         env:
           POSTGRES_USER: ci
           POSTGRES_PASSWORD: ci
           POSTGRES_DB: ci
-        ports:
-          - 5432:5432
         options: >-
           --health-cmd "pg_isready -U ci"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
     env:
-      POSTGRES_PRISMA_URL: postgresql://ci:ci@localhost:5432/ci?schema=public
-      POSTGRES_URL_NON_POOLING: postgresql://ci:ci@localhost:5432/ci?schema=public
+      # Playwright's image expects HOME=/root when running as root.
+      HOME: /root
+      POSTGRES_PRISMA_URL: postgresql://ci:ci@postgres:5432/ci?schema=public
+      POSTGRES_URL_NON_POOLING: postgresql://ci:ci@postgres:5432/ci?schema=public
       NODE_ENV: test
       PORT: '3001'
       ALLOWED_ORIGINS: http://localhost:4173
@@ -130,6 +140,5 @@ jobs:
         run: cd backend && npx prisma migrate deploy
       - name: Build frontend
         run: cd frontend && npm run build
-      - run: cd e2e && npx playwright install chromium --with-deps
       - name: Run e2e against the local stack
         run: cd e2e && npm test
