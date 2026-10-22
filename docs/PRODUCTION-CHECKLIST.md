@@ -67,6 +67,16 @@ smoke` (or `./scripts/smoke-test.sh <base-url>`) and confirm 7/7 PASS.
 - [ ] Vercel runtime logs from the last 24h show no unhandled errors (filter
       by `level: error`).
 
+### Release gates
+
+- [ ] **Branch protection** on `claude/email-automation-system-OEgcU` with the
+      `tests` workflow (backend, frontend, e2e jobs) as a required check.
+      Only the repo owner can enable this.
+- [ ] **Vercel waits for checks** before promoting a production deploy, so a
+      red CI run can't ship.
+- [ ] **Migration PRs get explicit sign-off before merge** — `vercel-build`
+      runs `prisma migrate deploy` against prod on every deploy.
+
 ## Post-launch (rolling checks)
 
 - [ ] `scripts/smoke-test.sh` (or `npm --prefix backend run smoke`) reports
@@ -74,8 +84,11 @@ smoke` (or `./scripts/smoke-test.sh <base-url>`) and confirm 7/7 PASS.
 - [ ] `GET /api/internal/sync-health` (with an admin JWT) shows, for every
       mailbox:
   - [ ] `watchExpiresInHours > 0` (active Gmail watch).
-  - [ ] `lastReconciliationFoundMissing === 0` across the past 24h (no
-        webhook drops slipping past).
+  - [ ] `lastReconciliationFoundMissing` is small and not growing. It only
+        reflects the most recent reconcile run, and reconcile currently
+        ingests most mail (the webhook path is unreliable), so a non-zero
+        value is expected today — investigate a sustained climb, not a
+        single non-zero.
   - [ ] `messagesLast24h > 0` for mailboxes that are actively receiving
         candidate traffic.
 - [ ] Vercel Cron history shows:
@@ -91,8 +104,12 @@ smoke` (or `./scripts/smoke-test.sh <base-url>`) and confirm 7/7 PASS.
   within ~1h, so check `/api/internal/sync-health` for a non-zero
   `lastReconciliationFoundMissing` to confirm whether the gap is closing.
 - **Watch expired.** Manually invoke
-  `POST /api/internal/cron/renew-watches` with `Authorization: Bearer
-  $CRON_SECRET`. Confirm `watchExpiresInHours` jumps back above zero.
+  `GET /api/internal/cron/renew-watches` with `Authorization: Bearer
+  $CRON_SECRET` (POST is not accepted). Confirm `watchExpiresInHours` jumps
+  back above zero. If it doesn't, the mailbox's OAuth grant is probably revoked
+  (`invalid_grant` in `RECONCILIATION_FAILED` SystemLog rows): renewing cannot
+  fix that — the mailbox owner must reconnect via Mailboxes → Connect, then
+  run a resync.
 - **Stale draft persona.** Have an admin call
   `POST /api/drafts/regenerate-pending` to refresh outstanding drafts with
   the current persona/mailbox settings.

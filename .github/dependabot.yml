@@ -1,0 +1,31 @@
+# Weekly grouped dependency PRs (audit L20). One npm entry covers the whole
+# workspace (root package-lock.json holds backend, frontend and e2e).
+# Majors come as separate PRs so a breaking bump never hides in a batch.
+# Dependabot PRs target the deploy branch and must pass the `tests` workflow.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    target-branch: claude/email-automation-system-OEgcU
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      npm-security:
+        applies-to: security-updates
+        patterns: ['*']
+      npm-minor-and-patch:
+        applies-to: version-updates
+        patterns: ['*']
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: claude/email-automation-system-OEgcU
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      github-actions:
+        patterns: ['*']
