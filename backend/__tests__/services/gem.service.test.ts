@@ -72,7 +72,7 @@ function fakeAuthFetch(opts: { tokenStatus?: number; omitRefreshToken?: boolean 
 type ToolImpl = (args: Record<string, unknown>) => unknown | Promise<unknown>;
 function fakeGemMcp(tools: Record<string, ToolImpl>) {
   const seen: Array<{ name: string; args: Record<string, unknown> }> = [];
-  const factory = () => {
+  const factory = (_token?: string) => {
     const server = new Server({ name: 'fake-gem', version: '0.0.0' }, { capabilities: { tools: {} } });
     server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: Object.keys(tools).map((name) => ({ name, inputSchema: { type: 'object' as const } })),
@@ -344,8 +344,8 @@ describe('lookupGemPerson speed (H5)', () => {
     mockPrisma.gemConnection.findUnique.mockResolvedValue(okConnection());
     const gem = fakeGemMcp({ search: () => ({ results: [{ ext_id: 'g-1' }] }), get_person: () => PERSON });
     const first = await lookupGemPerson(USER, 'jane@example.com', { transportFactory: gem.factory });
-    expect(first.timings).toMatchObject({ cold: true, clientReused: false, tokenRefreshMs: 0 });
-    for (const k of ['tokenMs', 'mcpConnectMs', 'searchMs', 'getPersonMs', 'totalMs'] as const) {
+    expect(first.timings).toMatchObject({ cold: true, clientReused: false, authRefreshMs: 0 });
+    for (const k of ['authMs', 'mcpConnectMs', 'searchMs', 'getPersonMs', 'totalMs'] as const) {
       expect(typeof first.timings![k]).toBe('number');
     }
     const second = await lookupGemPerson(USER, 'jane@example.com', { transportFactory: gem.factory });
@@ -355,7 +355,7 @@ describe('lookupGemPerson speed (H5)', () => {
   it('reuses the MCP client for the same user + token (one connect for two lookups)', async () => {
     mockPrisma.gemConnection.findUnique.mockResolvedValue(okConnection());
     const gem = fakeGemMcp({ search: () => ({ results: [{ ext_id: 'g-1' }] }), get_person: () => PERSON });
-    const factory = vi.fn(gem.factory);
+    const factory = vi.fn((token: string) => gem.factory(token));
     await lookupGemPerson(USER, 'jane@example.com', { transportFactory: factory });
     await lookupGemPerson(USER, 'jane@example.com', { transportFactory: factory });
     expect(factory).toHaveBeenCalledTimes(1);
@@ -364,7 +364,7 @@ describe('lookupGemPerson speed (H5)', () => {
 
   it('a new access token opens a new client', async () => {
     const gem = fakeGemMcp({ search: () => ({ results: [] }), get_person: () => PERSON });
-    const factory = vi.fn(gem.factory);
+    const factory = vi.fn((token: string) => gem.factory(token));
     mockPrisma.gemConnection.findUnique.mockResolvedValueOnce(okConnection());
     await lookupGemPerson(USER, 'a@b.com', { transportFactory: factory });
     mockPrisma.gemConnection.findUnique.mockResolvedValueOnce(
@@ -384,7 +384,7 @@ describe('lookupGemPerson speed (H5)', () => {
       },
       get_person: () => PERSON,
     });
-    const factory = vi.fn(gem.factory);
+    const factory = vi.fn((token: string) => gem.factory(token));
     expect((await lookupGemPerson(USER, 'a@b.com', { transportFactory: factory })).status).toBe('UNAVAILABLE');
     fail = false;
     expect((await lookupGemPerson(USER, 'a@b.com', { transportFactory: factory })).status).toBe('NOT_FOUND');

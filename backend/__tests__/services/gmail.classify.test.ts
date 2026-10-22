@@ -168,7 +168,7 @@ describe('classifyAndDraft — Lever check on create (H2)', () => {
     const thread = setup();
     classifyReply.mockResolvedValue(classification({ classification: 'INTERESTED' }));
     await classifyAndDraft({ mailbox, thread, parsed: parsed() });
-    expect(scheduleGemEnrichment).toHaveBeenCalledWith('cand-1', 'created', { mailboxEmail: mailbox.emailAddress });
+    expect(scheduleGemEnrichment).toHaveBeenCalledWith('cand-1', 'created', { mailboxEmail: 'emaenza@archive.com' });
   });
 
   it('does not schedule one for an existing candidate', async () => {

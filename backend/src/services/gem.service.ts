@@ -335,8 +335,8 @@ export type GemLookupStatus = 'FOUND' | 'NOT_FOUND' | 'NOT_CONNECTED' | 'NEEDS_R
 /** Where a lookup's time went (ms). Logged on GEM_PREFILL; no PII. */
 export interface GemTimings {
   /** DB read + decrypt + any refresh. */
-  tokenMs: number;
-  tokenRefreshMs: number;
+  authMs: number;
+  authRefreshMs: number;
   /** MCP initialize handshake; 0 when a cached client was reused. */
   mcpConnectMs: number;
   searchMs: number;
@@ -523,8 +523,8 @@ export async function lookupGemPerson(
   const cold = !instanceWarm;
   instanceWarm = true;
   const timings: GemTimings = {
-    tokenMs: 0,
-    tokenRefreshMs: 0,
+    authMs: 0,
+    authRefreshMs: 0,
     mcpConnectMs: 0,
     searchMs: 0,
     getPersonMs: 0,
@@ -546,8 +546,8 @@ export async function lookupGemPerson(
     console.warn('[Gem] token lookup failed:', safeError(err).message);
     return done(unavailable);
   } finally {
-    timings.tokenMs = Date.now() - t0;
-    timings.tokenRefreshMs = stats.refreshMs ?? 0;
+    timings.authMs = Date.now() - t0;
+    timings.authRefreshMs = stats.refreshMs ?? 0;
   }
   if (!token.ok) return done({ status: token.status });
 

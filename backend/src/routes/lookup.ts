@@ -10,11 +10,13 @@ import {
 } from '../lib/lookup';
 import { leverLookupIntegration, type LeverLookupIntegration } from '../services/leverLookup';
 import {
+  buildGemPrefill,
   buildPrefill,
   createInLever,
   createRequestSchema,
   findCandidateForPrefill,
   isLeverCreateEnabled,
+  prefillServerTiming,
   toHttpError,
 } from '../services/addToLever.service';
 
@@ -227,12 +229,30 @@ router.get('/lever-prefill', async (req: Request, res: Response, next: NextFunct
   try {
     const email = normalizeLookupEmail(req.query.email);
     if (!email) return next(createError('email must be a single valid email address', 400));
+    const t0 = Date.now();
     const candidate = await findCandidateForPrefill({ email });
-    const data = await buildPrefill({ actorUserId: req.userId!, email, candidate });
-    res.json({ success: true, data });
+    const lookupMs = Date.now() - t0;
+    const { prefill, timings } = await buildPrefill({ actorUserId: req.userId!, email, candidate });
+    const t = { ...timings, dbMs: timings.dbMs + lookupMs, totalMs: Date.now() - t0 };
+    console.info('[AddToLever] prefill timings', t);
+    res.setHeader('Server-Timing', prefillServerTiming(t));
+    res.json({ success: true, data: prefill });
   } catch (err) {
     const mapped = toHttpError(err);
     if (mapped) return res.status(mapped.status).json(mapped.body);
+    next(err);
+  }
+});
+
+// GET /api/lookup/lever-prefill/gem?email= — Gem half of the prefill (H5).
+router.get('/lever-prefill/gem', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const email = normalizeLookupEmail(req.query.email);
+    if (!email) return next(createError('email must be a single valid email address', 400));
+    const candidate = await findCandidateForPrefill({ email });
+    const data = await buildGemPrefill({ actorUserId: req.userId!, email, candidate });
+    res.json({ success: true, data });
+  } catch (err) {
     next(err);
   }
 });
@@ -247,12 +267,13 @@ router.post('/lever', async (req: Request, res: Response, next: NextFunction) =>
     if (!body.success) return next(createError(body.error.issues[0]?.message ?? 'Invalid request', 400));
     const candidate = await prisma.candidate.findFirst({
       where: { email: { equals: email, mode: 'insensitive' } },
-      select: { id: true },
+      select: { id: true, gemPersonId: true },
     });
     const data = await createInLever({
       actorUserId: req.userId!,
       email,
       candidateId: candidate?.id ?? null,
+      gemPersonId: candidate?.gemPersonId ?? null,
       req: body.data,
     });
     res.status(data.duplicateRequest ? 200 : 201).json({ success: true, data });
