@@ -7,10 +7,13 @@ vi.mock('../../src/db/client', () => {
   return { prisma, default: prisma };
 });
 
-const { classifyReply } = vi.hoisted(() => ({ classifyReply: vi.fn() }));
+const { classifyReply, generateHandoffDraftReply } = vi.hoisted(() => ({
+  classifyReply: vi.fn(),
+  generateHandoffDraftReply: vi.fn(),
+}));
 vi.mock('../../src/services/claude.service', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/services/claude.service')>();
-  return { ...actual, classifyReply };
+  return { ...actual, classifyReply, generateHandoffDraftReply };
 });
 
 // H2: new candidates get a background Lever check.
@@ -270,8 +273,45 @@ describe('recordOutboundMessage (H6, M14)', () => {
     expect(JSON.parse(superseded!.details)).toMatchObject({ reason: 'manual_reply', count: 2 });
   });
 
+  it('a manual reply also cancels a SCHEDULED one-step send, but never an in-flight SENDING one (U0)', async () => {
+    mockPrisma.candidate.updateMany.mockResolvedValue({ count: 1 });
+    mockPrisma.emailMessage.findFirst.mockResolvedValue({ id: 'in-1' });
+    mockPrisma.candidate.update.mockResolvedValue({});
+    mockPrisma.emailDraft.updateMany.mockResolvedValue({ count: 1 });
+    await recordOutboundMessage(mailbox, { id: 'th-1', candidateId: 'cand-1' }, at);
+    const where = mockPrisma.emailDraft.updateMany.mock.calls[0][0].where;
+    expect(where.status.in).toContain('SCHEDULED');
+    expect(where.status.in).not.toContain('SENDING');
+  });
+
   it('does nothing for a thread with no candidate', async () => {
     await recordOutboundMessage(mailbox, { id: 'th-1', candidateId: null }, at);
     expect(mockPrisma.candidate.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('classifyAndDraft — auto-drafted reply records AI body + evidence (U0)', () => {
+  beforeEach(() => {
+    resetPrismaMock(mockPrisma);
+    classifyReply.mockReset();
+    generateHandoffDraftReply.mockReset();
+  });
+
+  it('stores aiBodyText, classificationReason and evidenceQuote on the new draft', async () => {
+    const thread = setup();
+    mockPrisma.emailDraft.findFirst.mockResolvedValue(null); // no live draft: go on to draft
+    mockPrisma.emailDraft.create.mockResolvedValue({ id: 'd-new' });
+    mockPrisma.mailbox.findUnique.mockResolvedValue(null);
+    classifyReply.mockResolvedValueOnce(
+      classification({ classification: 'INTERESTED', reason: 'Wants to talk', evidenceQuote: 'body' })
+    );
+    generateHandoffDraftReply.mockResolvedValueOnce({ subject: 'Re: Role', bodyText: 'Hi Cand', bodyHtml: '<div>Hi Cand</div>' });
+
+    await classifyAndDraft({ mailbox, thread, parsed: parsed() });
+
+    expect(mockPrisma.emailDraft.create).toHaveBeenCalledTimes(1);
+    const data = mockPrisma.emailDraft.create.mock.calls[0][0].data;
+    expect(data.aiBodyText).toBe(data.bodyText);
+    expect(data).toMatchObject({ classificationReason: 'Wants to talk', evidenceQuote: 'body' });
   });
 });

@@ -6,7 +6,8 @@ import { loadApp } from '../_setup/testApp';
 
 // Both cron endpoints reach into gmail.service. Hoisted mocks let each test
 // program the renewGmailWatches count and the per-mailbox reconcile result.
-const { renewGmailWatches, reconcileMailbox, sweepStuckMessages, pruneSystemLog } = vi.hoisted(() => ({
+const { renewGmailWatches, reconcileMailbox, sweepStuckMessages, pruneSystemLog, sweepScheduledSends } = vi.hoisted(() => ({
+  sweepScheduledSends: vi.fn(),
   renewGmailWatches: vi.fn(),
   reconcileMailbox: vi.fn(),
   sweepStuckMessages: vi.fn(),
@@ -14,6 +15,7 @@ const { renewGmailWatches, reconcileMailbox, sweepStuckMessages, pruneSystemLog 
 }));
 
 vi.mock('../../src/services/systemLogRetention.service', () => ({ pruneSystemLog }));
+vi.mock('../../src/services/draftSend.service', () => ({ sweepScheduledSends }));
 
 vi.mock('../../src/services/gmail.service', async () => {
   const actual = await vi.importActual<typeof import('../../src/services/gmail.service')>(
@@ -47,6 +49,7 @@ describe('/api/internal/cron', () => {
     renewGmailWatches.mockReset();
     reconcileMailbox.mockReset();
     sweepStuckMessages.mockReset();
+    sweepScheduledSends.mockReset().mockResolvedValue({ sent: 0, failed: 0, skipped: 0, interrupted: 0 });
     pruneSystemLog.mockReset();
     app = await loadApp();
   });
@@ -297,10 +300,32 @@ describe('/api/internal/cron', () => {
         .get('/api/internal/cron/sweep-stuck-messages')
         .set('Authorization', `Bearer ${CRON_SECRET}`);
       expect(res.status).toBe(200);
-      expect(res.body.data).toEqual({ found: 3, processed: 2, failed: 1, skipped: 0 });
+      expect(res.body.data).toMatchObject({ found: 3, processed: 2, failed: 1, skipped: 0 });
       expect(sweepStuckMessages).toHaveBeenCalledWith(
         expect.objectContaining({ deadline: expect.any(Number) })
       );
+    });
+
+    it('also sends one-step-send drafts whose waitUntil timer was lost (U0)', async () => {
+      sweepStuckMessages.mockResolvedValueOnce({ found: 0, processed: 0, failed: 0, skipped: 0 });
+      sweepScheduledSends.mockResolvedValueOnce({ sent: 2, failed: 0, skipped: 0, interrupted: 1 });
+      const res = await request(app)
+        .get('/api/internal/cron/sweep-stuck-messages')
+        .set('Authorization', `Bearer ${CRON_SECRET}`);
+      expect(res.status).toBe(200);
+      expect(sweepScheduledSends).toHaveBeenCalledTimes(1);
+      expect(res.body.data.scheduledSends).toEqual({ sent: 2, failed: 0, skipped: 0, interrupted: 1 });
+    });
+
+    it('a scheduled-send sweep failure does not stop the message sweep', async () => {
+      sweepScheduledSends.mockRejectedValueOnce(new Error('db blip'));
+      sweepStuckMessages.mockResolvedValueOnce({ found: 1, processed: 1, failed: 0, skipped: 0 });
+      const res = await request(app)
+        .get('/api/internal/cron/sweep-stuck-messages')
+        .set('Authorization', `Bearer ${CRON_SECRET}`);
+      expect(res.status).toBe(200);
+      expect(sweepStuckMessages).toHaveBeenCalled();
+      expect(res.body.data.scheduledSends).toBeNull();
     });
   });
 

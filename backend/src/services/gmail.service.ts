@@ -17,10 +17,11 @@ import {
 import { COMPANY_DOMAIN, isCompanyEmail } from '../lib/accessPolicy';
 import { createError } from '../middleware/error';
 import { composeDraftHtml, encodeHeaderValue, escapeHtml, isRfcMessageId, sanitizeReferences, stripHeaderBreaks } from '../lib/draftBody';
-import { normalizeEmail, resolveCandidateStatus, shouldSkipNotRecruiting } from '../lib/candidateState';
+import { normalizeEmail, resolveCandidateStatus, shouldSkipNotRecruiting, LOW_CONFIDENCE_THRESHOLD } from '../lib/candidateState';
 import { loopInSentence } from '../lib/handoffLoopIn';
 import { ccFirstName, resolveDraftCc, NO_CC } from './draftCc.service';
 import type { Mailbox, EmailThread, Prisma } from '@prisma/client';
+import { LIVE_DRAFT_STATUSES, CANCELABLE_DRAFT_STATUSES } from '../lib/draftStatus';
 
 /**
  * Serialize an OAuth2 / service-account credentials object for storage.
@@ -493,7 +494,7 @@ export async function findBlockingDraft(
   threadId: string,
   isHandoffInbox: boolean
 ): Promise<{ id: string; status: string } | null> {
-  const statuses = isHandoffInbox ? ['PENDING', 'APPROVED', 'SENT'] : ['PENDING', 'APPROVED'];
+  const statuses: string[] = isHandoffInbox ? [...LIVE_DRAFT_STATUSES, 'SENT'] : [...LIVE_DRAFT_STATUSES];
   return prisma.emailDraft.findFirst({
     where: { threadId, status: { in: statuses } },
     select: { id: true, status: true },
@@ -660,7 +661,7 @@ export async function classifyAndDraft(opts: {
     return;
   }
 
-  const lowConfidence = confidence < 0.7;
+  const lowConfidence = confidence < LOW_CONFIDENCE_THRESHOLD;
   // The candidate-level status we want to write. NEEDS_REVIEW for any low-trust
   // signal so a human looks before we auto-draft.
   const desiredStatus =
@@ -835,8 +836,11 @@ export async function classifyAndDraft(opts: {
         subject: content.subject,
         bodyText: content.bodyText,
         bodyHtml: content.bodyHtml,
+        aiBodyText: content.bodyText,
         classification,
         confidence,
+        classificationReason: classificationResult.reason ?? null,
+        evidenceQuote: classificationResult.evidenceQuote ?? null,
         status: 'PENDING',
         ccEmail: draftCcAddressFor(mailbox.emailAddress) ?? NO_CC,
         ...draftMetaColumns(content.meta),
@@ -902,8 +906,11 @@ export async function classifyAndDraft(opts: {
         subject: draftReply.subject,
         bodyText: draftReply.bodyText,
         bodyHtml: draftReply.bodyHtml,
+        aiBodyText: draftReply.bodyText,
         classification,
         confidence,
+        classificationReason: classificationResult.reason ?? null,
+        evidenceQuote: classificationResult.evidenceQuote ?? null,
         status: 'PENDING',
         ccEmail: draftCcAddressFor(mailbox.emailAddress) ?? NO_CC,
         ...draftMetaColumns(draftReply.meta),
@@ -975,12 +982,13 @@ export async function recordOutboundMessage(
         data: { repliedAt: receivedAt },
       });
 
-      // Discard any PENDING or APPROVED drafts on this thread — they're
-      // now stale because the recruiter already sent a manual reply.
+      // Discard any cancelable live drafts on this thread (incl. a SCHEDULED
+      // one-step send) — they're now stale because the recruiter already sent
+      // a manual reply. An in-flight SENDING draft is left to finish.
       const superseded = await prisma.emailDraft.updateMany({
         where: {
           threadId: thread.id,
-          status: { in: ['PENDING', 'APPROVED'] },
+          status: { in: CANCELABLE_DRAFT_STATUSES },
         },
         data: { status: 'DISCARDED' },
       });
@@ -1925,6 +1933,29 @@ export async function sendDraft(mailboxId: string, externalDraftId: string): Pro
   });
 }
 
+/**
+ * Send a reply directly (users.messages.send), with no Gmail draft in
+ * between (U0 one-step send). Same RFC 2822 builder as createDraft, so the
+ * threading headers and CC rules are identical.
+ */
+export async function sendMessage(
+  mailboxId: string,
+  draft: GmailDraftInput
+): Promise<{ id: string; threadId: string }> {
+  const mailbox = await prisma.mailbox.findUnique({ where: { id: mailboxId } });
+  if (!mailbox) throw new Error('Mailbox not found');
+
+  const gmail = await getGmailClient(mailbox);
+  const raw = await buildDraftRaw(mailbox, draft);
+
+  const res = await gmail.users.messages.send({
+    userId: 'me',
+    requestBody: { raw, threadId: draft.externalThreadId },
+  });
+
+  return { id: res.data.id ?? '', threadId: res.data.threadId ?? draft.externalThreadId };
+}
+
 export async function deleteDraft(mailboxId: string, externalDraftId: string): Promise<void> {
   const mailbox = await prisma.mailbox.findUnique({ where: { id: mailboxId } });
   if (!mailbox) throw new Error('Mailbox not found');
@@ -2565,7 +2596,7 @@ export async function reclassifyOrphanedThreads(mailboxId: string): Promise<{ th
     where: {
       mailboxId,
       candidateId: { not: null },
-      drafts: { none: { status: { in: ['PENDING', 'APPROVED'] } } },
+      drafts: { none: { status: { in: LIVE_DRAFT_STATUSES } } },
       messages: {
         some: {
           fromAddress: { not: mailbox.emailAddress },

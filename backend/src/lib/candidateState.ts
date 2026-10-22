@@ -13,6 +13,9 @@
  * any later classification replaces it.
  */
 
+/** Below this, ingestion routes to NEEDS_REVIEW instead of auto-drafting. */
+export const LOW_CONFIDENCE_THRESHOLD = 0.7;
+
 /** A decline at or above this confidence overrides INTERESTED / NEUTRAL. */
 export const DECLINE_OVERRIDE_CONFIDENCE = 0.85;
 

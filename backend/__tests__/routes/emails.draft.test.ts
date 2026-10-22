@@ -262,6 +262,17 @@ describe('POST /api/emails/threads/:id/draft — triage + metadata (M17, M14)', 
       usage: { input_tokens: 10, output_tokens: 5 },
     });
   });
+
+  it('stores the AI body, classifier reason and evidence quote (U0)', async () => {
+    classifyReply.mockResolvedValueOnce(classification({ reason: 'Asks to chat', evidenceQuote: 'Sounds interesting!' }));
+    generateHandoffDraftReply.mockResolvedValueOnce({ subject: 'Re: opportunity', bodyText: 'Hi Jane', bodyHtml: '<div>Hi Jane</div>' });
+
+    await request(app).post('/api/emails/threads/thread-1/draft').set('Authorization', AUTH).expect(201);
+
+    const data = mockPrisma.emailDraft.create.mock.calls[0]![0].data;
+    expect(data.aiBodyText).toBe(data.bodyText);
+    expect(data).toMatchObject({ classificationReason: 'Asks to chat', evidenceQuote: 'Sounds interesting!' });
+  });
 });
 
 describe('POST /api/drafts/:id/regenerate (M5)', () => {
@@ -295,5 +306,62 @@ describe('POST /api/drafts/:id/regenerate (M5)', () => {
     expect(res.status).toBe(502);
     expect(mockPrisma.emailDraft.update).not.toHaveBeenCalled();
     expect(generateDraftReply).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/drafts/:id/regenerate keepEdits (U0)', () => {
+  let app: Awaited<ReturnType<typeof loadApp>>;
+  const editedDraft = {
+    id: 'draft-1',
+    status: 'PENDING',
+    inReplyToMessageId: null,
+    subject: 'Re: opportunity',
+    bodyText: 'My edited text',
+    bodyHtml: '<div>My edited text</div>',
+    aiBodyText: 'Old AI text',
+    editedAt: new Date('2026-10-02T00:00:00Z'),
+    editedByUserId: 'test-user-1',
+    updatedAt: new Date('2026-10-02T00:00:00Z'),
+    thread: { id: 'thread-1', subject: 'opportunity', candidate, mailbox: { ...handoffMailbox, emailAddress: 'sofia@archive.com' } },
+  };
+
+  beforeEach(async () => {
+    resetPrismaMock(mockPrisma);
+    for (const m of [classifyReply, generateDraftReply, generateHandoffDraftReply, fetchMailboxSignature, fetchExamplesForMailbox]) {
+      m.mockReset();
+    }
+    fetchMailboxSignature.mockResolvedValue(null);
+    fetchExamplesForMailbox.mockResolvedValue([]);
+    mockPrisma.emailDraft.findUnique.mockResolvedValue(editedDraft);
+    mockPrisma.emailMessage.findMany.mockResolvedValue([inbound, outbound]);
+    mockPrisma.emailDraft.update.mockImplementation(async ({ data }: { data: object }) => ({ ...editedDraft, ...data }));
+    classifyReply.mockResolvedValue(classification({ reason: 'Wants to talk', evidenceQuote: 'Sounds interesting!' }));
+    generateDraftReply.mockResolvedValue({ subject: 'Re: opportunity', bodyText: 'New AI text', bodyHtml: '<div>New AI text</div>' });
+    app = await loadApp();
+  });
+
+  it('by default keeps the recruiter edits and only refreshes aiBodyText + classification', async () => {
+    const res = await request(app).post('/api/drafts/draft-1/regenerate').set('Authorization', AUTH).send({});
+    expect(res.status).toBe(200);
+    const data = mockPrisma.emailDraft.update.mock.calls[0]![0].data;
+    expect(data.aiBodyText).toBe('New AI text');
+    expect(data).not.toHaveProperty('bodyText');
+    expect(data).toMatchObject({ classificationReason: 'Wants to talk', evidenceQuote: 'Sounds interesting!' });
+    expect(res.body.data).toMatchObject({ bodyText: 'My edited text', aiBodyText: 'New AI text', keptEdits: true });
+  });
+
+  it('keepEdits:false replaces the body and clears the edit marker', async () => {
+    const res = await request(app).post('/api/drafts/draft-1/regenerate').set('Authorization', AUTH).send({ keepEdits: false });
+    expect(res.status).toBe(200);
+    const data = mockPrisma.emailDraft.update.mock.calls[0]![0].data;
+    expect(data).toMatchObject({ bodyText: 'New AI text', aiBodyText: 'New AI text', editedAt: null, editedByUserId: null });
+    expect(res.body.data.keptEdits).toBe(false);
+  });
+
+  it('an unedited draft just gets the new text', async () => {
+    mockPrisma.emailDraft.findUnique.mockResolvedValue({ ...editedDraft, bodyText: 'Old AI text', editedAt: null, editedByUserId: null });
+    await request(app).post('/api/drafts/draft-1/regenerate').set('Authorization', AUTH).send({});
+    const data = mockPrisma.emailDraft.update.mock.calls[0]![0].data;
+    expect(data).toMatchObject({ bodyText: 'New AI text', aiBodyText: 'New AI text' });
   });
 });

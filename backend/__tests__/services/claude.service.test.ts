@@ -15,7 +15,7 @@ vi.mock('@anthropic-ai/sdk', () => {
 });
 
 // Import AFTER vi.mock so the SUT picks up our fake Anthropic.
-import { classifyReply } from '../../src/services/claude.service';
+import { classifyReply, PROMPT_VERSIONS } from '../../src/services/claude.service';
 
 function textResponse(text: string) {
   return {
@@ -53,6 +53,8 @@ describe('services/claude.service.classifyReply', () => {
       confidence: 0.93,
       reasoning: 'Candidate explicitly asks about next steps.',
       role: null,
+      reason: null,
+      evidenceQuote: null,
     });
   });
 
@@ -291,5 +293,63 @@ describe('services/claude.service.classifyReply', () => {
       const result = await classifyReply('yes', 'Jane');
       expect(result.role).toBeNull();
     });
+  });
+});
+
+describe('classifyReply reason + evidence (U0)', () => {
+  const BODY = 'Thanks for reaching out! I am happy where I am right now, maybe next year.';
+  function respond(extra: Record<string, unknown>) {
+    createMock.mockResolvedValueOnce(
+      textResponse(
+        JSON.stringify({
+          classification: 'NOT_INTERESTED',
+          messageType: 'NEW_INQUIRY',
+          needsReview: false,
+          confidence: 0.9,
+          reasoning: 'Declines for now.',
+          role: null,
+          ...extra,
+        })
+      )
+    );
+  }
+  beforeEach(() => createMock.mockReset());
+
+  it('asks the model for reason and evidenceQuote under a new prompt version', async () => {
+    respond({});
+    await classifyReply(BODY, 'Jane');
+    const prompt = createMock.mock.calls[0][0].messages[0].content as string;
+    expect(prompt).toContain('"reason"');
+    expect(prompt).toContain('"evidenceQuote"');
+    expect(PROMPT_VERSIONS.classify).not.toBe('classify-2026-10-22');
+  });
+
+  it('keeps an evidenceQuote that is an exact substring of the message', async () => {
+    respond({ reason: 'Happy in current role', evidenceQuote: 'I am happy where I am right now' });
+    const r = await classifyReply(BODY, 'Jane');
+    expect(r.reason).toBe('Happy in current role');
+    expect(r.evidenceQuote).toBe('I am happy where I am right now');
+  });
+
+  it('drops a quote that is paraphrased or case-shifted', async () => {
+    respond({ reason: 'x', evidenceQuote: 'i am happy where i am right now' });
+    expect((await classifyReply(BODY, 'Jane')).evidenceQuote).toBeNull();
+    respond({ reason: 'x', evidenceQuote: 'I am  happy where I am' });
+    expect((await classifyReply(BODY, 'Jane')).evidenceQuote).toBeNull();
+  });
+
+  it('drops a quote longer than 200 chars even if it matches', async () => {
+    const long = 'a'.repeat(250);
+    respond({ reason: 'x', evidenceQuote: long });
+    expect((await classifyReply(long, 'Jane')).evidenceQuote).toBeNull();
+  });
+
+  it('caps the reason at 140 chars and ignores non-strings', async () => {
+    respond({ reason: 'r'.repeat(300) });
+    expect((await classifyReply(BODY, 'Jane')).reason).toHaveLength(140);
+    respond({ reason: 42, evidenceQuote: ['nope'] });
+    const r = await classifyReply(BODY, 'Jane');
+    expect(r.reason).toBeNull();
+    expect(r.evidenceQuote).toBeNull();
   });
 });
