@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { OAuth2Client } from 'google-auth-library';
+import { waitUntil } from '@vercel/functions';
 import { processWebhook } from '../services/gmail.service';
 import { logEvent } from '../services/monitoring.service';
 import { safeError } from '../lib/safeError';
@@ -90,7 +91,13 @@ function extractNotification(body: unknown): {
 //   (b) The contract here is at-least-once on the Pub/Sub side, made
 //       effectively exactly-once by the dedupe inside processWebhook. Ack
 //       in the synchronous response so we never sit past Pub/Sub's 10s
-//       push deadline waiting on Claude / Gmail latency.
+//       push deadline waiting on Claude / Gmail latency. The processing
+//       itself is registered with Vercel's waitUntil (audit H4): a plain
+//       fire-and-forget promise is frozen as soon as the response is sent,
+//       and only resumed (if ever) when the instance thaws for an unrelated
+//       request — which is why almost all mail used to arrive via the
+//       hourly reconcile. waitUntil keeps the function alive until the
+//       promise settles, bounded by functions.maxDuration in vercel.json.
 //   (c) Errors aren't swallowed: every failure inside processWebhook (or
 //       in synchronous pre-dispatch parsing below) is written to SystemLog
 //       as WEBHOOK_HANDLER_ERROR with the originating emailAddress +
@@ -109,11 +116,14 @@ router.post('/gmail', async (req: Request, res: Response, _next: NextFunction) =
     }
 
     const body = req.body;
-    // Fire-and-forget so we ack Pub/Sub quickly (its push deadline is 10s
-    // by default and classification + Claude can take longer). Errors are
+    const notification = extractNotification(body);
+    // Stable-prefix receipt line so delivery (Vercel logs) can be compared
+    // with processing (MAILBOX_SYNCED_INCREMENTAL / WEBHOOK_STALE_SKIPPED).
+    console.log(`[Webhook] received historyId=${notification.historyId ?? '?'}`);
+    // Ack Pub/Sub quickly (push deadline 10s; classification + Claude can
+    // take longer) and keep processing alive via waitUntil. Errors are
     // logged to SystemLog inside the catch.
-    void processWebhook(body).catch(async (err: unknown) => {
-      const notification = extractNotification(body);
+    const work = processWebhook(body).catch(async (err: unknown) => {
       console.error('[Webhook] Gmail processing error:', safeError(err));
       await logEvent(
         'WEBHOOK_HANDLER_ERROR',
@@ -126,6 +136,7 @@ router.post('/gmail', async (req: Request, res: Response, _next: NextFunction) =
         'ERROR'
       );
     });
+    waitUntil(work);
 
     res.status(200).json({ success: true });
   } catch (err) {

@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../db/client';
-import { reconcileMailbox, renewGmailWatches } from '../services/gmail.service';
+import { reconcileMailbox, renewGmailWatches, sweepStuckMessages } from '../services/gmail.service';
+import { pruneSystemLog } from '../services/systemLogRetention.service';
 import { logEvent, runWatchdog } from '../services/monitoring.service';
 import { markMailboxNeedsReauth, AUTH_STATUS_NEEDS_REAUTH } from '../services/mailboxAuth.service';
 import { safeError, isAuthRevokedError, MailboxNeedsReauthError } from '../lib/safeError';
@@ -63,30 +64,32 @@ router.get(
         return;
       }
 
-      // Cap total work at ~45s before *starting* a new mailbox so the slowest
-      // legit per-mailbox sync (~10-12s) still has runway under Vercel's 60s
-      // function timeout. If we hit the start-of-iter budget we break out of
-      // the loop and log RECONCILE_DEADLINE_REACHED with the count of
-      // mailboxes we had to skip — the next hourly run picks them up.
+      // Budgets assume functions.maxDuration = 300s (vercel.json). No new
+      // mailbox starts after 180s; each mailbox gets its own 60s ingest
+      // deadline (checked between messages, so one in-flight message can
+      // overrun by its Claude latency). Worst case ≈ 180 + 60 + ~20 < 300.
       const start = Date.now();
-      const startBudgetMs = 45_000;
-      // innerDeadline is computed fresh per-mailbox below so later mailboxes
-      // get the same per-mailbox budget (12s) regardless of how long earlier
-      // ones took. A shared start+50s deadline would starve later mailboxes.
-      const perMailboxBudgetMs = 12_000;
+      const startBudgetMs = 180_000;
+      const perMailboxBudgetMs = 60_000;
+      // Small fixed concurrency (M1). Kept low because the Prisma pool is
+      // small (POSTGRES_PRISMA_URL connection_limit); raise via env once the
+      // pool is 3-5.
+      const concurrency = Math.max(1, Number(process.env.RECONCILE_CONCURRENCY) || 2);
 
       const mailboxes = await prisma.mailbox.findMany({
         // NEEDS_REAUTH mailboxes can't sync until a human reconnects them;
         // the watchdog alerts on them instead of logging a failure hourly.
         where: { provider: 'GMAIL', isActive: true, authStatus: { not: AUTH_STATUS_NEEDS_REAUTH } },
-        orderBy: { createdAt: 'asc' },
+        // Least-recently-attempted first (M1): a run that hits the start
+        // budget skips the mailboxes that were just done, never the same
+        // late-connected ones every hour (the old createdAt order).
+        orderBy: [{ lastReconciledAt: { sort: 'asc', nulls: 'first' } }, { createdAt: 'asc' }],
       });
 
       let totalIngested = 0;
       let totalMissing = 0;
       let totalScanned = 0;
-      let deadlineReachedAt = -1;
-      const results: Array<{
+      type Result = {
         mailboxId: string;
         emailAddress: string;
         scannedFromGmail: number;
@@ -94,15 +97,14 @@ router.get(
         ingested: number;
         skipped?: boolean;
         error?: string;
-      }> = [];
+      };
+      const slots: Array<Result | undefined> = new Array(mailboxes.length);
 
-      for (let i = 0; i < mailboxes.length; i++) {
-        const mb = mailboxes[i];
-        if (Date.now() - start > startBudgetMs) {
-          deadlineReachedAt = i;
-          break;
-        }
+      async function reconcileOne(mb: (typeof mailboxes)[number]): Promise<Result> {
         try {
+          // Stamp the attempt first so a failing or timed-out mailbox still
+          // rotates to the back of the queue.
+          await prisma.mailbox.update({ where: { id: mb.id }, data: { lastReconciledAt: new Date() } });
           const innerDeadline = Date.now() + perMailboxBudgetMs;
           const result = await reconcileMailbox(mb.id, { deadline: innerDeadline });
           totalIngested += result.ingested;
@@ -136,11 +138,7 @@ router.get(
             );
           }
 
-          results.push({
-            mailboxId: mb.id,
-            emailAddress: mb.emailAddress,
-            ...result,
-          });
+          return { mailboxId: mb.id, emailAddress: mb.emailAddress, ...result };
         } catch (err) {
           const safe = safeError(err);
           const message = safe.message;
@@ -156,16 +154,33 @@ router.get(
             { mailboxId: mb.id, emailAddress: mb.emailAddress, error: message, authRevoked },
             authRevoked ? 'ERROR' : 'WARN'
           );
-          results.push({
+          return {
             mailboxId: mb.id,
             emailAddress: mb.emailAddress,
             scannedFromGmail: 0,
             missingBefore: 0,
             ingested: 0,
             error: message,
-          });
+          };
         }
       }
+
+      // Worker pool: each worker takes the next mailbox until the list or the
+      // start budget runs out. Results keep the queue order.
+      let next = 0;
+      async function worker(): Promise<void> {
+        while (next < mailboxes.length && Date.now() - start <= startBudgetMs) {
+          const i = next++;
+          slots[i] = await reconcileOne(mailboxes[i]!);
+        }
+      }
+      await Promise.all(
+        Array.from({ length: Math.min(concurrency, mailboxes.length) }, () => worker())
+      );
+
+      const processedCount = slots.filter(Boolean).length;
+      const deadlineReachedAt = processedCount < mailboxes.length ? processedCount : -1;
+      const results: Result[] = slots.filter((r): r is Result => r !== undefined);
 
       if (deadlineReachedAt >= 0) {
         const skipped = mailboxes.slice(deadlineReachedAt);
@@ -246,6 +261,51 @@ router.get(
         return;
       }
       const result = await runWatchdog();
+      res.status(200).json({ success: true, data: result });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// GET /api/internal/cron/sweep-stuck-messages
+// NOTE: Vercel cron jobs invoke via GET — must not be POST.
+// Every 10 min: re-runs classification + drafting for inbound messages that
+// were stored but never finished processing (function froze/timed out, or
+// classify threw). See gmail.service sweepStuckMessages() (audit M3).
+router.get(
+  '/sweep-stuck-messages',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!isAuthorized(req)) {
+        res.status(401).json({ success: false, error: 'Unauthorized' });
+        return;
+      }
+      const result = await sweepStuckMessages({ deadline: Date.now() + 200_000 });
+      res.status(200).json({ success: true, data: result });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// GET /api/internal/cron/systemlog-retention
+// NOTE: Vercel cron jobs invoke via GET — must not be POST.
+// Daily: deletes INFO SystemLog rows older than 30d and others older than
+// 90d (audit M26). Dry run (counts only) unless SYSTEMLOG_RETENTION_ENABLED
+// is exactly "true" — the first real run deletes ~500k rows, which needs
+// explicit human sign-off.
+router.get(
+  '/systemlog-retention',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!isAuthorized(req)) {
+        res.status(401).json({ success: false, error: 'Unauthorized' });
+        return;
+      }
+      const enabled = process.env.SYSTEMLOG_RETENTION_ENABLED === 'true';
+      const result = await pruneSystemLog({ enabled, deadline: Date.now() + 200_000 });
+      await logEvent('SYSTEMLOG_RETENTION_RUN', result, 'INFO');
       res.status(200).json({ success: true, data: result });
     } catch (err) {
       next(err);

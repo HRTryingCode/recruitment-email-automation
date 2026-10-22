@@ -9,6 +9,8 @@ import {
   syncMessages,
   fetchMailboxSignature,
   reclassifyOrphanedThreads,
+  watchMailbox,
+  stopMailboxWatch,
 } from '../services/gmail.service';
 import { storeOAuthState } from '../lib/oauthState';
 import { createError } from '../middleware/error';
@@ -144,6 +146,21 @@ router.post('/workspace/connect', requireAdmin, async (req: Request, res: Respon
         });
 
         await logEvent('MAILBOX_WORKSPACE_CONNECTED', { mailboxId: mailbox.id, email }, 'INFO');
+
+        // Start push notifications now rather than waiting up to 6h for the
+        // renew-watches cron (L4). Non-fatal: that cron retries it.
+        try {
+          await watchMailbox(mailbox.id);
+        } catch (watchErr) {
+          await logEvent(
+            'GMAIL_WATCH_SET_FAILED',
+            {
+              mailboxId: mailbox.id,
+              error: watchErr instanceof Error ? watchErr.message : String(watchErr),
+            },
+            'WARN'
+          );
+        }
 
         try {
           const result = await syncMessages(mailbox.id, { maxResults: 250, daysBack: 7 });
@@ -359,6 +376,17 @@ router.delete('/:id', requireAdmin, async (req: Request, res: Response, next: Ne
     const mailbox = await prisma.mailbox.findUnique({ where: { id } });
     if (!mailbox) {
       return next(createError('Mailbox not found', 404));
+    }
+
+    // Stop Gmail push for this address (L4) before flipping isActive, while
+    // the mailbox can still build a client. Best-effort: never blocks the
+    // disconnect (processWebhook ignores pushes for inactive mailboxes).
+    if (mailbox.isActive) {
+      try {
+        await stopMailboxWatch(id);
+      } catch (err) {
+        console.warn('[Mailbox] stopMailboxWatch failed:', err instanceof Error ? err.message : err);
+      }
     }
 
     await prisma.mailbox.update({
