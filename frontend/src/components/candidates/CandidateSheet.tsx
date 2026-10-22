@@ -1,8 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
-import { AlertCircle, Copy, Inbox, Mail, Sparkles } from 'lucide-react';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Copy, Inbox, Mail, Sparkles } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -11,6 +10,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '
 import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
 import LeverSection from '@/components/lever/LeverSection';
+import QueryError from '@/components/shell/QueryError';
 import { fetchCandidate, generateDraftForThread, type Candidate, type EmailMessage, type EmailThread } from '@/lib/api';
 import { LIVE_DRAFT_STATUSES as LIVE_DRAFT } from '@/lib/candidates';
 import { messagePlainText } from '@/lib/inbox';
@@ -123,15 +123,7 @@ function SheetBody({
         <Separator />
 
         {detailError ? (
-          <Alert variant="destructive">
-            <AlertCircle />
-            <AlertTitle>Couldn't load the conversation</AlertTitle>
-            <AlertDescription>
-              <Button size="sm" variant="outline" onClick={onRetry}>
-                Retry
-              </Button>
-            </AlertDescription>
-          </Alert>
+          <QueryError thing="the conversation" onRetry={onRetry} />
         ) : !detailLoaded ? (
           <Skeleton className="h-40 w-full" />
         ) : (

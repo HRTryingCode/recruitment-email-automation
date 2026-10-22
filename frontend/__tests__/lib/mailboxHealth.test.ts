@@ -55,7 +55,7 @@ describe('mailboxHealthState', () => {
 });
 
 describe('summarizeHealth', () => {
-  it('ranks reconnect-required above every other state, in rose', () => {
+  it('ranks reconnect-required above every other state, as destructive', () => {
     const s = summarizeHealth(
       [
         row({ mailboxId: '1', webhookErrorsLast24h: 50 }),
@@ -65,7 +65,7 @@ describe('summarizeHealth', () => {
       ],
       NOW
     );
-    expect(s.tone).toBe('rose');
+    expect(s.tone).toBe('destructive');
     expect(s.label).toBe('2 mailboxes: reconnect required');
     expect(s.unhealthy).toBe(true);
   });
@@ -76,42 +76,42 @@ describe('summarizeHealth', () => {
     );
   });
 
-  it('shows reconcile failures in rose when nothing needs reconnect', () => {
+  it('shows reconcile failures as destructive when nothing needs reconnect', () => {
     const s = summarizeHealth([row({ consecutiveReconcileFailures: 4 })], NOW);
-    expect(s).toMatchObject({ tone: 'rose', label: '1 mailbox not syncing', unhealthy: true });
+    expect(s).toMatchObject({ tone: 'destructive', label: '1 mailbox not syncing', unhealthy: true });
   });
 
   it('does not go red for a handful of webhook errors or small drift (alarm fatigue)', () => {
     const s = summarizeHealth([row({ webhookErrorsLast24h: 3, lastReconciliationFoundMissing: 4 })], NOW);
-    expect(s).toMatchObject({ tone: 'emerald', label: 'All mailboxes healthy', unhealthy: false });
+    expect(s).toMatchObject({ tone: 'success', label: 'All mailboxes healthy', unhealthy: false });
   });
 
-  it('uses amber for high webhook error rates and high drift', () => {
+  it('uses warning for high webhook error rates and high drift', () => {
     expect(summarizeHealth([row({ webhookErrorsLast24h: 25 })], NOW)).toMatchObject({
-      tone: 'amber',
+      tone: 'warning',
       label: 'More Gmail delivery errors than usual',
     });
     expect(summarizeHealth([row({ lastReconciliationFoundMissing: 30 })], NOW)).toMatchObject({
-      tone: 'amber',
+      tone: 'warning',
       label: 'Catch-up sync is finding missed emails',
     });
   });
 
   it('warns when rows could not be fully computed', () => {
     expect(summarizeHealth([row({ error: true })], NOW)).toMatchObject({
-      tone: 'amber',
+      tone: 'warning',
       label: 'Health data incomplete',
     });
   });
 
   it('keeps "expiring soon" for watches between 0 and 24h', () => {
     expect(summarizeHealth([row({ watchExpiresInHours: 5 })], NOW)).toMatchObject({
-      tone: 'amber',
+      tone: 'warning',
       label: 'Live updates expire soon for 1 mailbox',
     });
   });
 
   it('is neutral with no data', () => {
-    expect(summarizeHealth([], NOW).tone).toBe('neutral');
+    expect(summarizeHealth([], NOW).tone).toBe('secondary');
   });
 });

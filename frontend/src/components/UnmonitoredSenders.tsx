@@ -15,6 +15,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collap
 import { Input } from './ui/input';
 import { Separator } from './ui/separator';
 import { toastError, toastSuccess, extractApiErrorMessage } from '../lib/toast';
+import QueryError from './shell/QueryError';
 
 // Sender coverage (audit H2). Lists expected senders (e.g. Gem send-aliases)
 // that no connected mailbox or sendAs alias covers — replies to those are
@@ -32,7 +33,7 @@ function isForbidden(err: unknown): boolean {
 function ExpectedSendersAdmin() {
   const qc = useQueryClient();
   const [email, setEmail] = useState('');
-  const { data, error, isLoading } = useQuery({
+  const { data, error, isLoading, isFetching, refetch } = useQuery({
     queryKey: ['expected-senders'],
     queryFn: fetchExpectedSenders,
     retry: false,
@@ -61,7 +62,7 @@ function ExpectedSendersAdmin() {
 
   // Recruiters can see the report but not maintain the list.
   if (isForbidden(error)) return null;
-  if (error) return <p className="text-xs text-muted-foreground">Could not load the expected-senders list.</p>;
+  if (error) return <QueryError thing="the expected-senders list" onRetry={() => void refetch()} retrying={isFetching} />;
 
   const senders = data?.data ?? [];
   return (

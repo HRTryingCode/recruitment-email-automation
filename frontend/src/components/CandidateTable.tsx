@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowDown, ArrowUp, ArrowUpDown, RefreshCw, Users } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpDown, Users } from 'lucide-react';
 import { fetchCandidates, type Candidate } from '../lib/api';
 import { filtersToApi, type CandidateFilters, type SortKey } from '../lib/candidates';
 import { prefetchAddToLever } from '../lib/leverQueries';
@@ -9,7 +9,8 @@ import { toastError, toastSuccess } from '../lib/toast';
 import { useCandidateActions } from '../hooks/useCandidateActions';
 import { CANDIDATE_SHORTCUTS, useCandidateShortcuts } from '../hooks/useCandidateShortcuts';
 import { useCandidateUrlState } from '../hooks/useCandidateUrlState';
-import { Alert, AlertDescription, AlertTitle } from './ui/alert';
+import PageHeader from './shell/PageHeader';
+import QueryError from './shell/QueryError';
 import { Button } from './ui/button';
 import { Checkbox } from './ui/checkbox';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './ui/empty';
@@ -179,24 +180,13 @@ export default function CandidateTable({ mailboxId }: Props) {
 
   return (
     <div className="flex flex-col gap-4">
-      <div>
-        <h1 className="font-heading text-2xl font-semibold tracking-tight text-foreground">Candidates</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Every candidate detected across connected mailboxes.</p>
-      </div>
+      <PageHeader title="Candidates" description="Every candidate detected across connected mailboxes." />
 
       <SavedViewsBar filters={filters} viewId={url.viewId} onSelect={(v) => setFilters(v.filters, v.id)} />
       <FilterBar filters={filters} onChange={setFilters} total={total} />
 
       {listQ.isError ? (
-        <Alert variant="destructive">
-          <AlertTitle>Failed to load candidates</AlertTitle>
-          <AlertDescription>
-            <Button size="sm" variant="outline" onClick={() => void listQ.refetch()}>
-              <RefreshCw data-icon="inline-start" />
-              Retry
-            </Button>
-          </AlertDescription>
-        </Alert>
+        <QueryError thing="candidates" onRetry={() => void listQ.refetch()} retrying={listQ.isFetching} />
       ) : (
         <div className="overflow-hidden border-y border-border">
           {checked.size > 0 && (

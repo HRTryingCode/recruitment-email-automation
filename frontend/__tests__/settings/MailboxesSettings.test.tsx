@@ -111,7 +111,7 @@ describe('Settings → Mailboxes', () => {
   it('shows an error state when sync-health fails', async () => {
     vi.mocked(api.fetchSyncHealth).mockRejectedValue(new Error('500'));
     renderPage();
-    expect(await screen.findByText(/could not load mailbox health/i, undefined, { timeout: 4000 })).toBeInTheDocument();
+    expect(await screen.findByText(/couldn't load mailbox health/i, undefined, { timeout: 4000 })).toBeInTheDocument();
   });
 
   it('the health table has no developer jargon', async () => {

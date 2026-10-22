@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { fetchLeverMe } from '../../lib/leverApi';
 import GemConnect from '../../components/GemConnect';
+import QueryError from '../../components/shell/QueryError';
 import { Badge } from '../../components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
 import { Skeleton } from '../../components/ui/skeleton';
@@ -44,7 +45,7 @@ export default function IntegrationsSettings() {
           {lever.isLoading ? (
             <Skeleton className="h-16" />
           ) : lever.isError || !me ? (
-            <p className="text-sm text-muted-foreground">Could not load the Lever status. Reload the page to try again.</p>
+            <QueryError thing="the Lever status" onRetry={() => void lever.refetch()} retrying={lever.isFetching} />
           ) : (
             <div className="flex flex-col">
               <Row label="Connection">

@@ -2,6 +2,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { ChevronDown, LogOut, Settings } from 'lucide-react';
 import { clearToken, clearUser, getUser } from '../../lib/auth';
 import { viewHref } from '../../lib/urlState';
+import { initials } from '../../lib/utils';
 import GemConnect from '../GemConnect';
 import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
 import { Button } from '../ui/button';
@@ -14,18 +15,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
-
-export function initials(name?: string, email?: string): string {
-  const seed = (name || email || '?').trim();
-  return (
-    seed
-      .split(/\s+/)
-      .map((s) => s[0])
-      .slice(0, 2)
-      .join('')
-      .toUpperCase() || '?'
-  );
-}
 
 export function signOut(): void {
   clearToken();

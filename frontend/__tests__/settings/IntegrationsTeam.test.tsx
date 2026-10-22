@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import IntegrationsSettings from '../../src/pages/settings/IntegrationsSettings';
 import TeamSettings from '../../src/pages/settings/TeamSettings';
@@ -75,7 +76,11 @@ describe('Settings → Integrations', () => {
     vi.mocked(leverApi.fetchGemStatus).mockResolvedValue({ status: 'NOT_CONNECTED', lastError: null });
     vi.mocked(leverApi.fetchLeverMe).mockRejectedValue(new Error('500'));
     wrap(<IntegrationsSettings />);
-    expect(await screen.findByText(/could not load the lever status/i)).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't load the Lever status");
+    // U2a: a Retry instead of "reload the page".
+    vi.mocked(leverApi.fetchLeverMe).mockResolvedValue({ configured: true, createEnabled: true, leverUser: null, appEmail: null } as never);
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Connected')).toBeInTheDocument();
   });
 });
 
@@ -94,10 +99,13 @@ describe('Settings → Team', () => {
     expect(screen.queryByText('No CC')).not.toBeInTheDocument();
   });
 
-  it('degrades quietly when the list is unavailable', async () => {
+  it('says the list could not load and offers Retry', async () => {
     vi.mocked(api.fetchDraftCcOptions).mockRejectedValue(new Error('403'));
     wrap(<TeamSettings />);
-    expect(await screen.findByText(/team list is not available/i)).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't load the team");
+    vi.mocked(api.fetchDraftCcOptions).mockResolvedValue({ success: true, data: [{ email: 'sofia@archive.com', name: 'Sofia D', firstName: 'Sofia' }] });
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('sofia@archive.com')).toBeInTheDocument();
   });
 
   it('an empty admin list says what to do', async () => {

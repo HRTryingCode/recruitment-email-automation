@@ -8,8 +8,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import AddToLeverButton from '@/components/AddToLeverButton';
 import { refreshCandidateLever, type LeverCandidateFields, type LeverState } from '@/lib/api';
 import type { CreateLeverResult } from '@/lib/leverApi';
-import { formatAge } from '@/lib/inbox';
 import { extractApiErrorMessage, toastError } from '@/lib/toast';
+import { formatAge } from '@/lib/utils';
 
 export type LeverFields = Pick<
   LeverCandidateFields,

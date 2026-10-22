@@ -4,7 +4,6 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import TodayPage from '../../src/pages/TodayPage';
-import { formatWaitingAge } from '../../src/components/today/TodayStrip';
 import type { MailboxSyncHealth, TodaySummary } from '../../src/lib/api';
 import * as api from '../../src/lib/api';
 
@@ -157,14 +156,3 @@ describe('Today page', () => {
   });
 });
 
-describe('formatWaitingAge', () => {
-  it.each([
-    [45 * 60_000, '45m'],
-    [5 * 3600_000, '5h'],
-    [2 * DAY + 4 * 3600_000, '2d 4h'],
-    [3 * DAY, '3d'],
-    [10_000, '< 1m'],
-  ])('%d ms → %s', (ms, label) => {
-    expect(formatWaitingAge(ms)).toBe(label);
-  });
-});
