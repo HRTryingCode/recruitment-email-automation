@@ -134,8 +134,8 @@ describe('<CandidateSheet /> (side panel)', () => {
     expect(within(sheet).getByTestId('reply-label')).toHaveTextContent('Interested');
     // The shared Inbox RoleChip (H7).
     expect(within(sheet).getByTestId('role-chip')).toHaveAttribute('aria-label', 'Role: Founding Engineer');
-    // The shared Inbox MailboxChip: local part, full address in the tooltip.
-    expect(within(sheet).getByTestId('mailbox-chip')).toHaveTextContent('rae');
+    // The shared Inbox MailboxChip: the full sending address.
+    expect(within(sheet).getByTestId('mailbox-chip')).toHaveTextContent('rae@archive.com');
   });
 
   describe('Generate draft (U2a)', () => {

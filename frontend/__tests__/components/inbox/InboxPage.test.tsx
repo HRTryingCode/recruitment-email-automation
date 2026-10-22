@@ -107,7 +107,7 @@ describe('InboxPage', () => {
     installInbox([item('d1', 'interested', { presence: [{ userId: 'u2', name: 'Sofia Delgado', mode: 'editing' }] })]);
     renderInbox('/inbox?view=interested');
     const row = await screen.findByRole('button', { name: /Ada Example/ });
-    expect(within(row).getByText('rae')).toBeInTheDocument();
+    expect(within(row).getByTestId('mailbox-line')).toHaveTextContent('From rae@archive.com');
     expect(within(row).getByText('Interested')).toBeInTheDocument();
     expect(within(row).getByText(/thanks for getting back/i)).toBeInTheDocument();
     expect(within(row).getByText('30m')).toBeInTheDocument();
@@ -220,6 +220,8 @@ describe('InboxPage', () => {
     expect(within(header).getByText('ada@example.org')).toBeInTheDocument();
     // Role shows once, as the shared RoleChip, not appended to the email line.
     expect(within(header).getByTestId('role-chip')).toHaveTextContent('Senior Engineer');
+    // The full sending mailbox, not just its local part.
+    expect(within(header).getByTestId('mailbox-line')).toHaveTextContent('From rae@archive.com');
     // One label chip in words — no candidate-status badge ("Neutral"), no %.
     expect(within(header).getByText('Interested')).toBeInTheDocument();
     expect(within(header).queryByText(/neutral/i)).not.toBeInTheDocument();

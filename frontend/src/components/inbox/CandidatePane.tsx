@@ -12,7 +12,7 @@ import { fetchCandidate, type InboxItem } from '@/lib/api';
 import { messagePlainText, type TriageClass } from '@/lib/inbox';
 import { formatTimeAgo } from '@/lib/utils';
 import CandidateLink from './CandidateLink';
-import { NeedsReviewChip, RoleChip } from './chips';
+import { MailboxLine, NeedsReviewChip, RoleChip } from './chips';
 
 interface Props {
   item: InboxItem;
@@ -74,6 +74,7 @@ export default function CandidatePane({ item, onClose, onReply, pending, error, 
             <NeedsReviewChip />
           </div>
           <p className="truncate text-sm text-muted-foreground">{item.candidate?.email}</p>
+          {item.mailbox && <MailboxLine email={item.mailbox.emailAddress} />}
           <p className="text-sm text-muted-foreground">No draft yet — the label was unclear. Pick one to write a reply.</p>
         </div>
         <Button size="icon-sm" variant="ghost" aria-label="Close" onClick={onClose} className="max-lg:hidden">

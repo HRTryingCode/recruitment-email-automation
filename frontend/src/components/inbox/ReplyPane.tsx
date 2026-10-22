@@ -22,7 +22,7 @@ import {
 import { formatEt, lockWarning, messagePlainText, sendLine } from '@/lib/inbox';
 import { formatTimeAgo } from '@/lib/utils';
 import type { DraftEditorState } from '@/hooks/useDraftEditor';
-import { LabelChip, PresenceChip, RoleChip, firstName } from './chips';
+import { LabelChip, MailboxLine, PresenceChip, RoleChip, firstName } from './chips';
 import CandidateLink from './CandidateLink';
 import DraftEditor from './DraftEditor';
 import DraftFlags from './DraftFlags';
@@ -242,6 +242,7 @@ export default function ReplyPane(props: Props) {
           <p className="truncate text-sm text-muted-foreground">
             {candidate?.email ?? item?.candidate?.email}
           </p>
+          {mailbox && <MailboxLine email={mailbox} />}
         </div>
         <Button size="icon-sm" variant="ghost" aria-label="Close" onClick={onClose} className="max-lg:hidden">
           <X />

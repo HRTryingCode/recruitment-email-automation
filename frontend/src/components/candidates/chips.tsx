@@ -7,12 +7,12 @@ import { replyLabel } from '@/lib/candidates';
 /** The Inbox's role chip (H7), shared with the side panel. */
 export { RoleChip } from '@/components/inbox/chips';
 
-/** The Inbox's mailbox chip (local part) with the full address in a tooltip. */
+/** The Inbox's mailbox chip (full address); the tooltip repeats it when the column clips it. */
 export function CandidateMailboxChip({ email }: { email: string }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span data-testid="mailbox-chip" aria-label={`Mailbox: ${email}`} className="inline-flex min-w-0">
+        <span data-testid="mailbox-chip" aria-label={`Mailbox: ${email}`} className="inline-flex min-w-0 max-w-full">
           <MailboxChip email={email} />
         </span>
       </TooltipTrigger>

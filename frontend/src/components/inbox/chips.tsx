@@ -1,4 +1,4 @@
-import { Briefcase, Eye, Pencil } from 'lucide-react';
+import { Briefcase, Eye, Mail, Pencil } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
@@ -52,40 +52,82 @@ export function PresenceChip({ presence }: { presence: DraftPresenceEntry[] }) {
   );
 }
 
+/** The full sending address: rows and headers name the mailbox outright, not its local part. */
 export function MailboxChip({ email }: { email: string }) {
-  return <Badge variant="secondary">{email.split('@')[0]}</Badge>;
+  return (
+    <Badge variant="secondary" className="min-w-0 max-w-full shrink justify-start">
+      <span className="min-w-0 truncate">{email}</span>
+    </Badge>
+  );
 }
 
-const ROLE_MAX_CHARS = 22;
+const ROLE_UNKNOWN_TIP = "Claude couldn't detect the role from the outreach";
+
+function WithTip({ tip, children }: { tip: string; children: React.ReactElement }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent>{tip}</TooltipContent>
+    </Tooltip>
+  );
+}
 
 /**
- * The role the candidate replied about. Shared by the Inbox list/panes and
- * reusable by Candidates (R3). Long titles truncate to ~22ch; the full role
- * lives in the tooltip and the accessible name.
+ * The role the candidate replied about, as a chip (reply/candidate panes,
+ * Candidates table). The full title always renders; only a container too
+ * narrow for it clips it, and the tooltip carries the full title.
  */
 export function RoleChip({ role }: { role: string | null | undefined }) {
   const title = role?.trim();
-  const truncated = !!title && title.length > ROLE_MAX_CHARS;
-  const text = !title ? 'Role unknown' : truncated ? `${title.slice(0, ROLE_MAX_CHARS - 1).trimEnd()}…` : title;
-  const tip = !title ? "Claude couldn't detect the role from the outreach" : truncated ? title : null;
-  const chip = (
-    <Badge
-      variant="outline"
-      data-testid="role-chip"
-      data-role-known={title ? 'true' : 'false'}
-      aria-label={title ? `Role: ${title}` : 'Role unknown'}
-      // Shrinks before the meta line wraps, so rows keep their height.
-      className={cn('min-w-0 shrink justify-start', title ? 'text-foreground' : 'border-dashed text-muted-foreground')}
-    >
-      <Briefcase data-icon="inline-start" />
-      <span className="min-w-0 truncate">{text}</span>
-    </Badge>
-  );
-  if (!tip) return chip;
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>{chip}</TooltipTrigger>
-      <TooltipContent>{tip}</TooltipContent>
-    </Tooltip>
+    <WithTip tip={title || ROLE_UNKNOWN_TIP}>
+      <Badge
+        variant="outline"
+        data-testid="role-chip"
+        data-role-known={title ? 'true' : 'false'}
+        aria-label={title ? `Role: ${title}` : 'Role unknown'}
+        className={cn('min-w-0 max-w-full shrink justify-start', title ? 'text-foreground' : 'border-dashed text-muted-foreground')}
+      >
+        <Briefcase data-icon="inline-start" />
+        <span className="min-w-0 truncate">{title || 'Role unknown'}</span>
+      </Badge>
+    </WithTip>
+  );
+}
+
+/**
+ * Inbox row: the role on its own line, in full. Wraps; only an absurdly
+ * long title clamps at two lines (the tooltip has all of it).
+ */
+export function RoleLine({ role }: { role: string | null | undefined }) {
+  const title = role?.trim();
+  return (
+    <WithTip tip={title || ROLE_UNKNOWN_TIP}>
+      <span
+        data-testid="role-line"
+        data-role-known={title ? 'true' : 'false'}
+        aria-label={title ? `Role: ${title}` : 'Role unknown'}
+        className={cn('flex min-w-0 items-start gap-1.5 text-xs', title ? 'text-foreground' : 'text-muted-foreground')}
+      >
+        <Briefcase aria-hidden className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
+        <span className="line-clamp-2 min-w-0 break-words">{title || 'Role unknown'}</span>
+      </span>
+    </WithTip>
+  );
+}
+
+/** "From rampersad.aaron@archive.com": the mailbox the outreach went out from. */
+export function MailboxLine({ email, className }: { email: string; className?: string }) {
+  return (
+    <WithTip tip={email}>
+      <span
+        data-testid="mailbox-line"
+        aria-label={`Sent from ${email}`}
+        className={cn('flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground', className)}
+      >
+        <Mail aria-hidden className="size-3 shrink-0" />
+        <span className="min-w-0 truncate">{`From ${email}`}</span>
+      </span>
+    </WithTip>
   );
 }

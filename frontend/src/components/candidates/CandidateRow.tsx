@@ -73,7 +73,7 @@ export default function CandidateRow({ candidate: c, active, selected, busy, onS
       <TableCell className="hidden max-w-48 py-0.5 xl:table-cell">
         <RoleChip role={c.role} />
       </TableCell>
-      <TableCell className="hidden max-w-40 py-0.5 text-muted-foreground xl:table-cell">
+      <TableCell className="hidden max-w-56 py-0.5 text-muted-foreground xl:table-cell">
         {c.mailbox ? <CandidateMailboxChip email={c.mailbox.emailAddress} /> : '—'}
       </TableCell>
       <TableCell className="hidden py-0.5 text-muted-foreground tabular-nums sm:table-cell">
