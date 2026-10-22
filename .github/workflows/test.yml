@@ -62,7 +62,10 @@ jobs:
       - name: Type-check backend (src + tests)
         run: npm run typecheck --workspace=backend
       - name: Run backend tests (with coverage floor)
-        run: npm run test:coverage --workspace=backend
+        # Shuffled so a test that only passes after another one (shared
+        # PGlite rows, leaked mock state) fails here instead of flaking later.
+        # A red run prints its seed; replay it with `--sequence.seed=<n>`.
+        run: npm run test:coverage --workspace=backend -- --sequence.shuffle
 
   frontend:
     runs-on: ubuntu-latest
