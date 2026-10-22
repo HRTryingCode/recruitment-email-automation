@@ -115,6 +115,16 @@ model Candidate {
   /// LinkedIn profile URL, from Gem or typed in the Add to Lever dialog (F3).
   /// The only Gem-sourced field we keep; résumés are streamed to Lever.
   linkedinUrl         String?
+  /// Gem enrichment cache (H5). Filled by the Add to Lever Gem prefill and
+  /// the new-candidate background lookup; served while gemFetchedAt < 7 days.
+  /// Never the résumé file or its presigned URL — only whether one exists.
+  gemPersonId         String?
+  gemTitle            String?
+  gemCompany          String?
+  gemLocation         String?
+  gemResumeAvailable  Boolean?
+  /// Last Gem lookup that returned FOUND or NOT_FOUND (gemPersonId null).
+  gemFetchedAt        DateTime?
 
   @@index([mailboxId])
   @@index([status])
