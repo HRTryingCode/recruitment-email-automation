@@ -45,7 +45,7 @@ export default function CandidateRow({ candidate: c, active, selected, busy, onS
         if (!(e.target as HTMLElement).closest(INTERACTIVE)) onOpen();
       }}
       // Opaque backgrounds so the sticky first column can inherit them.
-      className="group cursor-pointer bg-background hover:bg-muted data-[active=true]:bg-muted data-[state=selected]:bg-muted"
+      className="group cursor-pointer bg-background hover:bg-muted has-[[aria-expanded=true]]:bg-muted data-[active=true]:bg-muted data-[state=selected]:bg-muted"
     >
       <TableCell className="w-10 py-0.5 pl-3">
         <Checkbox checked={selected} onCheckedChange={(v) => onSelect(v === true)} aria-label={`Select ${c.name}`} />
@@ -69,22 +69,24 @@ export default function CandidateRow({ candidate: c, active, selected, busy, onS
       <TableCell className="hidden max-w-56 py-0.5 md:table-cell">
         <CandidateLeverBadge candidate={c} />
       </TableCell>
-      <TableCell className="hidden max-w-48 truncate py-0.5 text-muted-foreground lg:table-cell">
+      <TableCell className="hidden max-w-40 truncate py-0.5 text-muted-foreground xl:table-cell">
         {c.role ?? '—'}
       </TableCell>
-      <TableCell className="hidden max-w-48 truncate py-0.5 text-muted-foreground xl:table-cell">
+      <TableCell className="hidden max-w-40 truncate py-0.5 text-muted-foreground xl:table-cell">
         {c.mailbox?.emailAddress ?? '—'}
       </TableCell>
-      <TableCell className="py-0.5 text-muted-foreground tabular-nums">
+      <TableCell className="hidden py-0.5 text-muted-foreground tabular-nums sm:table-cell">
         <span>{formatTimeAgo(activity.at)}</span>
         {activity.who && <span className="hidden text-xs sm:inline">{` · ${activity.who}`}</span>}
       </TableCell>
-      <TableCell className="py-0.5 pr-3">
+      {/* Zero-width cell: the actions overlay the row's right edge (in the
+          row's own background) instead of widening the table. */}
+      <TableCell className="relative w-0 bg-inherit p-0">
         <div
           data-testid="row-actions"
           className={cn(
-            'flex items-center justify-end gap-1 transition-opacity md:opacity-0',
-            'md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:group-data-[active=true]:opacity-100'
+            'absolute inset-y-0 right-0 flex items-center gap-1 bg-inherit pr-3 pl-2 transition-opacity md:opacity-0',
+            'md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:group-data-[active=true]:opacity-100 md:group-has-[[aria-expanded=true]]:opacity-100'
           )}
         >
           <Button size="xs" variant="ghost" onClick={onOpen} className="hidden md:inline-flex">

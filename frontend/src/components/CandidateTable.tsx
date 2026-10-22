@@ -29,9 +29,9 @@ const COLUMNS: Array<{ key: SortKey; label: string; className?: string }> = [
   { key: 'name', label: 'Candidate', className: 'sticky left-0 bg-background' },
   { key: 'status', label: 'Reply' },
   { key: 'lever', label: 'Lever', className: 'hidden md:table-cell' },
-  { key: 'role', label: 'Role', className: 'hidden lg:table-cell' },
+  { key: 'role', label: 'Role', className: 'hidden xl:table-cell' },
   { key: 'mailbox', label: 'Mailbox', className: 'hidden xl:table-cell' },
-  { key: 'lastActivity', label: 'Last activity' },
+  { key: 'lastActivity', label: 'Last activity', className: 'hidden sm:table-cell' },
 ];
 
 function SortHead({
@@ -221,7 +221,7 @@ export default function CandidateTable({ mailboxId }: Props) {
                 {COLUMNS.map((col) => (
                   <SortHead key={col.key} column={col} filters={filters} onSort={onSort} />
                 ))}
-                <TableHead>
+                <TableHead className="w-0 p-0">
                   <span className="sr-only">Actions</span>
                 </TableHead>
               </TableRow>
