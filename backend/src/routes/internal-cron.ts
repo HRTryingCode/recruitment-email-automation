@@ -14,6 +14,7 @@ import { markMailboxNeedsReauth, AUTH_STATUS_NEEDS_REAUTH } from '../services/ma
 import { safeError, isAuthRevokedError, MailboxNeedsReauthError } from '../lib/safeError';
 import { purgeOrphanBodies, retentionDaysFromEnv } from '../services/retention.service';
 import { syncStaleLever } from '../services/leverSync.service';
+import { sweepScheduledSends } from '../services/draftSend.service';
 
 const router = Router();
 
@@ -279,6 +280,8 @@ router.get(
 // Every 10 min: re-runs classification + drafting for inbound messages that
 // were stored but never finished processing (function froze/timed out, or
 // classify threw). See gmail.service sweepStuckMessages() (audit M3).
+// Also the fallback runner for one-step sends whose waitUntil timer was lost
+// (U0, draftSend.service) — run first, since those are minutes-sensitive.
 router.get(
   '/sweep-stuck-messages',
   async (req: Request, res: Response, next: NextFunction) => {
@@ -287,8 +290,14 @@ router.get(
         res.status(401).json({ success: false, error: 'Unauthorized' });
         return;
       }
+      let scheduledSends: Awaited<ReturnType<typeof sweepScheduledSends>> | null = null;
+      try {
+        scheduledSends = await sweepScheduledSends();
+      } catch (err) {
+        await logEvent('SCHEDULED_SEND_SWEEP_FAILED', { error: safeError(err).message }, 'ERROR');
+      }
       const result = await sweepStuckMessages({ deadline: Date.now() + 200_000 });
-      res.status(200).json({ success: true, data: result });
+      res.status(200).json({ success: true, data: { ...result, scheduledSends } });
     } catch (err) {
       next(err);
     }

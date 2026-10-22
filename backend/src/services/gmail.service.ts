@@ -1927,6 +1927,29 @@ export async function sendDraft(mailboxId: string, externalDraftId: string): Pro
   });
 }
 
+/**
+ * Send a reply directly (users.messages.send), with no Gmail draft in
+ * between (U0 one-step send). Same RFC 2822 builder as createDraft, so the
+ * threading headers and CC rules are identical.
+ */
+export async function sendMessage(
+  mailboxId: string,
+  draft: GmailDraftInput
+): Promise<{ id: string; threadId: string }> {
+  const mailbox = await prisma.mailbox.findUnique({ where: { id: mailboxId } });
+  if (!mailbox) throw new Error('Mailbox not found');
+
+  const gmail = await getGmailClient(mailbox);
+  const raw = await buildDraftRaw(mailbox, draft);
+
+  const res = await gmail.users.messages.send({
+    userId: 'me',
+    requestBody: { raw, threadId: draft.externalThreadId },
+  });
+
+  return { id: res.data.id ?? '', threadId: res.data.threadId ?? draft.externalThreadId };
+}
+
 export async function deleteDraft(mailboxId: string, externalDraftId: string): Promise<void> {
   const mailbox = await prisma.mailbox.findUnique({ where: { id: mailboxId } });
   if (!mailbox) throw new Error('Mailbox not found');
