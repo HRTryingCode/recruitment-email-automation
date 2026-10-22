@@ -54,7 +54,7 @@ export interface Mailbox {
 
 export type ReplyStatus = 'NEW' | 'AWAITING_REPLY' | 'REPLIED';
 
-export interface Candidate {
+export interface Candidate extends LeverCandidateFields {
   id: string;
   name: string;
   email: string;
@@ -527,10 +527,12 @@ export type LookupSkipReason = 'NOT_RECRUITING' | 'NO_ROLE' | 'FILTERED';
 type MailboxRef = { id: string; emailAddress: string };
 
 /**
- * Per-integration status keyed by integration name (F2 adds `lever`).
- * Empty until an integration is wired; see backend routes/lookup.ts.
+ * Per-integration status keyed by integration name; each key is absent when
+ * that integration is not configured. See backend routes/lookup.ts.
  */
-export type LookupIntegrationsData = Record<string, unknown>;
+export interface LookupIntegrationsData {
+  lever?: LeverLookupIntegration;
+}
 
 export interface LookupResult {
   email: string;
@@ -577,4 +579,48 @@ export interface LookupResult {
 export async function fetchLookup(email: string): Promise<SingleResponse<LookupResult>> {
   const res = await api.get('/lookup', { params: { email } });
   return res.data as SingleResponse<LookupResult>;
+
+// ── Lever status (F2, read-only) ─────────────────────────────────────────
+export type LeverState = 'ACTIVE' | 'ARCHIVED' | 'HIRED' | 'NOT_FOUND' | 'ERROR';
+
+/** Cached Lever columns on a Candidate row, refreshed every 3h by cron. */
+export interface LeverCandidateFields {
+  leverState?: LeverState | null;
+  leverOpportunityId?: string | null;
+  leverPostingTitle?: string | null;
+  leverStage?: string | null;
+  leverArchivedReason?: string | null;
+  leverCheckedAt?: string | null;
+  leverError?: string | null;
+}
+
+export interface LeverOpportunity {
+  id: string;
+  postingTitle: string | null;
+  stage: string | null;
+  archived: boolean;
+  hired: boolean;
+  archivedReason: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  leverUrl: string;
+}
+
+/** `integrations.lever` in GET /api/lookup (absent when Lever is unconfigured). */
+export interface LeverLookupIntegration {
+  status: 'FOUND' | 'NOT_FOUND' | 'ERROR';
+  state: LeverState;
+  message?: string;
+  primary: LeverOpportunity | null;
+  opportunities: LeverOpportunity[];
+  opportunityCount: number;
+  checkedAt: string;
+}
+
+/** On-demand Lever re-check for one candidate. */
+export async function refreshCandidateLever(
+  id: string
+): Promise<SingleResponse<{ candidate: Candidate; lever: { state: LeverState } }>> {
+  const res = await api.post(`/candidates/${id}/lever/refresh`);
+  return res.data as SingleResponse<{ candidate: Candidate; lever: { state: LeverState } }>;
 }

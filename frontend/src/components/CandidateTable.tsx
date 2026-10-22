@@ -52,6 +52,7 @@ import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Skeleton } from './ui/skeleton';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './ui/empty';
+import { CandidateLeverBadge } from './LeverBadge';
 
 function ReplyStatusBadge({ candidate }: { candidate: Candidate }) {
   const derived: NonNullable<Candidate['replyStatus']> =
@@ -716,6 +717,7 @@ function CandidateRow({
                   </span>
                 )}
               </div>
+              <div className="mt-1"><CandidateLeverBadge candidate={candidate} /></div>
             </div>
           </div>
         </td>
