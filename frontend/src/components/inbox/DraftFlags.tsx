@@ -1,5 +1,5 @@
 import { memo } from 'react';
-import { AlertCircle, Hourglass, Pencil } from 'lucide-react';
+import { AlertCircle, Circle, Hourglass, Pencil } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { expiresIn } from '@/lib/inbox';
 import { firstName } from './chips';
@@ -32,7 +32,7 @@ function DraftFlags({ flags, now }: { flags: DraftFlagFields; now?: number }) {
       )}
       {flags.returnedFromSnoozeAt && (
         <Badge variant="info" data-flag="unsnoozed">
-          <span aria-hidden="true" className="size-1.5 rounded-full bg-info" />
+          <Circle data-icon="inline-start" aria-hidden="true" className="fill-current" />
           Back from snooze
         </Badge>
       )}

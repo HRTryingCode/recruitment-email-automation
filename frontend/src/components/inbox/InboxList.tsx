@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef } from 'react';
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, type CSSProperties } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { AlertCircle, Inbox as InboxIcon, Send } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -69,7 +69,7 @@ const Row = memo(function Row({ item, rowKey, selected, focused, highlighted, ch
       aria-setsize={pos?.setSize}
       className={cn('flex items-center gap-1 px-2', pos && 'absolute inset-x-0 top-0 pb-0.5')}
       // eslint-disable-next-line no-restricted-syntax -- virtual row offset is computed per scroll
-      style={pos ? { transform: `translateY(${pos.start}px)` } : undefined}
+      style={pos ? offsetY(pos.start) : undefined}
     >
       {checkable && (
         <Checkbox
@@ -117,6 +117,10 @@ const Row = memo(function Row({ item, rowKey, selected, focused, highlighted, ch
     </li>
   );
 });
+
+/** Virtual-list geometry: the only inline styles here, and they change on every scroll. */
+const offsetY = (px: number): CSSProperties => ({ transform: `translateY(${px}px)` });
+const totalHeight = (px: number): CSSProperties => ({ height: px });
 
 type Entry = { type: 'header'; group: RoleGroup; n: number } | { type: 'item'; item: InboxItem; n: number };
 
@@ -280,7 +284,7 @@ function InboxList({
       aria-label={`${meta.label} replies`}
       className="relative"
       // eslint-disable-next-line no-restricted-syntax -- total height of the virtual list
-      style={{ height: virtualizer.getTotalSize() }}
+      style={totalHeight(virtualizer.getTotalSize())}
     >
       {virtualizer.getVirtualItems().map((v) => {
         const e = entries[v.index];
@@ -301,7 +305,7 @@ function InboxList({
             role="presentation"
             className="absolute inset-x-0 top-0"
             // eslint-disable-next-line no-restricted-syntax -- virtual row offset is computed per scroll
-            style={{ transform: `translateY(${v.start}px)` }}
+            style={offsetY(v.start)}
           >
             {groupHeading(e.group, e.n, '')}
           </li>
