@@ -51,6 +51,15 @@ const mockPrisma = injectedPrisma as unknown as MockPrisma;
 
 const AUTH = bearer('test-user-1');
 
+// Audit B6 / M9: DRAFT_* events must record which user acted.
+function loggedDetails(event: string): Record<string, unknown> | undefined {
+  const call = mockPrisma.systemLog.create.mock.calls.find(
+    ([arg]) => (arg as { data: { event: string } }).data.event === event
+  );
+  return call ? JSON.parse((call[0] as { data: { details: string } }).data.details) : undefined;
+}
+
+
 const baseMailbox = {
   id: 'mb-1',
   emailAddress: 'inbox@archive.com',
@@ -180,6 +189,10 @@ describe('/api/drafts', () => {
         where: { id: 'draft-1' },
         data: { status: 'APPROVED', externalDraftId: 'ext-draft-1' },
       });
+      expect(loggedDetails('DRAFT_APPROVED')).toMatchObject({
+        draftId: 'draft-1',
+        actorUserId: 'test-user-1',
+      });
     });
 
     it('returns 400 when the draft is not PENDING', async () => {
@@ -216,6 +229,10 @@ describe('/api/drafts', () => {
       expect(mockPrisma.emailDraft.update).toHaveBeenCalledWith({
         where: { id: 'draft-1' },
         data: { status: 'DISCARDED' },
+      });
+      expect(loggedDetails('DRAFT_DISCARDED')).toMatchObject({
+        draftId: 'draft-1',
+        actorUserId: 'test-user-1',
       });
     });
 
@@ -269,6 +286,10 @@ describe('/api/drafts', () => {
       expect(mockPrisma.candidate.update).toHaveBeenCalledWith({
         where: { id: 'cand-1' },
         data: { status: 'REPLIED', repliedAt: expect.any(Date) },
+      });
+      expect(loggedDetails('DRAFT_SENT')).toMatchObject({
+        draftId: 'draft-1',
+        actorUserId: 'test-user-1',
       });
     });
 
@@ -404,6 +425,10 @@ describe('/api/drafts', () => {
         from: 'Backend Engineer',
         to: 'Staff Backend Engineer',
         via: 'regenerate',
+      });
+      expect(loggedDetails('DRAFT_REGENERATED')).toMatchObject({
+        draftId: 'draft-1',
+        actorUserId: 'test-user-1',
       });
     });
 

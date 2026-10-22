@@ -336,7 +336,10 @@ type RegenerateOk = {
 };
 type RegenerateFail = { ok: false; status: number; message: string };
 
-async function regenerateDraftById(id: string): Promise<RegenerateOk | RegenerateFail> {
+async function regenerateDraftById(
+  id: string,
+  actorUserId?: string
+): Promise<RegenerateOk | RegenerateFail> {
   const draft = await prisma.emailDraft.findUnique({
     where: { id },
     include: {
@@ -558,7 +561,7 @@ async function regenerateDraftById(id: string): Promise<RegenerateOk | Regenerat
     );
   }
 
-  await logEvent('DRAFT_REGENERATED', { draftId: id, mailboxId: mailbox.id }, 'INFO');
+  await logEvent('DRAFT_REGENERATED', { draftId: id, mailboxId: mailbox.id, actorUserId }, 'INFO');
 
   return { ok: true, draft: updated, originalMessage, mailboxId: mailbox.id };
 }
@@ -566,7 +569,7 @@ async function regenerateDraftById(id: string): Promise<RegenerateOk | Regenerat
 // POST /api/drafts/regenerate-pending
 // Bulk re-runs Claude on every PENDING draft attached to an active mailbox.
 // Capped at 50 per request to stay inside Vercel's function timeout.
-router.post('/regenerate-pending', requireAdmin, async (_req: Request, res: Response, next: NextFunction) => {
+router.post('/regenerate-pending', requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const pending = await prisma.emailDraft.findMany({
       where: {
@@ -582,7 +585,7 @@ router.post('/regenerate-pending', requireAdmin, async (_req: Request, res: Resp
     const skipped: string[] = [];
     for (const { id } of pending) {
       try {
-        const result = await regenerateDraftById(id);
+        const result = await regenerateDraftById(id, req.userId);
         if (result.ok) {
           regenerated += 1;
         } else {
@@ -604,7 +607,7 @@ router.post('/regenerate-pending', requireAdmin, async (_req: Request, res: Resp
 router.post('/:id/regenerate', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = String(req.params.id);
-    const result = await regenerateDraftById(id);
+    const result = await regenerateDraftById(id, req.userId);
     if (!result.ok) {
       return next(createError(result.message, result.status));
     }
@@ -659,7 +662,11 @@ router.post('/:id/dictate', async (req: Request, res: Response, next: NextFuncti
       include: draftWithThreadInclude,
     });
 
-    await logEvent('DRAFT_DICTATED', { draftId: id, mailboxId: mailbox.id }, 'INFO');
+    await logEvent(
+      'DRAFT_DICTATED',
+      { draftId: id, mailboxId: mailbox.id, actorUserId: req.userId },
+      'INFO'
+    );
 
     res.json({ success: true, data: updated });
   } catch (err) {
@@ -712,7 +719,7 @@ router.post('/:id/approve', async (req: Request, res: Response, next: NextFuncti
           gmailErr instanceof Error ? gmailErr.message : String(gmailErr);
         await logEvent(
           'DRAFT_APPROVE_GMAIL_FAILED',
-          { draftId: id, error: message },
+          { draftId: id, error: message, actorUserId: req.userId },
           'ERROR'
         );
         return next(
@@ -729,7 +736,7 @@ router.post('/:id/approve', async (req: Request, res: Response, next: NextFuncti
       });
     }
 
-    await logEvent('DRAFT_APPROVED', { draftId: id }, 'INFO');
+    await logEvent('DRAFT_APPROVED', { draftId: id, actorUserId: req.userId }, 'INFO');
     res.json({ success: true, message: 'Draft approved' });
   } catch (err) {
     next(err);
@@ -751,7 +758,7 @@ router.post('/:id/discard', async (req: Request, res: Response, next: NextFuncti
       data: { status: 'DISCARDED' },
     });
 
-    await logEvent('DRAFT_DISCARDED', { draftId: id }, 'INFO');
+    await logEvent('DRAFT_DISCARDED', { draftId: id, actorUserId: req.userId }, 'INFO');
     res.json({ success: true, message: 'Draft discarded' });
   } catch (err) {
     next(err);
@@ -834,7 +841,7 @@ router.post('/:id/send', async (req: Request, res: Response, next: NextFunction)
       });
     }
 
-    await logEvent('DRAFT_SENT', { draftId: id }, 'INFO');
+    await logEvent('DRAFT_SENT', { draftId: id, actorUserId: req.userId }, 'INFO');
     res.json({ success: true, message: 'Draft sent' });
   } catch (err) {
     next(err);

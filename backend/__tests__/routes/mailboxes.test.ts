@@ -153,6 +153,13 @@ describe('/api/mailboxes', () => {
         where: { id: 'mb-1' },
         data: { isActive: false },
       });
+      const logged = mockPrisma.systemLog.create.mock.calls.find(
+        ([arg]) => (arg as { data: { event: string } }).data.event === 'MAILBOX_DISCONNECTED'
+      );
+      expect(JSON.parse((logged![0] as { data: { details: string } }).data.details)).toMatchObject({
+        mailboxId: 'mb-1',
+        actorUserId: 'test-user-1',
+      });
     });
 
     it('stops the Gmail watch on disconnect (L4)', async () => {

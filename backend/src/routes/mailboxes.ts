@@ -69,7 +69,7 @@ router.post('/:id/resync', requireAdmin, async (req: Request, res: Response, nex
       return next(createError('Mailbox not found', 404));
     }
     const result = await syncMessages(id, { daysBack: 30, classifyDaysBack: 30 });
-    await logEvent('MAILBOX_RESYNCED', { mailboxId: id, ...result }, 'INFO');
+    await logEvent('MAILBOX_RESYNCED', { mailboxId: id, ...result, actorUserId: req.userId }, 'INFO');
     res.json({ success: true, data: result });
   } catch (err) {
     // Surface OAuth/auth failures with a specific message so the UI can prompt
@@ -146,7 +146,11 @@ router.post('/workspace/connect', requireAdmin, async (req: Request, res: Respon
           },
         });
 
-        await logEvent('MAILBOX_WORKSPACE_CONNECTED', { mailboxId: mailbox.id, email }, 'INFO');
+        await logEvent(
+          'MAILBOX_WORKSPACE_CONNECTED',
+          { mailboxId: mailbox.id, email, actorUserId: req.userId },
+          'INFO'
+        );
 
         // Start push notifications now rather than waiting up to 6h for the
         // renew-watches cron (L4). Non-fatal: that cron retries it.
@@ -396,7 +400,7 @@ router.delete('/:id', requireAdmin, async (req: Request, res: Response, next: Ne
       data: { isActive: false },
     });
 
-    await logEvent('MAILBOX_DISCONNECTED', { mailboxId: id }, 'INFO');
+    await logEvent('MAILBOX_DISCONNECTED', { mailboxId: id, actorUserId: req.userId }, 'INFO');
     res.json({ success: true, message: 'Mailbox disconnected' });
   } catch (err) {
     next(err);
