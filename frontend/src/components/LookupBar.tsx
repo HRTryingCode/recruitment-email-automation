@@ -224,7 +224,7 @@ export default function LookupBar() {
   const openConversation = (result: LookupResult) => {
     const latest = result.drafts.latest;
     if (latest && latest.status === 'PENDING') go('/inbox', { draftId: latest.id });
-    else go('/candidates', { q: result.email });
+    else if (result.candidate) go('/candidates', { candidate: result.candidate.id });
   };
 
   const commands: Array<{ heading: string; items: PaletteCommand[] }> = [

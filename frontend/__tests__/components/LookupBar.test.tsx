@@ -205,7 +205,7 @@ describe('<LookupBar /> lookup', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
-  it('opens Candidates filtered by email when there is no pending draft', async () => {
+  it('opens the candidate side panel on Candidates when there is no pending draft (R3)', async () => {
     fetchLookupMock.mockResolvedValue({
       success: true,
       data: base({
@@ -220,7 +220,7 @@ describe('<LookupBar /> lookup', () => {
     });
     const { user } = await openAndType('bob@x.com');
     await user.click(await screen.findByRole('button', { name: /open conversation/i }));
-    expect(screen.getByTestId('location')).toHaveTextContent('/candidates?q=bob%40x.com');
+    expect(screen.getByTestId('location')).toHaveTextContent('/candidates?candidate=cand-1');
   });
 
   it.each([

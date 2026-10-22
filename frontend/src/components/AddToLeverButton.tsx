@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
-import { cn } from '@/lib/utils';
 import { fetchLeverMe, type CreateLeverResult, type LeverTarget } from '@/lib/leverApi';
 import { prefetchAddToLever } from '@/lib/leverQueries';
 import AddToLeverDialog from './AddToLeverDialog';
+import { Button } from './ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 
 interface Props {
   target: LeverTarget;
@@ -12,6 +13,8 @@ interface Props {
   inLever: boolean;
   onCreated?: (result: CreateLeverResult) => void;
   className?: string;
+  /** `ghost` for table row actions; `outline` (default) elsewhere. */
+  variant?: 'outline' | 'ghost';
 }
 
 /**
@@ -20,7 +23,7 @@ interface Props {
  * off or the recruiter has no Lever user. Hover/focus prefetches the
  * dialog's data (H5) so it usually opens fully filled.
  */
-export default function AddToLeverButton({ target, inLever, onCreated, className }: Props) {
+export default function AddToLeverButton({ target, inLever, onCreated, className, variant = 'outline' }: Props) {
   const [open, setOpen] = useState(false);
   const queryClient = useQueryClient();
   const { data: me, isError } = useQuery({
@@ -41,27 +44,35 @@ export default function AddToLeverButton({ target, inLever, onCreated, className
     if (!reason) prefetchAddToLever(queryClient, target);
   };
 
+  const button = (
+    <Button
+      type="button"
+      size="xs"
+      variant={variant}
+      aria-disabled={reason ? 'true' : undefined}
+      onMouseEnter={prefetch}
+      onFocus={prefetch}
+      onClick={() => {
+        if (!reason) setOpen(true);
+      }}
+      className={reason ? 'cursor-not-allowed opacity-50' : className}
+    >
+      <Plus data-icon="inline-start" />
+      {label}
+    </Button>
+  );
+
   return (
-    // Row clicks expand CandidateTable rows; nothing in here should.
+    // Row clicks open the CandidateTable side panel; nothing in here should.
     <span onClick={(e) => e.stopPropagation()} className="inline-flex">
-      <button
-        type="button"
-        aria-disabled={reason ? 'true' : undefined}
-        title={reason ?? undefined}
-        onMouseEnter={prefetch}
-        onFocus={prefetch}
-        onClick={() => {
-          if (!reason) setOpen(true);
-        }}
-        className={cn(
-          'inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11.5px] font-medium text-accent-700 ring-1 ring-inset ring-accent-500/20 transition-colors hover:bg-accent-500/10 dark:text-accent-300',
-          reason && 'cursor-not-allowed opacity-50 hover:bg-transparent',
-          className
-        )}
-      >
-        <Plus className="h-3 w-3" />
-        {label}
-      </button>
+      {reason ? (
+        <Tooltip>
+          <TooltipTrigger asChild>{button}</TooltipTrigger>
+          <TooltipContent>{reason}</TooltipContent>
+        </Tooltip>
+      ) : (
+        button
+      )}
       {open && <AddToLeverDialog open onOpenChange={setOpen} target={target} onCreated={onCreated} />}
     </span>
   );

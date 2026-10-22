@@ -1,7 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, within } from '@testing-library/react';
+import { render as rtlRender, screen, within } from '@testing-library/react';
+import type { ReactElement } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import LookupIntegrations from '../../src/components/LookupIntegrations';
+import { TooltipProvider } from '../../src/components/ui/tooltip';
+
+// The Lever chip's detail is a ui/tooltip (R3); main.tsx provides this in the app.
+const render = (ui: ReactElement) => rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
 
 vi.mock('../../src/lib/leverApi', () => ({
   fetchLeverMe: vi.fn().mockResolvedValue({

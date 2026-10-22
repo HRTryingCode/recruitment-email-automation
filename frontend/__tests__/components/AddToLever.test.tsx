@@ -134,7 +134,8 @@ describe('AddToLeverButton', () => {
     wrap(<AddToLeverButton target={{ candidateId: 'c1' }} inLever={false} />);
     const btn = await screen.findByRole('button', { name: 'Add to Lever' });
     expect(btn).toHaveAttribute('aria-disabled', 'true');
-    expect(btn).toHaveAttribute('title', 'Add to Lever is turned off');
+    await userEvent.hover(btn);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Add to Lever is turned off');
     await userEvent.click(btn);
     expect(screen.queryByRole('dialog')).toBeNull();
   });
@@ -143,7 +144,8 @@ describe('AddToLeverButton', () => {
     api.fetchLeverMe.mockResolvedValue({ configured: true, createEnabled: true, appEmail: 'new@archive.com', leverUser: null });
     wrap(<AddToLeverButton target={{ candidateId: 'c1' }} inLever={false} />);
     const btn = await screen.findByRole('button', { name: 'Add to Lever' });
-    expect(btn).toHaveAttribute('title', "Your Lever account wasn't found for new@archive.com");
+    await userEvent.hover(btn);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent("Your Lever account wasn't found for new@archive.com");
   });
 
   it('Lever not configured (or /me failing) → hidden', async () => {

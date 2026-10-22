@@ -43,8 +43,8 @@ interface Props {
 }
 
 /**
- * Lever status for the reply pane header (read-only, from the cached
- * Candidate columns): state, job · stage, archived reason, last check with
+ * Lever status (read-only, from the cached Candidate columns), shared by the
+ * Inbox reply pane header and the Candidates side panel: state, job · stage, archived reason, last check with
  * a re-check button, Open in Lever, and Add to Lever / Add to another job.
  */
 export default function LeverSection({ candidateId, lever, draftId }: Props) {
@@ -79,6 +79,7 @@ export default function LeverSection({ candidateId, lever, draftId }: Props) {
     void qc.invalidateQueries({ queryKey: ['inbox'] });
     if (draftId) void qc.invalidateQueries({ queryKey: ['draft', draftId] });
     void qc.invalidateQueries({ queryKey: ['candidate', candidateId] });
+    void qc.invalidateQueries({ queryKey: ['candidates'] });
   };
 
   const refresh = async () => {

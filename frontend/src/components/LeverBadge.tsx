@@ -1,21 +1,20 @@
 import { Briefcase, ExternalLink } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { LeverCandidateFields, LeverLookupIntegration, LeverState } from '@/lib/api';
+import { Badge } from './ui/badge';
+import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 
-// Read-only Lever status pill (F2). Colours follow StatusBadge: X-700 text in
-// light mode, X-300 in dark; checking/unknown/not-found use the theme-aware
-// fg tokens. "Lever unknown" is reserved for real ERROR rows; never-checked
-// rows read "Checking Lever…" (H1) while the table/cron fill them in.
-const PILL =
-  'inline-flex max-w-full items-center gap-1 truncate rounded-md px-2 py-0.5 text-[11.5px] font-medium ring-1 ring-inset';
-
-const STYLES: Record<LeverState | 'CHECKING', string> = {
-  ACTIVE: 'bg-violet-500/10 text-violet-700 ring-violet-500/20 dark:text-violet-300',
-  HIRED: 'bg-emerald-500/10 text-emerald-700 ring-emerald-500/20 dark:text-emerald-300',
-  ARCHIVED: 'bg-fg-strong/[0.05] text-fg-default ring-fg-strong/[0.08]',
-  NOT_FOUND: 'bg-fg-strong/[0.03] text-fg-subtle ring-fg-strong/[0.05]',
-  ERROR: 'bg-fg-strong/[0.03] text-fg-subtle ring-fg-strong/[0.05]',
-  CHECKING: 'bg-fg-strong/[0.03] text-fg-subtle ring-fg-strong/[0.05]',
+// Read-only Lever status chip (F2) — same colours as the Inbox Lever section
+// (components/lever/LeverSection). Never-checked rows read "Checking Lever…"
+// (H1) while the table/cron fill them in; "Lever unknown" is real ERRORs only.
+type Variant = 'info' | 'success' | 'secondary' | 'outline' | 'warning';
+const VARIANT: Record<LeverState | 'CHECKING', Variant> = {
+  ACTIVE: 'info',
+  HIRED: 'success',
+  ARCHIVED: 'secondary',
+  NOT_FOUND: 'outline',
+  ERROR: 'warning',
+  CHECKING: 'outline',
 };
 
 export interface LeverBadgeProps {
@@ -84,39 +83,42 @@ function describe(p: LeverBadgeProps): { label: string; title: string } {
 
 export default function LeverBadge(props: LeverBadgeProps) {
   const { label, title } = describe(props);
-  const style = STYLES[props.state ?? 'CHECKING'];
+  const state = props.state ?? 'CHECKING';
   const linked =
     !!props.opportunityId && (props.state === 'ACTIVE' || props.state === 'ARCHIVED' || props.state === 'HIRED');
-
-  if (linked) {
-    return (
-      <a
-        data-testid="lever-badge"
-        data-state={props.state}
-        href={`https://hire.lever.co/candidates/${encodeURIComponent(props.opportunityId!)}`}
-        target="_blank"
-        rel="noopener noreferrer"
-        title={title}
-        aria-label={`${props.state === 'ACTIVE' ? 'In Lever' : label}: open in Lever`}
-        onClick={(e) => e.stopPropagation()}
-        className={cn(PILL, style, 'hover:underline', props.className)}
-      >
-        <Briefcase className="h-3 w-3 flex-shrink-0" />
-        <span className="truncate">{label}</span>
-        <ExternalLink className="h-2.5 w-2.5 flex-shrink-0 opacity-60" />
-      </a>
-    );
-  }
-  return (
-    <span
+  const chip = (
+    <Badge
       data-testid="lever-badge"
-      data-state={props.state ?? 'CHECKING'}
-      title={title}
-      className={cn(PILL, style, props.className)}
+      data-state={state}
+      variant={VARIANT[state]}
+      className={cn('max-w-full', state === 'CHECKING' && 'text-muted-foreground', props.className)}
     >
-      <Briefcase className="h-3 w-3 flex-shrink-0" />
+      <Briefcase data-icon="inline-start" />
       <span className="truncate">{label}</span>
-    </span>
+      {linked && <ExternalLink data-icon="inline-end" />}
+    </Badge>
+  );
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        {linked ? (
+          <a
+            href={`https://hire.lever.co/candidates/${encodeURIComponent(props.opportunityId!)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`${props.state === 'ACTIVE' ? 'In Lever' : label}: open in Lever`}
+            onClick={(e) => e.stopPropagation()}
+            className="inline-flex min-w-0 max-w-full hover:underline"
+          >
+            {chip}
+          </a>
+        ) : (
+          <span className="inline-flex min-w-0 max-w-full">{chip}</span>
+        )}
+      </TooltipTrigger>
+      <TooltipContent>{title}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -152,7 +154,7 @@ export function LeverLookupPanel({ integration }: { integration: LeverLookupInte
         checkedAt={integration.checkedAt}
       />
       {others.length > 0 && (
-        <ul className="space-y-0.5 text-[12px] text-fg-muted">
+        <ul className="space-y-0.5 text-xs text-muted-foreground">
           {others.map((o) => (
             <li key={o.id}>
               <a href={o.leverUrl} target="_blank" rel="noopener noreferrer" className="hover:underline">
