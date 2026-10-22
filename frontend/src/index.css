@@ -4,40 +4,18 @@
 @tailwind utilities;
 
 @layer base {
+  /*
+   * Theme tokens. shadcn luma/taupe preset (docs/DESIGN-SYSTEM.md §1) —
+   * `:root` is light, `.dark` is dark (lib/theme.ts toggles the class).
+   *
+   * R1 (Andriy, 2026-10-22): FULL TAUPE, no purple brand colour. The legacy
+   * `accent-50…900` ramp and the legacy `fg-*` / `bg-*` RGB triplets below
+   * are kept only so the R2–R4 screens that still use those classes render
+   * taupe until they are refactored; new code uses the shadcn tokens.
+   * Status colours: success = interested/ok, warning = unsure/needs review,
+   * destructive = not interested/error, info = neutral-informational.
+   */
   :root {
-    /*
-     * Default tokens — used until `applyTheme()` toggles `.dark` / `.light` on
-     * the <html> element. We ship the dark palette here so the very first paint
-     * (before our pre-render script runs) matches what most users will see.
-     */
-    --bg-base: 24 25 31;
-    --bg-surface: 30 31 38;
-    --bg-elevated: 35 37 44;
-    --bg-overlay: 24 25 31;
-
-    --fg-strong: 240 240 245;
-    --fg-default: 220 220 228;
-    --fg-muted: 160 160 175;
-    --fg-subtle: 110 110 125;
-
-    --border-base: 240 240 245;
-
-    --accent-300: 178 154 248;
-    --accent-500: 124 92 245;
-    --accent-700: 92 64 200;
-    --accent-bg: 124 92 245;
-
-    --emerald: 52 211 153;
-    --rose: 251 113 133;
-    --amber: 251 191 36;
-    --sky: 56 189 248;
-
-    --glow-1: 155 125 255 / 0.06;
-    --glow-2: 124 92 245 / 0.04;
-    --grid-line: 255 255 255 / 0.025;
-
-    --scrollbar-thumb: 60 62 71;
-    --scrollbar-thumb-hover: 80 82 92;
     --background: oklch(1 0 0);
     --foreground: oklch(0.147 0.004 49.3);
     --card: oklch(1 0 0);
@@ -53,6 +31,12 @@
     --accent: oklch(0.96 0.002 17.2);
     --accent-foreground: oklch(0.214 0.009 43.1);
     --destructive: oklch(0.577 0.245 27.325);
+    --success: oklch(0.527 0.154 150.069);
+    --success-foreground: oklch(0.986 0.002 67.8);
+    --warning: oklch(0.555 0.163 48.998);
+    --warning-foreground: oklch(0.986 0.002 67.8);
+    --info: oklch(0.5 0.134 242.749);
+    --info-foreground: oklch(0.986 0.002 67.8);
     --border: oklch(0.922 0.005 34.3);
     --input: oklch(0.922 0.005 34.3);
     --ring: oklch(0.714 0.014 41.2);
@@ -70,68 +54,27 @@
     --sidebar-accent-foreground: oklch(0.214 0.009 43.1);
     --sidebar-border: oklch(0.922 0.005 34.3);
     --sidebar-ring: oklch(0.714 0.014 41.2);
-  }
 
-  .light {
-    --bg-base: 250 250 251;
-    --bg-surface: 255 255 255;
-    --bg-elevated: 247 247 250;
-    --bg-overlay: 255 255 255;
+    /* Legacy purple ramp → taupe. Light: tints for 50–200, primary above. */
+    --accent-50: var(--secondary);
+    --accent-100: var(--secondary);
+    --accent-200: var(--border);
+    --accent-300: var(--primary);
+    --accent-400: var(--primary);
+    --accent-500: var(--primary);
+    --accent-600: var(--primary);
+    --accent-700: var(--primary);
+    --accent-800: var(--primary);
+    --accent-900: var(--primary);
 
-    --fg-strong: 15 15 21;
-    --fg-default: 39 39 45;
-    --fg-muted: 88 88 102;
-    --fg-subtle: 144 144 158;
-
-    --border-base: 15 15 21;
-
-    --accent-300: 138 91 247;
-    --accent-500: 109 64 230;
-    --accent-700: 79 41 184;
-    --accent-bg: 109 64 230;
-
-    --emerald: 5 150 105;
-    --rose: 220 38 38;
-    --amber: 217 119 6;
-    --sky: 14 116 144;
-
-    --glow-1: 138 91 247 / 0.10;
-    --glow-2: 109 64 230 / 0.05;
-    --grid-line: 15 15 21 / 0.04;
-
-    --scrollbar-thumb: 220 220 228;
-    --scrollbar-thumb-hover: 175 175 188;
+    /* Legacy RGB triplets (taupe/stone) for `rgb(var(--fg-strong) / a)`. */
+    --bg-base: 255 255 255;
+    --fg-strong: 12 10 9;
+    --scrollbar-thumb: 214 211 209;
+    --scrollbar-thumb-hover: 168 162 158;
   }
 
   .dark {
-    --bg-base: 24 25 31;
-    --bg-surface: 30 31 38;
-    --bg-elevated: 35 37 44;
-    --bg-overlay: 24 25 31;
-
-    --fg-strong: 240 240 245;
-    --fg-default: 220 220 228;
-    --fg-muted: 160 160 175;
-    --fg-subtle: 110 110 125;
-
-    --border-base: 240 240 245;
-
-    --accent-300: 178 154 248;
-    --accent-500: 124 92 245;
-    --accent-700: 92 64 200;
-    --accent-bg: 124 92 245;
-
-    --emerald: 52 211 153;
-    --rose: 251 113 133;
-    --amber: 251 191 36;
-    --sky: 56 189 248;
-
-    --glow-1: 155 125 255 / 0.06;
-    --glow-2: 124 92 245 / 0.04;
-    --grid-line: 255 255 255 / 0.025;
-
-    --scrollbar-thumb: 60 62 71;
-    --scrollbar-thumb-hover: 80 82 92;
     --background: oklch(0.147 0.004 49.3);
     --foreground: oklch(0.986 0.002 67.8);
     --card: oklch(0.214 0.009 43.1);
@@ -147,6 +90,12 @@
     --accent: oklch(0.268 0.011 36.5);
     --accent-foreground: oklch(0.986 0.002 67.8);
     --destructive: oklch(0.704 0.191 22.216);
+    --success: oklch(0.792 0.209 151.711);
+    --success-foreground: oklch(0.147 0.004 49.3);
+    --warning: oklch(0.828 0.189 84.429);
+    --warning-foreground: oklch(0.147 0.004 49.3);
+    --info: oklch(0.746 0.16 232.661);
+    --info-foreground: oklch(0.147 0.004 49.3);
     --border: oklch(1 0 0 / 10%);
     --input: oklch(1 0 0 / 15%);
     --ring: oklch(0.547 0.021 43.1);
@@ -157,12 +106,33 @@
     --chart-5: oklch(0.268 0.011 36.5);
     --sidebar: oklch(0.214 0.009 43.1);
     --sidebar-foreground: oklch(0.986 0.002 67.8);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.986 0.002 67.8);
+    --sidebar-primary: oklch(0.922 0.005 34.3);
+    --sidebar-primary-foreground: oklch(0.214 0.009 43.1);
     --sidebar-accent: oklch(0.268 0.011 36.5);
     --sidebar-accent-foreground: oklch(0.986 0.002 67.8);
     --sidebar-border: oklch(1 0 0 / 10%);
     --sidebar-ring: oklch(0.547 0.021 43.1);
+
+    /*
+     * Dark: 50–400 are used as text on dark surfaces (`dark:text-accent-300`)
+     * → light taupe; 500–700 are used as fills under `text-white` → a mid
+     * taupe that keeps white text legible; 800–900 → secondary.
+     */
+    --accent-50: var(--foreground);
+    --accent-100: var(--foreground);
+    --accent-200: var(--foreground);
+    --accent-300: var(--primary);
+    --accent-400: var(--primary);
+    --accent-500: oklch(0.438 0.017 39.3);
+    --accent-600: oklch(0.438 0.017 39.3);
+    --accent-700: oklch(0.438 0.017 39.3);
+    --accent-800: var(--secondary);
+    --accent-900: var(--secondary);
+
+    --bg-base: 12 10 9;
+    --fg-strong: 250 250 249;
+    --scrollbar-thumb: 68 64 60;
+    --scrollbar-thumb-hover: 87 83 78;
   }
 
   * {
@@ -186,19 +156,6 @@
 
   body {
     @apply antialiased bg-background text-foreground;
-    background:
-      radial-gradient(
-        1200px 600px at 100% -10%,
-        rgb(var(--glow-1)),
-        transparent 60%
-      ),
-      radial-gradient(
-        800px 500px at -10% 100%,
-        rgb(var(--glow-2)),
-        transparent 60%
-      ),
-      rgb(var(--bg-base));
-    background-attachment: fixed;
     font-feature-settings: 'cv11', 'ss01';
     letter-spacing: -0.005em;
     transition:
@@ -226,7 +183,7 @@
   }
 
   :focus-visible {
-    outline: 2px solid rgb(var(--accent-500));
+    outline: 2px solid var(--ring);
     outline-offset: 2px;
     border-radius: 6px;
   }
@@ -238,20 +195,12 @@
 }
 
 @layer components {
-  .card {
-    @apply relative rounded-xl border border-line-soft bg-surface-raised backdrop-blur-sm;
-  }
-
+  /* Legacy classes still used by R2 (.card-hover) and R3/R4 (.skeleton);
+     the batch that removes the last user deletes the class. */
   .card-hover {
-    @apply transition-all duration-200 hover:border-line-strong hover:bg-surface-elevated;
+    @apply transition-colors duration-200 hover:border-border hover:bg-muted;
   }
 
-  .hairline {
-    border-color: rgb(var(--border-base) / 0.06);
-  }
-
-  /* Shimmer skeleton uses a translucent foreground over the surface so the
-     contrast works in either theme. */
   .skeleton {
     background: linear-gradient(
       90deg,
@@ -262,13 +211,6 @@
     background-size: 200% 100%;
     animation: shimmer 2s linear infinite;
     border-radius: 6px;
-  }
-
-  .grid-bg {
-    background-image:
-      linear-gradient(rgb(var(--grid-line)) 1px, transparent 1px),
-      linear-gradient(90deg, rgb(var(--grid-line)) 1px, transparent 1px);
-    background-size: 24px 24px;
   }
 }
 

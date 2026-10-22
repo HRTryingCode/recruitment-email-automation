@@ -97,58 +97,80 @@ const config: Config = {
           4: 'oklch(from var(--chart-4) l c h / calc(alpha * <alpha-value>))',
           5: 'oklch(from var(--chart-5) l c h / calc(alpha * <alpha-value>))',
         },
-        // ---- Semantic foreground tokens ----------------------------------
-        // Flip light/dark via CSS variables in index.css. The single RGB
-        // triplet lets Tailwind compose alpha with `/<N>` for borders.
+        success: {
+          DEFAULT: 'oklch(from var(--success) l c h / <alpha-value>)',
+          foreground: 'oklch(from var(--success-foreground) l c h / <alpha-value>)',
+        },
+        warning: {
+          DEFAULT: 'oklch(from var(--warning) l c h / <alpha-value>)',
+          foreground: 'oklch(from var(--warning-foreground) l c h / <alpha-value>)',
+        },
+        info: {
+          DEFAULT: 'oklch(from var(--info) l c h / <alpha-value>)',
+          foreground: 'oklch(from var(--info-foreground) l c h / <alpha-value>)',
+        },
+        // ---- Legacy names, re-pointed at the taupe tokens (R1) ------------
+        // R2–R4 screens still use these classes; they now render taupe and
+        // are replaced by the shadcn names as each batch refactors its area.
         fg: {
-          strong: 'rgb(var(--fg-strong) / <alpha-value>)',
-          DEFAULT: 'rgb(var(--fg-default) / <alpha-value>)',
-          default: 'rgb(var(--fg-default) / <alpha-value>)',
-          muted: 'rgb(var(--fg-muted) / <alpha-value>)',
-          subtle: 'rgb(var(--fg-subtle) / <alpha-value>)',
+          strong: 'oklch(from var(--foreground) l c h / <alpha-value>)',
+          DEFAULT: 'oklch(from var(--foreground) l c h / <alpha-value>)',
+          default: 'oklch(from var(--foreground) l c h / <alpha-value>)',
+          muted: 'oklch(from var(--muted-foreground) l c h / <alpha-value>)',
+          subtle: 'oklch(from var(--muted-foreground) l c h / <alpha-value>)',
         },
-        // ---- Semantic background tokens ----------------------------------
         surface: {
-          base: 'rgb(var(--bg-base) / <alpha-value>)',
-          raised: 'rgb(var(--bg-surface) / <alpha-value>)',
-          elevated: 'rgb(var(--bg-elevated) / <alpha-value>)',
-          overlay: 'rgb(var(--bg-overlay) / <alpha-value>)',
+          base: 'oklch(from var(--background) l c h / <alpha-value>)',
+          raised: 'oklch(from var(--card) l c h / <alpha-value>)',
+          elevated: 'oklch(from var(--muted) l c h / <alpha-value>)',
+          overlay: 'oklch(from var(--popover) l c h / <alpha-value>)',
         },
-        // ---- Border (low-alpha hairline; same RGB as fg-strong) -----------
         line: {
-          soft: 'rgb(var(--border-base) / 0.06)',
-          DEFAULT: 'rgb(var(--border-base) / 0.09)',
-          strong: 'rgb(var(--border-base) / 0.14)',
+          soft: 'oklch(from var(--foreground) l c h / 0.06)',
+          DEFAULT: 'oklch(from var(--foreground) l c h / 0.09)',
+          strong: 'oklch(from var(--foreground) l c h / 0.14)',
         },
-        // ---- Legacy `ink-*` ramp — same names, theme-driven values --------
-        // Existing components keep their visual intent across themes.
         ink: {
-          50: 'rgb(var(--fg-strong) / <alpha-value>)',
-          100: 'rgb(var(--fg-strong) / <alpha-value>)',
-          200: 'rgb(var(--fg-default) / <alpha-value>)',
-          300: 'rgb(var(--fg-muted) / <alpha-value>)',
-          400: 'rgb(var(--fg-muted) / <alpha-value>)',
-          500: 'rgb(var(--fg-subtle) / <alpha-value>)',
-          600: 'rgb(var(--fg-subtle) / <alpha-value>)',
-          700: 'rgb(var(--bg-elevated) / <alpha-value>)',
-          800: 'rgb(var(--bg-elevated) / <alpha-value>)',
-          900: 'rgb(var(--bg-surface) / <alpha-value>)',
-          950: 'rgb(var(--bg-base) / <alpha-value>)',
+          50: 'oklch(from var(--foreground) l c h / <alpha-value>)',
+          100: 'oklch(from var(--foreground) l c h / <alpha-value>)',
+          200: 'oklch(from var(--foreground) l c h / <alpha-value>)',
+          300: 'oklch(from var(--muted-foreground) l c h / <alpha-value>)',
+          400: 'oklch(from var(--muted-foreground) l c h / <alpha-value>)',
+          500: 'oklch(from var(--muted-foreground) l c h / <alpha-value>)',
+          600: 'oklch(from var(--muted-foreground) l c h / <alpha-value>)',
+          700: 'oklch(from var(--muted) l c h / <alpha-value>)',
+          800: 'oklch(from var(--muted) l c h / <alpha-value>)',
+          900: 'oklch(from var(--card) l c h / <alpha-value>)',
+          950: 'oklch(from var(--background) l c h / <alpha-value>)',
         },
-        // ---- Accent (purple) ---------------------------------------------
+        // ---- Purple palettes → taupe (full-taupe decision, R1) ------------
+        // e.g. LeverBadge's `bg-violet-500/10 text-violet-700` (R3-owned).
+        ...Object.fromEntries(
+          ['violet', 'purple', 'indigo', 'fuchsia'].map((name) => [
+            name,
+            Object.fromEntries(
+              [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950].map((n) => [
+                n,
+                `oklch(from var(--accent-${Math.min(n, 900)}) l c h / <alpha-value>)`,
+              ])
+            ),
+          ])
+        ),
+        // ---- accent: shadcn's hover token + the legacy ramp (now taupe) ---
+        // The numbered steps resolve through --accent-<n> in index.css.
         accent: {
           DEFAULT: 'var(--accent)',
           foreground: 'var(--accent-foreground)',
-          50: '#f4f1ff',
-          100: '#ebe5ff',
-          200: '#d7cbff',
-          300: 'rgb(var(--accent-300) / <alpha-value>)',
-          400: 'rgb(var(--accent-500) / <alpha-value>)',
-          500: 'rgb(var(--accent-500) / <alpha-value>)',
-          600: 'rgb(var(--accent-700) / <alpha-value>)',
-          700: 'rgb(var(--accent-700) / <alpha-value>)',
-          800: '#3a2884',
-          900: '#251954',
+          50: 'oklch(from var(--accent-50) l c h / <alpha-value>)',
+          100: 'oklch(from var(--accent-100) l c h / <alpha-value>)',
+          200: 'oklch(from var(--accent-200) l c h / <alpha-value>)',
+          300: 'oklch(from var(--accent-300) l c h / <alpha-value>)',
+          400: 'oklch(from var(--accent-400) l c h / <alpha-value>)',
+          500: 'oklch(from var(--accent-500) l c h / <alpha-value>)',
+          600: 'oklch(from var(--accent-600) l c h / <alpha-value>)',
+          700: 'oklch(from var(--accent-700) l c h / <alpha-value>)',
+          800: 'oklch(from var(--accent-800) l c h / <alpha-value>)',
+          900: 'oklch(from var(--accent-900) l c h / <alpha-value>)',
         },
       },
       borderRadius: {
@@ -168,9 +190,9 @@ const config: Config = {
       textUnderlineOffset: shadcnCompatTheme.textUnderlineOffset,
       boxShadow: {
         ...shadcnCompatTheme.boxShadow,
-        glow: '0 0 0 1px rgb(var(--accent-500) / 0.18), 0 8px 32px -8px rgb(var(--accent-500) / 0.25)',
-        'card-hover':
-          '0 8px 24px -8px rgb(0 0 0 / 0.18), 0 0 0 1px rgb(var(--accent-500) / 0.08)',
+        // Legacy names kept for R2–R4 users; neutral now (no purple glow).
+        glow: '0 1px 2px 0 oklch(from var(--foreground) l c h / 0.08)',
+        'card-hover': '0 8px 24px -8px oklch(from var(--foreground) l c h / 0.12)',
       },
       keyframes: {
         shimmer: {
