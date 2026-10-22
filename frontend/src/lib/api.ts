@@ -514,3 +514,67 @@ export async function deleteExpectedSender(id: string): Promise<{ success: boole
   const res = await api.delete(`/coverage/expected-senders/${id}`);
   return res.data as { success: boolean };
 }
+
+// Global lookup (F1) — "do we know this email?"
+export type LookupVerdict =
+  | 'CANDIDATE'
+  | 'CONTACTED_NO_REPLY'
+  | 'REPLIED_NOT_CANDIDATE'
+  | 'UNKNOWN';
+
+export type LookupSkipReason = 'NOT_RECRUITING' | 'NO_ROLE' | 'FILTERED';
+
+type MailboxRef = { id: string; emailAddress: string };
+
+/**
+ * Per-integration status keyed by integration name (F2 adds `lever`).
+ * Empty until an integration is wired; see backend routes/lookup.ts.
+ */
+export type LookupIntegrationsData = Record<string, unknown>;
+
+export interface LookupResult {
+  email: string;
+  verdict: LookupVerdict;
+  summary: string;
+  candidate: {
+    id: string;
+    name: string;
+    email: string;
+    status: string;
+    role: string | null;
+    company: string | null;
+    title: string | null;
+    mailbox: MailboxRef | null;
+    firstMailbox: MailboxRef | null;
+    repliedAt: string | null;
+    lastInboundAt: string | null;
+    lastOutboundAt: string | null;
+    createdAt: string;
+  } | null;
+  messages: {
+    inbound: number;
+    outbound: number;
+    firstAt: string | null;
+    lastAt: string | null;
+    latestSubject: string | null;
+    latestThreadId: string | null;
+    mailboxes: MailboxRef[];
+    truncated: boolean;
+  };
+  drafts: {
+    total: number;
+    byStatus: Record<string, number>;
+    latest: { id: string; status: string; threadId: string; createdAt: string } | null;
+  };
+  skipped: {
+    reasons: LookupSkipReason[];
+    lastSkippedAt: string | null;
+    windowDays: number;
+  };
+  integrations: LookupIntegrationsData;
+}
+
+export async function fetchLookup(email: string): Promise<SingleResponse<LookupResult>> {
+  const res = await api.get('/lookup', { params: { email } });
+  return res.data as SingleResponse<LookupResult>;
+}
