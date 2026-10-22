@@ -31,7 +31,11 @@ export default function GemConnect({ navigate = (url) => window.location.assign(
   });
   const disconnect = useMutation({
     mutationFn: disconnectGem,
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['gem-status'] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['gem-status'] });
+      // A cached prefill was built for the old connection state.
+      void queryClient.invalidateQueries({ queryKey: ['lever-prefill'] });
+    },
     onError: (err) => toastError('Could not disconnect Gem', extractApiErrorMessage(err, 'Try again later.')),
   });
 
