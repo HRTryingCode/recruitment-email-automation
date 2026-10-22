@@ -212,7 +212,7 @@ interface PaginatedResponse<T> {
   meta: { total: number; page: number; limit: number };
 }
 
-interface SingleResponse<T> {
+export interface SingleResponse<T> {
   success: boolean;
   data: T;
 }
