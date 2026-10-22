@@ -98,10 +98,22 @@ model Candidate {
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
   threads   EmailThread[]
+  /// Lever status (F2), refreshed by the lever-sync cron. Read-only mirror:
+  /// ACTIVE | ARCHIVED | HIRED | NOT_FOUND | ERROR (see lever.service.ts).
+  leverState          String?
+  /// Primary opportunity: latest-updated active one, else latest archived.
+  leverOpportunityId  String?
+  leverPostingTitle   String?
+  leverStage          String?
+  leverArchivedReason String?
+  leverCheckedAt      DateTime?
+  /// Short reason code when leverState is ERROR (never a raw response).
+  leverError          String?
 
   @@index([mailboxId])
   @@index([status])
   @@index([ownerUserId])
+  @@index([leverState])
 }
 
 model EmailThread {
