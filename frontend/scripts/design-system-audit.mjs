@@ -19,7 +19,7 @@ const SRC = path.join(root, 'src');
 export const AREAS = {
   R1: 'Shell — App, main, pages (Login, NotFound, route pages, settings), components/shell + settings, ThemeToggle, MailboxFilter, ProtectedRoute, lib, hooks',
   R2: 'Inbox — InboxPage, components/inbox/*, inbox hooks, DraftCcSelect, lib/inbox',
-  R3: 'Candidates — CandidateTable, LookupBar, LookupIntegrations, LeverBadge, AddToLever*, JobCombobox, Gem*',
+  R3: 'Candidates — CandidateTable, components/candidates/*, components/lever/*, candidate hooks, lib/candidates, LookupBar, LookupIntegrations, LeverBadge, AddToLever*, JobCombobox, Gem*',
   R4: 'Today — TodayPage, components/today/*, UnmonitoredSenders',
 };
 
@@ -33,6 +33,9 @@ const AREA_BY_FILE = [
   [/^components\/today\//, 'R4'],
   [/^components\/UnmonitoredSenders\.tsx$/, 'R4'],
   [/^components\/(CandidateTable|LookupBar|LookupIntegrations|LeverBadge|AddToLeverButton|AddToLeverDialog|GemConnect|GemReturnToast|JobCombobox)\.tsx$/, 'R3'],
+  [/^components\/(candidates|lever)\//, 'R3'],
+  [/^hooks\/useCandidate\w*\.ts$/, 'R3'],
+  [/^lib\/candidates\.ts$/, 'R3'],
   // Everything else (pages, App, main, shell components, lib, other hooks,
   // and any new file nobody claimed yet) belongs to the shell batch.
   [/./, 'R1'],
