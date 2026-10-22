@@ -282,7 +282,7 @@ describe('/api/candidates', () => {
       expect(mockPrisma.emailDraft.updateMany).toHaveBeenCalledWith({
         where: {
           threadId: { in: ['t-1', 't-2'] },
-          status: { in: ['PENDING', 'APPROVED'] },
+          status: { in: ['PENDING', 'APPROVED', 'SCHEDULED', 'FAILED'] },
         },
         data: { status: 'DISCARDED' },
       });

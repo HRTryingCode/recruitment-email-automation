@@ -12,6 +12,11 @@ import { serializeEmailMessages } from '../lib/emailMessageSerializer';
 import { requireAdmin } from '../middleware/requireAdmin';
 import { z } from 'zod';
 import { composeDraftHtml, stripHeaderBreaks } from '../lib/draftBody';
+import { waitUntil } from '@vercel/functions';
+import { CANCELABLE_DRAFT_STATUSES, DRAFT_EXPIRY_DAYS } from '../lib/draftStatus';
+import { confidenceLabel } from '../lib/confidence';
+import { runDelayedSend, runDelayedSendBatch, undoScheduledSend } from '../services/draftSend.service';
+import { findLockHolder, listPresence, heartbeatPresence, clearPresence, PRESENCE_MODES } from '../services/draftPresence.service';
 
 const router = Router();
 
@@ -24,12 +29,129 @@ function qs(val: unknown): string | undefined {
 // bodyHtml is intentionally not accepted: the HTML part is always rendered
 // server-side from bodyText (C1/M10), so a client can't desync the two or
 // inject markup. Unknown keys are stripped by zod.
+// F4: one of GET /cc-options, or null for "No CC".
+const ccEmailField = z.string().trim().email().transform((e) => e.toLowerCase()).nullable().optional();
 const updateDraftSchema = z.object({
   bodyText: z.string().optional(),
   subject: z.string().transform(stripHeaderBreaks).optional(),
-  // F4: one of GET /cc-options, or null for "No CC".
-  ccEmail: z.string().trim().email().transform((e) => e.toLowerCase()).nullable().optional(),
+  ccEmail: ccEmailField,
+  // U0: act even though another user holds the editing lock.
+  override: z.boolean().optional(),
 });
+
+type DraftWithMailboxCandidate = Prisma.EmailDraftGetPayload<{
+  include: { thread: { include: { mailbox: true; candidate: true } } };
+}>;
+
+interface CcChange {
+  ccAddress: string | null;
+  firstName: string | null;
+  loopIn: 'updated' | 'not_found' | 'not_handoff';
+  handoffWithoutCc: boolean;
+}
+
+type DraftEdits =
+  | { ok: true; updateData: Prisma.EmailDraftUpdateManyMutationInput; ccChange?: CcChange }
+  | { ok: false; status: number; message: string };
+
+/**
+ * Column updates for a recruiter's body/subject/CC edits (shared by PATCH and
+ * the one-step send). Validates the CC against GET /cc-options, swaps the
+ * hand-off loop-in name, re-renders bodyHtml from the text (C1), and records
+ * who edited (U0). Writing the AI text back counts as "no edits".
+ */
+async function buildDraftEdits(
+  draft: DraftWithMailboxCandidate,
+  input: { bodyText?: string; subject?: string; ccEmail?: string | null },
+  actorUserId: string | undefined
+): Promise<DraftEdits> {
+  const { mailbox } = draft.thread;
+  const updateData: Prisma.EmailDraftUpdateManyMutationInput = {};
+  if (input.subject !== undefined) updateData.subject = input.subject;
+  let bodyText = input.bodyText;
+  let ccChange: CcChange | undefined;
+
+  if (input.ccEmail !== undefined) {
+    const ccEmail = input.ccEmail;
+    const option = ccEmail
+      ? (await listCcOptions({ excludeEmail: mailbox.emailAddress })).find((o) => o.email === ccEmail)
+      : null;
+    if (ccEmail && !option) {
+      return { ok: false, status: 400, message: 'ccEmail must be one of the CC options for this draft' };
+    }
+    updateData.ccEmail = ccEmail ?? NO_CC;
+
+    // Hand-off drafts name the CC in the body ("I'm looping in Sofia …");
+    // swap the name in that one sentence. If the recruiter reworded it we
+    // leave the body alone and let the UI ask them to fix it.
+    const isHandoff =
+      mailbox.emailAddress.toLowerCase() !== config.draftCcEmail.toLowerCase() &&
+      draft.classification === 'INTERESTED';
+    let loopIn: CcChange['loopIn'] = 'not_handoff';
+    if (isHandoff && option) {
+      const swapped = replaceLoopIn(bodyText ?? draft.bodyText, option.firstName);
+      loopIn = swapped.replaced ? 'updated' : 'not_found';
+      if (swapped.replaced) bodyText = swapped.text;
+    }
+    ccChange = {
+      ccAddress: resolveDraftCc(updateData.ccEmail as string, mailbox.emailAddress),
+      firstName: option?.firstName ?? null,
+      loopIn,
+      handoffWithoutCc: isHandoff && !ccEmail,
+    };
+  }
+
+  // Re-render bodyHtml from the edited text so the preview and the email we
+  // hand to Gmail carry exactly what the recruiter typed, with the mailbox's
+  // HTML signature swapped back in for its plain-text rendering (C1).
+  if (bodyText !== undefined) {
+    const sig = await loadSignature(mailbox.id);
+    updateData.bodyText = bodyText;
+    updateData.bodyHtml = composeDraftHtml(bodyText, sig.html, sig.plain);
+  }
+
+  // U0: AI-vs-edited. Only a recruiter-typed body or subject counts; a CC
+  // loop-in swap alone doesn't. Putting the AI text back clears the marker.
+  if (input.bodyText !== undefined && draft.aiBodyText !== null && bodyText === draft.aiBodyText && input.subject === undefined) {
+    updateData.editedAt = null;
+    updateData.editedByUserId = null;
+  } else if (input.bodyText !== undefined || input.subject !== undefined) {
+    updateData.editedAt = new Date();
+    updateData.editedByUserId = actorUserId ?? null;
+  }
+
+  return { ok: true, updateData, ccChange };
+}
+
+/**
+ * U0 send lock: another user's fresh 'editing' presence blocks send, undo,
+ * dismiss and edits with 423 unless the caller passes override:true (logged).
+ * Returns true when the response was already sent.
+ */
+async function rejectIfLocked(
+  req: Request,
+  res: Response,
+  draftId: string,
+  action: string,
+  override: boolean | undefined
+): Promise<boolean> {
+  const holder = await findLockHolder(draftId, req.userId ?? '');
+  if (!holder) return false;
+  if (override) {
+    await logEvent(
+      'DRAFT_LOCK_OVERRIDDEN',
+      { draftId, action, actorUserId: req.userId, lockHolderUserId: holder.userId },
+      'WARN'
+    );
+    return false;
+  }
+  res.status(423).json({
+    success: false,
+    error: `${holder.name} is editing this draft`,
+    lockedBy: holder.name,
+  });
+  return true;
+}
 
 /** The mailbox's HTML signature and its plain-text rendering, or nulls if unavailable. */
 async function loadSignature(mailboxId: string): Promise<{ html: string | null; plain: string | null }> {
@@ -77,12 +199,8 @@ const draftListFilterSchema = z.object({
   expired: z.enum(['true', 'false']).optional(),
 });
 
-/**
- * PENDING drafts older than this are treated as expired: they leave the
- * review queue and are listed under ?expired=true instead (M16). Derived from
- * createdAt, so there is no schema change.
- */
-export const DRAFT_EXPIRY_DAYS = 21;
+// Expiry window (M16) lives in lib/draftStatus; re-exported for callers.
+export { DRAFT_EXPIRY_DAYS };
 const DRAFT_EXPIRY_MS = DRAFT_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
 
 /**
@@ -356,6 +474,7 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
       draft.inReplyToMessageId
     );
 
+    const presence = (await listPresence([id], req.userId)).get(id) ?? [];
     const data = {
       ...draft,
       thread: {
@@ -364,6 +483,11 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
       },
       originalMessage,
       ccAddress: resolveDraftCc(draft.ccEmail, draft.thread.mailbox.emailAddress),
+      // U0: aiBodyText (the model's text; null = unknown, pre-U0) vs bodyText
+      // (what will be sent) let the UI show changes / revert.
+      hasEdits: draft.aiBodyText !== null && draft.aiBodyText !== draft.bodyText,
+      confidenceLabel: confidenceLabel(draft.confidence),
+      presence,
     };
     res.json({ success: true, data });
   } catch (err) {
@@ -380,9 +504,9 @@ router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => 
     if (!parsed.success) {
       return next(createError(parsed.error.message, 400));
     }
-    const { ccEmail, ...edits } = parsed.data;
-    const ccChanging = ccEmail !== undefined;
-    const hasEdits = edits.bodyText !== undefined || edits.subject !== undefined;
+    const { override, ...input } = parsed.data;
+    const ccChanging = input.ccEmail !== undefined;
+    const hasEdits = input.bodyText !== undefined || input.subject !== undefined;
 
     const id = String(req.params.id);
     // Fetch draft with mailbox so we can reconstruct the HTML signature.
@@ -402,54 +526,12 @@ router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => 
         )
       );
     }
+    if (await rejectIfLocked(req, res, id, 'edit', override)) return;
 
     const { mailbox, candidate } = draft.thread;
-    const updateData: Prisma.EmailDraftUpdateInput = { ...edits };
-    let bodyText = edits.bodyText;
-    let ccChange: {
-      ccAddress: string | null;
-      firstName: string | null;
-      loopIn: 'updated' | 'not_found' | 'not_handoff';
-      handoffWithoutCc: boolean;
-    } | undefined;
-
-    if (ccChanging) {
-      const option = ccEmail
-        ? (await listCcOptions({ excludeEmail: mailbox.emailAddress })).find((o) => o.email === ccEmail)
-        : null;
-      if (ccEmail && !option) {
-        return next(createError('ccEmail must be one of the CC options for this draft', 400));
-      }
-      updateData.ccEmail = ccEmail ?? NO_CC;
-
-      // Hand-off drafts name the CC in the body ("I'm looping in Sofia …");
-      // swap the name in that one sentence. If the recruiter reworded it we
-      // leave the body alone and let the UI ask them to fix it.
-      const isHandoff =
-        mailbox.emailAddress.toLowerCase() !== config.draftCcEmail.toLowerCase() &&
-        draft.classification === 'INTERESTED';
-      let loopIn: 'updated' | 'not_found' | 'not_handoff' = 'not_handoff';
-      if (isHandoff && option) {
-        const swapped = replaceLoopIn(bodyText ?? draft.bodyText, option.firstName);
-        loopIn = swapped.replaced ? 'updated' : 'not_found';
-        if (swapped.replaced) bodyText = swapped.text;
-      }
-      ccChange = {
-        ccAddress: resolveDraftCc(updateData.ccEmail, mailbox.emailAddress),
-        firstName: option?.firstName ?? null,
-        loopIn,
-        handoffWithoutCc: isHandoff && !ccEmail,
-      };
-    }
-
-    // Re-render bodyHtml from the edited text so the preview and the email we
-    // hand to Gmail carry exactly what the recruiter typed, with the mailbox's
-    // HTML signature swapped back in for its plain-text rendering (C1).
-    if (bodyText !== undefined) {
-      const sig = await loadSignature(mailbox.id);
-      updateData.bodyText = bodyText;
-      updateData.bodyHtml = composeDraftHtml(bodyText, sig.html, sig.plain);
-    }
+    const edits = await buildDraftEdits(draft, input, req.userId);
+    if (!edits.ok) return next(createError(edits.message, edits.status));
+    const { updateData, ccChange } = edits;
 
     // An approved draft already sits in the recruiter's Gmail Drafts: rewrite
     // it before touching the DB so Gmail never goes out with the old CC.
@@ -513,12 +595,15 @@ type RegenerateOk = {
   draft: Awaited<ReturnType<typeof prisma.emailDraft.update>>;
   originalMessage: OriginalMessagePayload;
   mailboxId: string;
+  /** True when the recruiter's edited body was kept and only aiBodyText changed (U0). */
+  keptEdits: boolean;
 };
 type RegenerateFail = { ok: false; status: number; message: string };
 
 async function regenerateDraftById(
   id: string,
-  actorUserId?: string
+  actorUserId?: string,
+  opts: { keepEdits?: boolean } = {}
 ): Promise<RegenerateOk | RegenerateFail> {
   const draft = await prisma.emailDraft.findUnique({
     where: { id },
@@ -677,15 +762,30 @@ async function regenerateDraftById(
     replyMeta = draftReply.meta;
   }
 
+  // U0: never discard recruiter edits silently. An edited draft keeps its
+  // body unless the caller passes keepEdits:false; the new model text always
+  // lands in aiBodyText so the UI can offer it.
+  const hasEdits =
+    draft.editedAt != null || (draft.aiBodyText != null && draft.aiBodyText !== draft.bodyText);
+  const keptEdits = hasEdits && (opts.keepEdits ?? true);
   const updated = await prisma.emailDraft.update({
     where: { id },
     data: {
-      subject: replySubject,
-      bodyText: replyBodyText,
-      bodyHtml: replyBodyHtml,
+      aiBodyText: replyBodyText,
       classification: classificationResult.classification,
       confidence: classificationResult.confidence,
+      classificationReason: classificationResult.reason ?? null,
+      evidenceQuote: classificationResult.evidenceQuote ?? null,
       ...draftMetaColumns(replyMeta),
+      ...(keptEdits
+        ? {}
+        : {
+            subject: replySubject,
+            bodyText: replyBodyText,
+            bodyHtml: replyBodyHtml,
+            editedAt: null,
+            editedByUserId: null,
+          }),
     },
   });
 
@@ -731,7 +831,7 @@ async function regenerateDraftById(
 
   await logEvent('DRAFT_REGENERATED', { draftId: id, mailboxId: mailbox.id, actorUserId }, 'INFO');
 
-  return { ok: true, draft: updated, originalMessage, mailboxId: mailbox.id };
+  return { ok: true, draft: updated, originalMessage, mailboxId: mailbox.id, keptEdits };
 }
 
 // POST /api/drafts/regenerate-pending
@@ -771,17 +871,26 @@ router.post('/regenerate-pending', requireAdmin, async (req: Request, res: Respo
   }
 });
 
-// POST /api/drafts/:id/regenerate
+const regenerateSchema = z.object({
+  // Edited drafts keep their body by default (U0); false replaces it.
+  keepEdits: z.boolean().optional(),
+  override: z.boolean().optional(),
+});
+
+// POST /api/drafts/:id/regenerate  { keepEdits?, override? }
 router.post('/:id/regenerate', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const parsed = regenerateSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return next(createError('Invalid body', 400));
     const id = String(req.params.id);
-    const result = await regenerateDraftById(id, req.userId);
+    if (await rejectIfLocked(req, res, id, 'regenerate', parsed.data.override)) return;
+    const result = await regenerateDraftById(id, req.userId, { keepEdits: parsed.data.keepEdits });
     if (!result.ok) {
       return next(createError(result.message, result.status));
     }
     res.json({
       success: true,
-      data: { ...result.draft, originalMessage: result.originalMessage },
+      data: { ...result.draft, originalMessage: result.originalMessage, keptEdits: result.keptEdits },
     });
   } catch (err) {
     next(err);
@@ -810,6 +919,7 @@ router.post('/:id/dictate', async (req: Request, res: Response, next: NextFuncti
 
     if (!draft) return next(createError('Draft not found', 404));
     if (draft.status !== 'PENDING') return next(createError('Only PENDING drafts can be rewritten', 400));
+    if (await rejectIfLocked(req, res, id, 'dictate', req.body?.override === true)) return;
 
     const { thread } = draft;
     const { candidate, mailbox } = thread;
@@ -834,6 +944,9 @@ router.post('/:id/dictate', async (req: Request, res: Response, next: NextFuncti
       data: {
         bodyText: newBodyText,
         bodyHtml: composeDraftHtml(newBodyText, sig.html, sig.plain),
+        // Recruiter-directed rewrite: an edit, so aiBodyText keeps the original.
+        editedAt: new Date(),
+        editedByUserId: req.userId ?? null,
         ...draftMetaColumns(rewritten.meta),
       },
       include: draftWithThreadInclude,
@@ -852,6 +965,8 @@ router.post('/:id/dictate', async (req: Request, res: Response, next: NextFuncti
 });
 
 // POST /api/drafts/:id/approve
+// DEPRECATED (U0): the inbox sends in one step via POST /:id/send with undo.
+// Kept, with the APPROVED branch of /send, until the R2 inbox UI ships.
 router.post('/:id/approve', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = String(req.params.id);
@@ -934,6 +1049,7 @@ router.post('/:id/approve', async (req: Request, res: Response, next: NextFuncti
 });
 
 // POST /api/drafts/:id/discard
+// DEPRECATED (U0): use POST /:id/dismiss, which records reason and who.
 router.post('/:id/discard', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = String(req.params.id);
@@ -965,7 +1081,8 @@ router.post('/:id/discard', async (req: Request, res: Response, next: NextFuncti
   }
 });
 
-// POST /api/drafts/:id/send
+// Legacy send for APPROVED drafts (DEPRECATED with /approve: remove once the
+// R2 inbox ships; the one-step send below needs no Gmail draft).
 //
 // Ordering matters here. The risky leg is the Gmail API call: if we marked the
 // DB row SENT *before* the send succeeded we could end up with a phantom-SENT
@@ -980,18 +1097,14 @@ router.post('/:id/discard', async (req: Request, res: Response, next: NextFuncti
 //      error bubbles up to the caller.
 //   3. Only after Gmail confirms send do we mark the DB row SENT and the
 //      candidate REPLIED.
-router.post('/:id/send', async (req: Request, res: Response, next: NextFunction) => {
+async function sendApprovedDraftNow(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+  draftWithThread: DraftWithMailboxCandidate
+): Promise<void> {
   try {
-    const id = String(req.params.id);
-    const draftWithThread = await prisma.emailDraft.findUnique({
-      where: { id },
-      include: draftWithThreadInclude,
-    });
-
-    if (!draftWithThread) return next(createError('Draft not found', 404));
-    if (draftWithThread.status !== 'APPROVED') {
-      return next(createError('Draft must be approved before sending', 409));
-    }
+    const id = draftWithThread.id;
 
     const thread = draftWithThread.thread;
     const mailbox = thread.mailbox;
@@ -1064,6 +1177,313 @@ router.post('/:id/send', async (req: Request, res: Response, next: NextFunction)
 
     await logEvent('DRAFT_SENT', { draftId: id, actorUserId: req.userId }, 'INFO');
     res.json({ success: true, message: 'Draft sent' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+
+const sendSchema = z.object({
+  undoSeconds: z.number().int().min(0).max(30).default(10),
+  bodyText: z.string().optional(),
+  ccEmail: ccEmailField,
+  override: z.boolean().optional(),
+});
+
+// POST /api/drafts/:id/send
+// U0 one-step send: saves any edits, marks the draft SCHEDULED for
+// now + undoSeconds and returns at once. The send itself runs server-side
+// (waitUntil timer; the sweep cron is the fallback) and only if the draft is
+// still SCHEDULED by then — see draftSend.service. No Gmail draft is made.
+// An APPROVED draft (legacy two-step flow) is sent right away as before.
+router.post('/:id/send', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const parsed = sendSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return next(createError(parsed.error.errors[0]?.message ?? 'Invalid body', 400));
+    const { undoSeconds, override, ...input } = parsed.data;
+
+    const id = String(req.params.id);
+    const draft = await prisma.emailDraft.findUnique({
+      where: { id },
+      include: draftWithThreadInclude,
+    });
+    if (!draft) return next(createError('Draft not found', 404));
+    if (await rejectIfLocked(req, res, id, 'send', override)) return;
+    if (draft.status === 'APPROVED') return sendApprovedDraftNow(req, res, next, draft);
+
+    if (draft.status !== 'PENDING' && draft.status !== 'FAILED') {
+      const message =
+        draft.status === 'SCHEDULED'
+          ? 'Draft is already scheduled to send'
+          : draft.status === 'SENDING' || draft.status === 'SENT'
+            ? 'Already sent'
+            : `Cannot send a ${draft.status.toLowerCase()} draft`;
+      return next(createError(message, 409));
+    }
+    if (!draft.thread.candidate) {
+      return next(createError('Cannot send: thread has no candidate to address', 400));
+    }
+
+    let editData: Prisma.EmailDraftUpdateManyMutationInput = {};
+    let ccChange: CcChange | undefined;
+    if (input.bodyText !== undefined || input.ccEmail !== undefined) {
+      const edits = await buildDraftEdits(draft, input, req.userId);
+      if (!edits.ok) return next(createError(edits.message, edits.status));
+      editData = edits.updateData;
+      ccChange = edits.ccChange;
+    }
+
+    const undoMs = undoSeconds * 1000;
+    const scheduledSendAt = new Date(Date.now() + undoMs);
+    const claimed = await prisma.emailDraft.updateMany({
+      where: { id, status: draft.status },
+      data: {
+        ...editData,
+        status: 'SCHEDULED',
+        scheduledSendAt,
+        sentByUserId: req.userId ?? null,
+        sendError: null,
+        snoozedUntil: null,
+        returnedFromSnoozeAt: null,
+      },
+    });
+    if (claimed.count === 0) {
+      return next(createError('The draft changed while sending; reload and try again', 409));
+    }
+
+    waitUntil(runDelayedSend(id, undoMs));
+    await logEvent('DRAFT_SEND_SCHEDULED', { draftId: id, undoSeconds, actorUserId: req.userId }, 'INFO');
+    res.status(202).json({
+      success: true,
+      data: { id, status: 'SCHEDULED', scheduledSendAt, undoSeconds },
+      ...(ccChange ? { ccChange } : {}),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+export const BATCH_SEND_MAX = 50;
+const batchSendSchema = z.object({
+  draftIds: z.array(z.string().regex(cuidPattern, 'draftIds must be cuids')).min(1).max(BATCH_SEND_MAX),
+  undoSeconds: z.number().int().min(0).max(30).default(10),
+});
+
+type BatchSkipReason = 'not_found' | 'locked' | 'not_pending' | 'not_batchable' | 'no_candidate';
+
+// POST /api/drafts/batch-send  { draftIds (≤ 50), undoSeconds? }
+// One-step send for a batch of Not interested replies: same rules as
+// POST /:id/send, applied per draft. Drafts someone is editing, or that
+// aren't PENDING NOT_INTERESTED drafts, are skipped and reported — batch
+// sending is only for the replies that don't need individual review.
+router.post('/batch-send', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const parsed = batchSendSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return next(createError(parsed.error.errors[0]?.message ?? 'Invalid body', 400));
+    const draftIds = [...new Set(parsed.data.draftIds)];
+    const { undoSeconds } = parsed.data;
+
+    const [drafts, presence] = await Promise.all([
+      prisma.emailDraft.findMany({
+        where: { id: { in: draftIds } },
+        include: { thread: { select: { candidate: { select: { id: true } } } } },
+      }),
+      listPresence(draftIds, req.userId),
+    ]);
+    const byId = new Map(drafts.map((d) => [d.id, d]));
+
+    const undoMs = undoSeconds * 1000;
+    const scheduledSendAt = new Date(Date.now() + undoMs);
+    const scheduled: string[] = [];
+    const skipped: Array<{ id: string; reason: BatchSkipReason; lockedBy?: string }> = [];
+    for (const id of draftIds) {
+      const draft = byId.get(id);
+      const editor = (presence.get(id) ?? []).find((p) => p.mode === 'editing');
+      if (!draft) skipped.push({ id, reason: 'not_found' });
+      else if (editor) skipped.push({ id, reason: 'locked', lockedBy: editor.name });
+      else if (draft.status !== 'PENDING') skipped.push({ id, reason: 'not_pending' });
+      else if (draft.classification !== 'NOT_INTERESTED') skipped.push({ id, reason: 'not_batchable' });
+      else if (!draft.thread.candidate) skipped.push({ id, reason: 'no_candidate' });
+      else {
+        const claimed = await prisma.emailDraft.updateMany({
+          where: { id, status: 'PENDING' },
+          data: {
+            status: 'SCHEDULED',
+            scheduledSendAt,
+            sentByUserId: req.userId ?? null,
+            sendError: null,
+            snoozedUntil: null,
+            returnedFromSnoozeAt: null,
+          },
+        });
+        if (claimed.count === 0) skipped.push({ id, reason: 'not_pending' });
+        else scheduled.push(id);
+      }
+    }
+
+    if (scheduled.length > 0) {
+      waitUntil(runDelayedSendBatch(scheduled, undoMs));
+    }
+    await logEvent(
+      'DRAFT_BATCH_SEND_SCHEDULED',
+      { scheduled: scheduled.length, skipped: skipped.length, undoSeconds, actorUserId: req.userId },
+      'INFO'
+    );
+    res.status(202).json({ success: true, data: { scheduled, skipped, scheduledSendAt, undoSeconds } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const overrideSchema = z.object({ override: z.boolean().optional() });
+
+// POST /api/drafts/:id/undo-send
+// SCHEDULED → PENDING, as long as no runner has started sending.
+router.post('/:id/undo-send', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const parsed = overrideSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return next(createError('Invalid body', 400));
+    const id = String(req.params.id);
+    const draft = await prisma.emailDraft.findUnique({ where: { id }, select: { id: true, status: true } });
+    if (!draft) return next(createError('Draft not found', 404));
+    if (await rejectIfLocked(req, res, id, 'undo_send', parsed.data.override)) return;
+
+    const outcome = await undoScheduledSend(id);
+    if (outcome === 'already_sent') return next(createError('Already sent', 409));
+    if (outcome === 'not_scheduled') return next(createError('Draft is not scheduled to send', 409));
+    await logEvent('DRAFT_SEND_UNDONE', { draftId: id, actorUserId: req.userId }, 'INFO');
+    res.json({ success: true, data: { id, status: 'PENDING' } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+export const DISMISS_REASONS = ['wrong_label', 'spam', 'already_handled', 'not_needed', 'other'] as const;
+const dismissSchema = z.object({
+  reason: z.enum(DISMISS_REASONS).optional(),
+  note: z.string().trim().max(500).optional(),
+  override: z.boolean().optional(),
+});
+
+// POST /api/drafts/:id/dismiss
+// U0 replacement for /discard: records why and who. Also cancels a
+// SCHEDULED send and removes any Gmail draft the legacy approve step made.
+router.post('/:id/dismiss', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const parsed = dismissSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return next(createError(parsed.error.errors[0]?.message ?? 'Invalid body', 400));
+    const { reason, note, override } = parsed.data;
+    const id = String(req.params.id);
+    const draft = await prisma.emailDraft.findUnique({
+      where: { id },
+      include: { thread: { select: { mailboxId: true } } },
+    });
+    if (!draft) return next(createError('Draft not found', 404));
+    if (await rejectIfLocked(req, res, id, 'dismiss', override)) return;
+
+    const dismissed = await prisma.emailDraft.updateMany({
+      where: { id, status: { in: CANCELABLE_DRAFT_STATUSES } },
+      data: {
+        status: 'DISCARDED',
+        dismissReason: reason ?? null,
+        dismissNote: note || null,
+        dismissedByUserId: req.userId ?? null,
+        scheduledSendAt: null,
+        snoozedUntil: null,
+      },
+    });
+    if (dismissed.count === 0) {
+      return next(createError(`Cannot dismiss a ${String(draft.status).toLowerCase()} draft`, 409));
+    }
+
+    const mailboxId = draft.thread?.mailboxId;
+    if (draft.externalDraftId && mailboxId) {
+      await deleteGmailDraftQuietly(id, mailboxId, draft.externalDraftId);
+    }
+    // The note is free text about a candidate: stored, never logged.
+    await logEvent('DRAFT_DISMISSED', { draftId: id, reason: reason ?? null, actorUserId: req.userId }, 'INFO');
+    res.json({ success: true, data: { id, status: 'DISCARDED' } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+export const MAX_SNOOZE_DAYS = 30;
+const SNOOZABLE_STATUSES = ['PENDING', 'APPROVED', 'FAILED'];
+const snoozeSchema = z.object({ until: z.string().datetime({ offset: true }) });
+
+// POST /api/drafts/:id/snooze  { until: ISO }
+// Out of the inbox until `until` (future, ≤ 30 days); it then comes back with
+// returnedFromSnoozeAt set so the UI can show it as unread.
+router.post('/:id/snooze', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const parsed = snoozeSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return next(createError('until must be an ISO date-time', 400));
+    const until = new Date(parsed.data.until);
+    const now = Date.now();
+    if (until.getTime() <= now) return next(createError('until must be in the future', 400));
+    if (until.getTime() > now + MAX_SNOOZE_DAYS * 86_400_000) {
+      return next(createError(`Can snooze for at most ${MAX_SNOOZE_DAYS} days`, 400));
+    }
+    const id = String(req.params.id);
+    const draft = await prisma.emailDraft.findUnique({ where: { id }, select: { id: true, status: true } });
+    if (!draft) return next(createError('Draft not found', 404));
+
+    const snoozed = await prisma.emailDraft.updateMany({
+      where: { id, status: { in: SNOOZABLE_STATUSES } },
+      data: { snoozedUntil: until, returnedFromSnoozeAt: null },
+    });
+    if (snoozed.count === 0) {
+      return next(createError(`Cannot snooze a ${String(draft.status).toLowerCase()} draft`, 409));
+    }
+    await logEvent('DRAFT_SNOOZED', { draftId: id, until: until.toISOString(), actorUserId: req.userId }, 'INFO');
+    res.json({ success: true, data: { id, snoozedUntil: until } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/drafts/:id/unsnooze
+router.post('/:id/unsnooze', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = String(req.params.id);
+    const draft = await prisma.emailDraft.findUnique({ where: { id }, select: { id: true } });
+    if (!draft) return next(createError('Draft not found', 404));
+    await prisma.emailDraft.updateMany({
+      where: { id },
+      data: { snoozedUntil: null, returnedFromSnoozeAt: null },
+    });
+    await logEvent('DRAFT_UNSNOOZED', { draftId: id, actorUserId: req.userId }, 'INFO');
+    res.json({ success: true, data: { id, snoozedUntil: null } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const presenceSchema = z.object({ mode: z.enum(PRESENCE_MODES) });
+
+// POST /api/drafts/:id/presence  { mode: 'viewing' | 'editing' }
+// Heartbeat (~15s) while the draft is open; returns who else is on it.
+router.post('/:id/presence', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const parsed = presenceSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return next(createError("mode must be 'viewing' or 'editing'", 400));
+    const id = String(req.params.id);
+    const draft = await prisma.emailDraft.findUnique({ where: { id }, select: { id: true } });
+    if (!draft) return next(createError('Draft not found', 404));
+    await heartbeatPresence(id, req.userId ?? '', parsed.data.mode);
+    const presence = (await listPresence([id], req.userId)).get(id) ?? [];
+    res.json({ success: true, data: { presence } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/drafts/:id/presence — the draft was closed.
+router.delete('/:id/presence', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    await clearPresence(String(req.params.id), req.userId ?? '');
+    res.json({ success: true });
   } catch (err) {
     next(err);
   }

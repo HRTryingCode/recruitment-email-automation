@@ -135,7 +135,8 @@ export interface EmailDraft {
   bodyHtml?: string;
   classification: 'INTERESTED' | 'NOT_INTERESTED' | 'NEUTRAL';
   confidence: number;
-  status: 'PENDING' | 'APPROVED' | 'SENT' | 'DISCARDED';
+  /** APPROVED is the deprecated two-step flow; SCHEDULED/SENDING/FAILED are the U0 one-step send. */
+  status: DraftStatus;
   sentAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -146,6 +147,41 @@ export interface EmailDraft {
   ccEmail?: string | null;
   /** PENDING drafts move to the Expired bucket after this (createdAt + 21d). */
   expiresAt?: string;
+  // ── U0 inbox ──
+  /** One-step send fires at this time unless undone (status SCHEDULED). */
+  scheduledSendAt?: string | null;
+  sentByUserId?: string | null;
+  /** Why the last send failed (status FAILED). */
+  sendError?: string | null;
+  snoozedUntil?: string | null;
+  /** Set when a snooze ran out: show the draft as unread. */
+  returnedFromSnoozeAt?: string | null;
+  dismissReason?: DismissReason | null;
+  dismissNote?: string | null;
+  /** The model's text; bodyText holds edits. null = unknown (pre-U0 drafts). */
+  aiBodyText?: string | null;
+  editedAt?: string | null;
+  editedByUserId?: string | null;
+  hasEdits?: boolean;
+  classificationReason?: string | null;
+  /** Exact quote from the candidate's latest message backing the label. */
+  evidenceQuote?: string | null;
+  confidenceLabel?: ConfidenceLabel;
+  /** Other users with this draft open (GET /drafts/:id). */
+  presence?: DraftPresenceEntry[];
+  /** Regenerate only: true when the edited body was kept and only aiBodyText changed. */
+  keptEdits?: boolean;
+}
+
+export type DraftStatus = 'PENDING' | 'APPROVED' | 'SCHEDULED' | 'SENDING' | 'SENT' | 'FAILED' | 'DISCARDED';
+export type ConfidenceLabel = 'high' | 'medium' | 'low';
+export type DismissReason = 'wrong_label' | 'spam' | 'already_handled' | 'not_needed' | 'other';
+export type PresenceMode = 'viewing' | 'editing';
+
+export interface DraftPresenceEntry {
+  userId: string;
+  name: string;
+  mode: PresenceMode;
 }
 
 export interface HealthStatus {
@@ -366,14 +402,204 @@ export async function discardDraft(id: string): Promise<{ success: boolean; mess
   return res.data as { success: boolean; message: string };
 }
 
+/** Legacy send of an APPROVED draft (deprecated with approveDraft; use scheduleSendDraft). */
 export async function sendDraft(id: string): Promise<{ success: boolean; message: string }> {
   const res = await api.post(`/drafts/${id}/send`);
   return res.data as { success: boolean; message: string };
 }
 
-export async function regenerateDraft(id: string): Promise<SingleResponse<EmailDraft>> {
-  const res = await api.post(`/drafts/${id}/regenerate`);
+/**
+ * Regenerate. Edited drafts keep their body unless keepEdits is false; the
+ * new model text is always in aiBodyText.
+ */
+export async function regenerateDraft(
+  id: string,
+  opts: { keepEdits?: boolean; override?: boolean } = {}
+): Promise<SingleResponse<EmailDraft>> {
+  const res = await api.post(`/drafts/${id}/regenerate`, opts);
   return res.data as SingleResponse<EmailDraft>;
+}
+
+// ── U0 inbox ─────────────────────────────────────────────────────────────
+// Actions on a draft someone else is editing fail with 423 and
+// `{ lockedBy: name }` unless `override: true` is passed.
+
+export interface ScheduledSend {
+  id: string;
+  status: 'SCHEDULED';
+  scheduledSendAt: string;
+  undoSeconds: number;
+}
+
+/** One-step send: saves edits, sends after `undoSeconds` (default 10, max 30) unless undone. */
+export async function scheduleSendDraft(
+  id: string,
+  opts: { undoSeconds?: number; bodyText?: string; ccEmail?: string | null; override?: boolean } = {}
+): Promise<SingleResponse<ScheduledSend> & { ccChange?: CcChange }> {
+  const res = await api.post(`/drafts/${id}/send`, opts);
+  return res.data as SingleResponse<ScheduledSend> & { ccChange?: CcChange };
+}
+
+/** Cancel a scheduled send; 409 "Already sent" once it started. */
+export async function undoSendDraft(
+  id: string,
+  opts: { override?: boolean } = {}
+): Promise<SingleResponse<{ id: string; status: 'PENDING' }>> {
+  const res = await api.post(`/drafts/${id}/undo-send`, opts);
+  return res.data as SingleResponse<{ id: string; status: 'PENDING' }>;
+}
+
+export async function dismissDraft(
+  id: string,
+  opts: { reason?: DismissReason; note?: string; override?: boolean } = {}
+): Promise<SingleResponse<{ id: string; status: 'DISCARDED' }>> {
+  const res = await api.post(`/drafts/${id}/dismiss`, opts);
+  return res.data as SingleResponse<{ id: string; status: 'DISCARDED' }>;
+}
+
+/** Hide from the inbox until `until` (ISO, future, ≤ 30 days). */
+export async function snoozeDraft(id: string, until: string): Promise<SingleResponse<{ id: string; snoozedUntil: string }>> {
+  const res = await api.post(`/drafts/${id}/snooze`, { until });
+  return res.data as SingleResponse<{ id: string; snoozedUntil: string }>;
+}
+
+export async function unsnoozeDraft(id: string): Promise<SingleResponse<{ id: string; snoozedUntil: null }>> {
+  const res = await api.post(`/drafts/${id}/unsnooze`, {});
+  return res.data as SingleResponse<{ id: string; snoozedUntil: null }>;
+}
+
+/** Heartbeat every ~15s while a draft is open; returns who else is on it. */
+export async function heartbeatDraftPresence(
+  id: string,
+  mode: PresenceMode
+): Promise<SingleResponse<{ presence: DraftPresenceEntry[] }>> {
+  const res = await api.post(`/drafts/${id}/presence`, { mode });
+  return res.data as SingleResponse<{ presence: DraftPresenceEntry[] }>;
+}
+
+export async function clearDraftPresence(id: string): Promise<{ success: boolean }> {
+  const res = await api.delete(`/drafts/${id}/presence`);
+  return res.data as { success: boolean };
+}
+
+export interface BatchSendResult {
+  scheduled: string[];
+  skipped: Array<{
+    id: string;
+    reason: 'not_found' | 'locked' | 'not_pending' | 'not_batchable' | 'no_candidate';
+    lockedBy?: string;
+  }>;
+  scheduledSendAt: string;
+  undoSeconds: number;
+}
+
+/** Batch one-step send for Not interested drafts (≤ 50). */
+export async function batchSendDrafts(draftIds: string[], undoSeconds?: number): Promise<SingleResponse<BatchSendResult>> {
+  const res = await api.post('/drafts/batch-send', { draftIds, undoSeconds });
+  return res.data as SingleResponse<BatchSendResult>;
+}
+
+export type InboxView = 'needs_review' | 'interested' | 'not_interested' | 'snoozed' | 'sent_today';
+
+export interface InboxItem {
+  kind: 'draft' | 'candidate';
+  id: string;
+  view: InboxView;
+  sortAt: string;
+  ageMs: number;
+  draft: {
+    id: string;
+    threadId: string;
+    status: DraftStatus;
+    subject: string;
+    preview: string;
+    classification: string;
+    confidence: number;
+    confidenceLabel: ConfidenceLabel;
+    classificationReason: string | null;
+    evidenceQuote: string | null;
+    hasEdits: boolean;
+    editedAt: string | null;
+    snoozedUntil: string | null;
+    returnedFromSnoozeAt: string | null;
+    scheduledSendAt: string | null;
+    sentAt: string | null;
+    sendError: string | null;
+    ccAddress: string | null;
+    createdAt: string;
+  } | null;
+  candidate: {
+    id: string;
+    name: string;
+    email: string;
+    role: string | null;
+    status: string;
+    leverState: string | null;
+    leverStage: string | null;
+    leverPostingTitle: string | null;
+    leverOpportunityId: string | null;
+  } | null;
+  mailbox: { id: string; emailAddress: string; displayName: string | null } | null;
+  presence: DraftPresenceEntry[];
+}
+
+export interface InboxPage {
+  items: InboxItem[];
+  counts: Record<InboxView, number>;
+  nextCursor: string | null;
+}
+
+/** The inbox queue; poll ~15s. `order: 'oldest'` = oldest waiting first. */
+export async function fetchInbox(params: {
+  view?: InboxView;
+  mailboxId?: string;
+  order?: 'newest' | 'oldest';
+  cursor?: string;
+} = {}): Promise<SingleResponse<InboxPage>> {
+  const res = await api.get('/inbox', { params });
+  return res.data as SingleResponse<InboxPage>;
+}
+
+export type SavedViewScope = 'candidates' | 'inbox';
+
+export interface SavedView {
+  id: string;
+  /** null = team-shared (admins edit). */
+  userId: string | null;
+  name: string;
+  scope: SavedViewScope;
+  filters: Record<string, unknown>;
+  shared: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function fetchSavedViews(scope?: SavedViewScope): Promise<SingleResponse<SavedView[]>> {
+  const res = await api.get('/views', { params: scope ? { scope } : undefined });
+  return res.data as SingleResponse<SavedView[]>;
+}
+
+export async function createSavedView(data: {
+  name: string;
+  scope: SavedViewScope;
+  filters: Record<string, unknown>;
+  shared?: boolean;
+}): Promise<SingleResponse<SavedView>> {
+  const res = await api.post('/views', data);
+  return res.data as SingleResponse<SavedView>;
+}
+
+export async function updateSavedView(
+  id: string,
+  data: { name?: string; filters?: Record<string, unknown> }
+): Promise<SingleResponse<SavedView>> {
+  const res = await api.patch(`/views/${id}`, data);
+  return res.data as SingleResponse<SavedView>;
+}
+
+export async function deleteSavedView(id: string): Promise<{ success: boolean }> {
+  const res = await api.delete(`/views/${id}`);
+  return res.data as { success: boolean };
 }
 
 export async function dictateDraft(id: string, notes: string): Promise<SingleResponse<EmailDraft>> {

@@ -431,9 +431,11 @@ describe('/api/drafts', () => {
       expect(mockPrisma.candidate.update).not.toHaveBeenCalled();
     });
 
-    it('rejects sending a non-APPROVED draft with 409', async () => {
+    // PENDING drafts now go through the one-step send (drafts.inbox.test.ts);
+    // terminal states are still refused.
+    it('rejects sending a discarded draft with 409', async () => {
       mockPrisma.emailDraft.findUnique.mockResolvedValueOnce(
-        pendingDraft({ status: 'PENDING' })
+        pendingDraft({ status: 'DISCARDED' })
       );
 
       const res = await request(app)

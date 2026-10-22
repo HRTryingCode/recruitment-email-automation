@@ -23,6 +23,8 @@ model User {
   updatedAt    DateTime @updatedAt
   ownedCandidates Candidate[]
   gemConnection   GemConnection?
+  draftPresence   DraftPresence[]
+  savedViews      SavedView[]
 }
 
 /// The only currently-supported `provider` value is `"GMAIL"`. Outlook/IMAP
@@ -191,15 +193,73 @@ model EmailDraft {
   /// CC this draft goes out with (F4). NULL = pre-F4 row: use the configured
   /// default (DRAFT_CC_EMAIL). '' = the recruiter chose "No CC".
   ccEmail            String?
+  /// One-step send (U0). Set with status SCHEDULED; the send runs once this
+  /// passes unless undone. See lib/draftStatus for the state machine.
+  scheduledSendAt    DateTime?
+  sentByUserId       String?
+  /// Sanitized reason the last send failed (status FAILED). Never a body.
+  sendError          String?
+  /// Out of the inbox queue until this time (U0 snooze, ≤ 30 days).
+  snoozedUntil       DateTime?
+  /// Set when a snooze expires so the UI can show the draft as unread.
+  returnedFromSnoozeAt DateTime?
+  /// wrong_label | spam | already_handled | not_needed | other
+  dismissReason      String?
+  dismissNote        String?
+  dismissedByUserId  String?
+  /// The model's body as generated/regenerated; bodyText holds edits. NULL
+  /// on pre-U0 rows means "unknown".
+  aiBodyText         String?
+  editedAt           DateTime?
+  editedByUserId     String?
+  /// Classifier's one-line reason (≤140) and an exact quote (≤200) from the
+  /// candidate's latest message backing it.
+  classificationReason String?
+  evidenceQuote      String?
   createdAt          DateTime    @default(now())
   updatedAt          DateTime    @updatedAt
+  presence           DraftPresence[]
 
   @@index([threadId])
   @@index([status])
+  @@index([status, scheduledSendAt])
+  @@index([snoozedUntil])
   // Partial unique index "EmailDraft_threadId_live_key" on ("threadId") WHERE
-  // status IN ('PENDING','APPROVED') lives in raw SQL (migration
-  // 9_ingestion_reliability) — Prisma can't express partial indexes. It makes
-  // a second live draft per thread a P2002 instead of a duplicate row.
+  // status IN LIVE_DRAFT_STATUSES (lib/draftStatus) lives in raw SQL
+  // (migrations 9_ingestion_reliability, 9g_inbox) — Prisma can't express
+  // partial indexes. It makes a second live draft per thread a P2002.
+}
+
+/// Who has a draft open (U0). Rows older than PRESENCE_STALE_MS (45s) are
+/// ignored; a fresh 'editing' row from another user locks send/dismiss/edit.
+model DraftPresence {
+  id          String     @id @default(cuid())
+  draftId     String
+  draft       EmailDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// 'viewing' | 'editing'
+  mode        String
+  heartbeatAt DateTime   @default(now())
+
+  @@unique([draftId, userId])
+  @@index([heartbeatAt])
+}
+
+/// Saved filter set (U0, for R3 Candidates and the inbox). userId NULL =
+/// team-shared (admins edit those).
+model SavedView {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  /// 'candidates' | 'inbox'
+  scope     String
+  filters   Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([scope, userId])
 }
 
 model SystemLog {

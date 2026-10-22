@@ -38,6 +38,8 @@ export interface MockPrisma {
   oAuthState: MockedMethods<'create' | 'findUnique' | 'update' | 'updateMany' | 'deleteMany'>;
   gemConnection: MockedMethods<'findUnique' | 'upsert' | 'update' | 'updateMany' | 'deleteMany'>;
   leverWebhookEvent: MockedMethods<'create' | 'deleteMany'>;
+  draftPresence: MockedMethods<'findMany' | 'upsert' | 'deleteMany'>;
+  savedView: MockedMethods<'findMany' | 'findUnique' | 'create' | 'update' | 'delete'>;
   $transaction: Mock;
   $queryRaw: Mock;
 }
@@ -87,6 +89,8 @@ export function buildPrismaMock(): MockPrisma {
     oAuthState: methods('create', 'findUnique', 'update', 'updateMany', 'deleteMany'),
     gemConnection: methods('findUnique', 'upsert', 'update', 'updateMany', 'deleteMany'),
     leverWebhookEvent: methods('create', 'deleteMany'),
+    draftPresence: methods('findMany', 'upsert', 'deleteMany'),
+    savedView: methods('findMany', 'findUnique', 'create', 'update', 'delete'),
     $transaction: vi.fn(),
     $queryRaw: vi.fn(),
   };
@@ -101,6 +105,10 @@ export function buildPrismaMock(): MockPrisma {
   mock.oAuthState.deleteMany.mockResolvedValue({ count: 0 });
   mock.oAuthState.create.mockResolvedValue({});
   mock.oAuthState.update.mockResolvedValue({});
+
+  // Presence (U0) is read on every draft GET and lock check: nobody there
+  // unless a test says otherwise.
+  mock.draftPresence.findMany.mockResolvedValue([]);
 
   // requireAdmin (added in Phase AO) calls user.findUnique to verify the role
   // of the authenticated user. Default to an admin so existing integration
@@ -140,4 +148,5 @@ export function resetPrismaMock(p: MockPrisma): void {
   p.oAuthState.deleteMany.mockResolvedValue({ count: 0 });
   p.oAuthState.create.mockResolvedValue({});
   p.oAuthState.update.mockResolvedValue({});
+  p.draftPresence.findMany.mockResolvedValue([]);
 }
