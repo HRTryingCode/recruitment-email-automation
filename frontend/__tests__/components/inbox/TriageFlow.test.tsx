@@ -26,6 +26,8 @@ describe('Triage draft flow', () => {
 
     const pane = await screen.findByRole('region', { name: 'Reply to Eli Mock' });
     await within(pane).findByText('Maybe? Tell me more.');
+    // The header names the full sending mailbox.
+    expect(within(within(pane).getByRole('banner')).getByTestId('mailbox-line')).toHaveTextContent('From rae@archive.com');
     await user.click(within(pane).getByRole('button', { name: /Reply as Interested/ }));
 
     // 1. Progress: the clicked button says what's happening, the draft area is a skeleton.

@@ -31,9 +31,9 @@ describe('inbox chips', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('MailboxChip shows the local part of the mailbox', () => {
+  it('MailboxChip shows the full mailbox address', () => {
     render(<MailboxChip email="rae@example.com" />);
-    expect(screen.getByText('rae')).toBeInTheDocument();
+    expect(screen.getByText('rae@example.com')).toBeInTheDocument();
   });
 });
 

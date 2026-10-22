@@ -69,7 +69,7 @@ describe('<CandidateTable /> columns', () => {
     expect(within(ada).getByTestId('lever-badge')).toHaveTextContent('Founding Engineer · Phone Screen');
     expect(within(ada).getAllByText('Founding Engineer').length).toBeGreaterThan(0);
     // U2a: the Inbox's MailboxChip and RoleChip, not bare text.
-    expect(within(ada).getByTestId('mailbox-chip')).toHaveTextContent('rae');
+    expect(within(ada).getByTestId('mailbox-chip')).toHaveTextContent('rae@archive.com');
     expect(within(ada).getByTestId('role-chip')).toHaveAttribute('aria-label', 'Role: Founding Engineer');
     expect(within(ada).getByText('2h ago')).toBeInTheDocument();
     expect(within(row('Grace Hopper')).getByTestId('reply-label')).toHaveTextContent('Needs review');

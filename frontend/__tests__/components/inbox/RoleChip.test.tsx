@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TooltipProvider } from '../../../src/components/ui/tooltip';
-import { RoleChip } from '../../../src/components/inbox/chips';
+import { MailboxLine, RoleChip, RoleLine } from '../../../src/components/inbox/chips';
 import InboxList from '../../../src/components/inbox/InboxList';
 import type { InboxItem } from '../../../src/lib/api';
 
@@ -18,12 +18,12 @@ describe('RoleChip', () => {
     expect(chip).toHaveAttribute('data-role-known', 'true');
   });
 
-  it('truncates long roles to ~22ch and shows the full role in a tooltip', async () => {
+  it('renders long roles in full (no character cut-off) and repeats the role in a tooltip', async () => {
     const role = 'Senior Staff Software Engineer, Platform Infrastructure';
     wrap(<RoleChip role={role} />);
     const chip = screen.getByTestId('role-chip');
-    expect(chip.textContent!.length).toBeLessThanOrEqual(22);
-    expect(chip.textContent).toMatch(/…$/);
+    expect(chip).toHaveTextContent(role);
+    expect(chip.textContent).not.toMatch(/…/);
     expect(chip).toHaveAccessibleName(`Role: ${role}`);
     await userEvent.hover(chip);
     expect(await screen.findByRole('tooltip')).toHaveTextContent(role);
@@ -81,17 +81,55 @@ function renderList(items: InboxItem[]) {
   );
 }
 
-describe('InboxList role chip', () => {
-  it('puts the role chip first: [Role] [mailbox] [label]', () => {
-    renderList([item('Founding Engineer')]);
+describe('RoleLine', () => {
+  it('shows the full role title, however long, with the title in a tooltip', async () => {
+    const role = 'Customer Success Manager, Enterprise Accounts (EMEA)';
+    wrap(<RoleLine role={role} />);
+    const line = screen.getByTestId('role-line');
+    expect(line).toHaveTextContent(role);
+    expect(line.textContent).not.toMatch(/…/);
+    expect(line).toHaveAttribute('data-role-known', 'true');
+    expect(line).toHaveAccessibleName(`Role: ${role}`);
+    await userEvent.hover(line);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(role);
+  });
+
+  it('keeps the "Role unknown" state', () => {
+    wrap(<RoleLine role="  " />);
+    const line = screen.getByTestId('role-line');
+    expect(line).toHaveTextContent('Role unknown');
+    expect(line).toHaveAttribute('data-role-known', 'false');
+  });
+});
+
+describe('MailboxLine', () => {
+  it('labels the full sending address: "From <address>"', async () => {
+    wrap(<MailboxLine email="rampersad.aaron@archive.com" />);
+    const line = screen.getByTestId('mailbox-line');
+    expect(line).toHaveTextContent('From rampersad.aaron@archive.com');
+    expect(line).toHaveAccessibleName('Sent from rampersad.aaron@archive.com');
+    await userEvent.hover(line);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('rampersad.aaron@archive.com');
+  });
+});
+
+describe('InboxList row meta', () => {
+  it('lays a row out as name / full role / "From" full mailbox + label / snippet', () => {
+    renderList([item('Customer Success Manager')]);
     const row = screen.getByRole('listitem');
-    const meta = within(row).getByTestId('role-chip').parentElement!;
-    const chips = Array.from(meta.children).map((el) => el.textContent);
-    expect(chips.slice(0, 3)).toEqual(['Founding Engineer', 'paul.benigeri', 'Needs review']);
+    expect(within(row).getByTestId('role-line')).toHaveTextContent('Customer Success Manager');
+    const from = within(row).getByTestId('mailbox-line');
+    expect(from).toHaveTextContent('From paul.benigeri@archive.com');
+    // The status chip shares the "From" line.
+    expect(within(from.parentElement!).getByText('Needs review')).toBeInTheDocument();
+    const text = row.textContent!;
+    expect(text.indexOf('Jane Doe')).toBeLessThan(text.indexOf('Customer Success Manager'));
+    expect(text.indexOf('Customer Success Manager')).toBeLessThan(text.indexOf('From paul.benigeri@archive.com'));
+    expect(text.indexOf('From paul.benigeri@archive.com')).toBeLessThan(text.indexOf('No draft yet'));
   });
 
   it('shows "Role unknown" on rows whose candidate has no role', () => {
     renderList([item(null)]);
-    expect(within(screen.getByRole('listitem')).getByTestId('role-chip')).toHaveTextContent('Role unknown');
+    expect(within(screen.getByRole('listitem')).getByTestId('role-line')).toHaveTextContent('Role unknown');
   });
 });

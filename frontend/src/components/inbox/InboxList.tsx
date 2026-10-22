@@ -12,14 +12,15 @@ import { VIEWS, itemKey, type RoleGroup } from '@/lib/inbox';
 import { formatAge, initials } from '@/lib/utils';
 import QueryError from '@/components/shell/QueryError';
 import { cn } from '@/lib/utils';
-import { LabelChip, MailboxChip, NeedsReviewChip, PresenceChip, RoleChip } from './chips';
+import { LabelChip, MailboxLine, NeedsReviewChip, PresenceChip, RoleLine } from './chips';
 import DraftFlags from './DraftFlags';
 
 export { itemKey } from '@/lib/inbox';
 
 /** Rows above this count render through a virtualizer (only a window is in the DOM). */
 export const VIRTUALIZE_AFTER = 100;
-const ESTIMATED_ROW_PX = 84;
+// Name, role, From + label, snippet (measured after render; this only seeds the scroll height).
+const ESTIMATED_ROW_PX = 108;
 
 interface RowProps {
   item: InboxItem;
@@ -85,9 +86,10 @@ const Row = memo(function Row({ item, rowKey, selected, focused, highlighted, ch
             <span className="truncate font-medium text-foreground">{name}</span>
             <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{formatAge(item.ageMs)}</span>
           </span>
-          <span className="flex min-w-0 items-center gap-1 overflow-hidden">
-            <RoleChip role={item.candidate?.role} />
-            {item.mailbox && <MailboxChip email={item.mailbox.emailAddress} />}
+          <RoleLine role={item.candidate?.role} />
+          {/* Wraps rather than clipping: the status chips drop below a long address. */}
+          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            {item.mailbox && <MailboxLine email={item.mailbox.emailAddress} className="max-w-full" />}
             {item.draft ? (
               <LabelChip classification={item.draft.classification} confidenceLabel={item.draft.confidenceLabel} />
             ) : (
