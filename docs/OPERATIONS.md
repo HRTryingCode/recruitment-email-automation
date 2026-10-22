@@ -281,7 +281,7 @@ generally safe.
 | `outputDirectory: "frontend/dist"` | What Vercel serves as static. |
 | `functions["api/index.ts"].includeFiles` | Bundles `backend/**` into the serverless function so the Express app can import its own modules at runtime. |
 | `rewrites` | `/api/:path*` → `/api/index` (the Express app); everything else → `/index.html` (SPA fallback), except the literal `/assets/` prefix used by Vite-built bundles. |
-| `crons` | `0 */6 * * *` → `/api/internal/cron/renew-watches`; `0 * * * *` → `/api/internal/cron/reconcile`; `*/15 * * * *` → `/api/internal/cron/watchdog`. All are **GET**. Vercel sends `Authorization: Bearer <CRON_SECRET>`; our handler also accepts `x-vercel-cron-signature` equal to the secret. |
+| `crons` | `0 */6 * * *` → `/api/internal/cron/renew-watches`; `0 * * * *` → `/api/internal/cron/reconcile`; `*/15 * * * *` → `/api/internal/cron/watchdog`. All are **GET**. Vercel sends `Authorization: Bearer <CRON_SECRET>` on each call (requires the `CRON_SECRET` env var); the handler accepts only that header and compares it in constant time. |
 
 ## Required Vercel env vars
 

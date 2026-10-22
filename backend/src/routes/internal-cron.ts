@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../db/client';
 import {
@@ -14,23 +15,20 @@ import { safeError, isAuthRevokedError, MailboxNeedsReauthError } from '../lib/s
 
 const router = Router();
 
+// Vercel Cron sends `Authorization: Bearer <CRON_SECRET>` automatically when
+// the CRON_SECRET env var is set; that is the only accepted form. Compared in
+// constant time (L10).
 function isAuthorized(req: Request): boolean {
   const secret = process.env.CRON_SECRET;
   if (!secret) return false;
 
-  // Accept either an `Authorization: Bearer <CRON_SECRET>` header (our docs)
-  // or Vercel's own `x-vercel-cron-signature` if it equals the secret.
   const header = req.headers.authorization;
-  if (header && header.toLowerCase().startsWith('bearer ')) {
-    return header.slice(7).trim() === secret;
-  }
+  if (!header || !header.toLowerCase().startsWith('bearer ')) return false;
 
-  const vercelHeader = req.headers['x-vercel-cron-signature'];
-  if (typeof vercelHeader === 'string' && vercelHeader === secret) {
-    return true;
-  }
-
-  return false;
+  const provided = Buffer.from(header.slice(7).trim());
+  const expected = Buffer.from(secret);
+  if (provided.length !== expected.length) return false;
+  return crypto.timingSafeEqual(provided, expected);
 }
 
 // GET /api/internal/cron/renew-watches

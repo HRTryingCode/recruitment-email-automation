@@ -156,15 +156,31 @@ describe('/api/internal/cron', () => {
       );
     });
 
-    it('also accepts the x-vercel-cron-signature header', async () => {
-      mockPrisma.mailbox.findMany.mockResolvedValueOnce([]);
-
+    it('rejects the secret in x-vercel-cron-signature (L10: Bearer header only)', async () => {
       const res = await request(app)
         .get('/api/internal/cron/reconcile')
         .set('x-vercel-cron-signature', CRON_SECRET);
 
-      expect(res.status).toBe(200);
-      expect(res.body.data.mailboxCount).toBe(0);
+      expect(res.status).toBe(401);
+      expect(mockPrisma.mailbox.findMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects a bearer that is a prefix of the secret', async () => {
+      const res = await request(app)
+        .get('/api/internal/cron/reconcile')
+        .set('Authorization', `Bearer ${CRON_SECRET.slice(0, -1)}`);
+
+      expect(res.status).toBe(401);
+      expect(mockPrisma.mailbox.findMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects everything when CRON_SECRET is unset', async () => {
+      delete process.env.CRON_SECRET;
+      const res = await request(app)
+        .get('/api/internal/cron/reconcile')
+        .set('Authorization', 'Bearer ');
+
+      expect(res.status).toBe(401);
     });
 
     it('captures per-mailbox failures without aborting the loop', async () => {
