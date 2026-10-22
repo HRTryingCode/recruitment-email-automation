@@ -55,12 +55,21 @@ export interface GemDeps {
 
 /**
  * OAuth redirect URI for the Gem connect flow. The API and SPA share an
- * origin on Vercel, so FRONTEND_URL is also the API base. Registered with
- * Gem via dynamic client registration on each user's first connect.
+ * origin on Vercel, so FRONTEND_URL (or GEM_OAUTH_REDIRECT_BASE) is also the
+ * API base. Registered with Gem via dynamic client registration on each
+ * user's first connect.
  */
 export function gemRedirectUri(): string {
-  const base = (process.env.GEM_OAUTH_REDIRECT_BASE ?? process.env.FRONTEND_URL ?? 'http://localhost:5173').replace(/\/+$/, '');
-  return `${base}/api/integrations/gem/callback`;
+  return `${appBaseUrl()}/api/integrations/gem/callback`;
+}
+
+/** Public origin of the app (SPA + API). Falls back to the prod domain on Vercel. */
+export function appBaseUrl(): string {
+  const base =
+    process.env.GEM_OAUTH_REDIRECT_BASE ??
+    process.env.FRONTEND_URL ??
+    (process.env.VERCEL ? 'https://recruiting-email-automation-api.vercel.app' : 'http://localhost:5173');
+  return base.replace(/\/+$/, '');
 }
 
 type DiscoveredInfo = OAuthServerInfo & {

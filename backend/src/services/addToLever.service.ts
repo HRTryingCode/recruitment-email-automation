@@ -23,7 +23,7 @@ import {
   type LeverStage,
   type LeverResumeFile,
 } from './leverWrite.service';
-import { lookupGemPerson, safeLinkedinUrl, type GemLookup, type GemLookupStatus } from './gem.service';
+import { appBaseUrl, lookupGemPerson, safeLinkedinUrl, type GemLookup, type GemLookupStatus } from './gem.service';
 import { refreshCandidateLever } from './leverSync.service';
 import { logEvent } from './monitoring.service';
 import { safeError } from '../lib/safeError';
@@ -35,7 +35,6 @@ const IDEMPOTENCY_TTL_MS = 10 * 60 * 1000;
 const MAX_EXCERPT = 500;
 const MAX_RESUME_BYTES = 10 * 1024 * 1024;
 const RESUME_TIMEOUT_MS = 15_000;
-const DEFAULT_APP_URL = 'https://recruiting-email-automation-api.vercel.app';
 
 type Writer = Pick<
   LeverWriteClient,
@@ -202,7 +201,7 @@ export function replyExcerpt(bodyText: string | null | undefined): string | null
 }
 
 export function appUrl(): string {
-  return (process.env.FRONTEND_URL ?? DEFAULT_APP_URL).replace(/\/+$/, '');
+  return appBaseUrl();
 }
 
 export function buildNoteText(p: {

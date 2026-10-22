@@ -23,7 +23,7 @@ import { handleCallback, watchMailbox, syncMessages } from './services/gmail.ser
 import { consumeOAuthState } from './lib/oauthState';
 import { createError } from './middleware/error';
 import { logEvent } from './services/monitoring.service';
-import { completeGemAuth } from './services/gem.service';
+import { completeGemAuth, appBaseUrl } from './services/gem.service';
 import { safeError } from './lib/safeError';
 
 const app = express();
@@ -193,7 +193,7 @@ app.get(
 app.get(
   '/api/integrations/gem/callback',
   async (req: Request, res: Response, next: NextFunction) => {
-    const frontendUrl = (process.env.FRONTEND_URL ?? 'http://localhost:5173').replace(/\/+$/, '');
+    const frontendUrl = appBaseUrl();
     try {
       const code = qs(req.query.code);
       const state = qs(req.query.state);
