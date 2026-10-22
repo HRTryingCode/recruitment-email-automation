@@ -2,11 +2,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import CandidateTable from '../../src/components/CandidateTable';
 import { TooltipProvider } from '../../src/components/ui/tooltip';
 import type { Candidate } from '../../src/lib/api';
 import * as api from '../../src/lib/api';
+import { resetLeverAutoRefreshForTests } from '../../src/lib/leverAutoRefresh';
 
 // The table's own module mocks (fetchCandidates etc.) plus `mailboxes`/
 // `counts` if a future version calls them; only fetchCandidates matters here.
@@ -17,6 +18,7 @@ vi.mock('../../src/lib/api', () => ({
   updateCandidate: vi.fn(),
   ignoreCandidate: vi.fn(),
   unignoreCandidate: vi.fn(),
+  refreshCandidateLever: vi.fn(),
 }));
 
 // F3: the Add to Lever button asks /api/lever/me whether it may show.
@@ -57,6 +59,12 @@ function renderTable() {
     </QueryClientProvider>
   );
 }
+
+beforeEach(() => {
+  resetLeverAutoRefreshForTests();
+  vi.mocked(api.refreshCandidateLever).mockReset();
+  vi.mocked(api.refreshCandidateLever).mockReturnValue(new Promise(() => {}));
+});
 
 describe('<CandidateTable /> Lever badge (F2)', () => {
   it('the Lever filter refetches with lever=IN / NOT_IN', async () => {
@@ -117,5 +125,48 @@ describe('<CandidateTable /> Lever badge (F2)', () => {
     expect(within(row1).getByRole('button', { name: 'Add to another job' })).toBeInTheDocument();
     const row3 = screen.getByText('Never Checked').closest('tr')!;
     expect(within(row3).queryByRole('button', { name: /Add to/ })).toBeNull();
+  });
+
+  it('auto-refreshes only never-checked rows, once, and swaps in the result (H1)', async () => {
+    const withError: Candidate = {
+      ...base,
+      id: 'c4',
+      name: 'Errored Row',
+      email: 'e@example.com',
+      status: 'NEUTRAL',
+      leverState: 'ERROR',
+      leverError: 'timeout',
+      leverCheckedAt: '2026-05-20T10:00:00.000Z',
+    };
+    vi.mocked(api.fetchCandidates).mockResolvedValue({
+      success: true,
+      data: [...CANDIDATES, withError],
+      meta: { total: 4, page: 1, limit: 100 },
+    });
+    vi.mocked(api.refreshCandidateLever).mockResolvedValue({
+      success: true,
+      data: {
+        candidate: { ...CANDIDATES[2]!, leverState: 'NOT_FOUND', leverCheckedAt: '2026-10-22T12:00:00.000Z' },
+        lever: { state: 'NOT_FOUND' },
+      },
+    });
+    const { unmount } = renderTable();
+    const row3 = (await screen.findByText('Never Checked')).closest('tr')!;
+    await waitFor(() => expect(within(row3).getByTestId('lever-badge')).toHaveTextContent('Not in Lever'));
+    expect(vi.mocked(api.refreshCandidateLever).mock.calls).toEqual([['c3']]);
+    expect(within(screen.getByText('Errored Row').closest('tr')!).getByTestId('lever-badge')).toHaveTextContent(
+      'Lever unknown'
+    );
+
+    // Remounting (tab switch) in the same session does not re-trigger it.
+    unmount();
+    vi.mocked(api.fetchCandidates).mockResolvedValue({
+      success: true,
+      data: CANDIDATES,
+      meta: { total: 3, page: 1, limit: 100 },
+    });
+    renderTable();
+    await screen.findByText('Never Checked');
+    expect(vi.mocked(api.refreshCandidateLever)).toHaveBeenCalledTimes(1);
   });
 });

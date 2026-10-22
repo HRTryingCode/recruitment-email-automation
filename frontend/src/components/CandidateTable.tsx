@@ -54,6 +54,7 @@ import { Skeleton } from './ui/skeleton';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './ui/empty';
 import { CandidateLeverBadge } from './LeverBadge';
 import AddToLeverButton from './AddToLeverButton';
+import { useLeverAutoRefresh } from '../lib/leverAutoRefresh';
 
 function ReplyStatusBadge({ candidate }: { candidate: Candidate }) {
   const derived: NonNullable<Candidate['replyStatus']> =
@@ -415,6 +416,7 @@ export default function CandidateTable({ mailboxId }: Props) {
 
   // Sorted server-side across every page (L16).
   const candidates = data?.data ?? [];
+  useLeverAutoRefresh(candidates);
 
   if (error) {
     return (
