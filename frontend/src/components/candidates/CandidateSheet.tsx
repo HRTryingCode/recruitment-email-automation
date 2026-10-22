@@ -12,6 +12,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
 import LeverSection from '@/components/lever/LeverSection';
 import { fetchCandidate, generateDraftForThread, type Candidate, type EmailMessage, type EmailThread } from '@/lib/api';
+import { LIVE_DRAFT_STATUSES as LIVE_DRAFT } from '@/lib/candidates';
 import { messagePlainText } from '@/lib/inbox';
 import { extractApiErrorMessage, toastError } from '@/lib/toast';
 import { viewHref } from '@/lib/urlState';
@@ -19,8 +20,6 @@ import { formatDate, formatTimeAgo } from '@/lib/utils';
 import CandidateMenu, { type CandidateMenuHandlers } from './CandidateMenu';
 import { ReplyLabelChip, RoleChip } from './chips';
 
-/** Draft statuses that are a reply waiting in the Inbox. */
-const LIVE_DRAFT = new Set(['PENDING', 'APPROVED', 'FAILED', 'SCHEDULED', 'SENDING']);
 
 export function candidateQueryOptions(id: string) {
   return { queryKey: ['candidate', id] as const, queryFn: () => fetchCandidate(id), staleTime: 30_000 };

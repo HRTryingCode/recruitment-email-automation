@@ -2,6 +2,9 @@
 // activity, filters ⇄ URL ⇄ API params, and the default saved views.
 import type { Candidate, CandidateSortColumn, fetchCandidates } from './api';
 
+/** Draft statuses that are a reply waiting in the Inbox (Inbox, side panel, ⌘K). */
+export const LIVE_DRAFT_STATUSES: ReadonlySet<string> = new Set(['PENDING', 'APPROVED', 'SCHEDULED', 'SENDING', 'FAILED']);
+
 export type ReplyLabelText = 'Interested' | 'Unsure' | 'Not interested' | 'No reply' | 'Ignored';
 export type ReplyLabelTone = 'success' | 'warning' | 'destructive' | 'info' | 'secondary';
 

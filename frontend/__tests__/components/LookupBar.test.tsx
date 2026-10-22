@@ -133,7 +133,7 @@ describe('<LookupBar /> lookup', () => {
     expect(fetchLookupMock).toHaveBeenCalledWith('bob@x.com');
   });
 
-  it('shows a hint and top-5 name/email matches for partial input', async () => {
+  it('shows a hint and top-5 name/email matches for partial input; picking one opens that candidate', async () => {
     fetchCandidatesMock.mockResolvedValue({
       success: true,
       data: [
@@ -148,9 +148,11 @@ describe('<LookupBar /> lookup', () => {
       expect.objectContaining({ search: 'bob', limit: 5, includeIgnored: true })
     );
     expect(fetchLookupMock).not.toHaveBeenCalled();
+    expect(box).toHaveValue('bob');
     await user.click(option);
-    expect(box).toHaveValue('bob@x.com');
-    await waitFor(() => expect(fetchLookupMock).toHaveBeenCalledWith('bob@x.com'));
+    // R3 review: open the candidate's side panel straight away (not just fill the box).
+    expect(screen.getByTestId('location')).toHaveTextContent('/candidates?candidate=c1');
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
   it('renders the CANDIDATE verdict with details and drafts, and opens the pending draft', async () => {
@@ -201,7 +203,7 @@ describe('<LookupBar /> lookup', () => {
     expect(screen.getByTestId('lookup-integrations')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /open conversation/i }));
-    expect(screen.getByTestId('location')).toHaveTextContent('/inbox?draftId=d-9');
+    expect(screen.getByTestId('location')).toHaveTextContent('/inbox?item=d-9');
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
@@ -216,6 +218,44 @@ describe('<LookupBar /> lookup', () => {
           company: null, title: null, mailbox: null, firstMailbox: null, repliedAt: null,
           lastInboundAt: null, lastOutboundAt: null, createdAt: '2026-10-05T10:00:00.000Z',
         },
+      }),
+    });
+    const { user } = await openAndType('bob@x.com');
+    await user.click(await screen.findByRole('button', { name: /open conversation/i }));
+    expect(screen.getByTestId('location')).toHaveTextContent('/candidates?candidate=cand-1');
+  });
+
+  it.each(['APPROVED', 'SCHEDULED', 'SENDING', 'FAILED'])('a %s draft is live too: opens it in the Inbox', async (status) => {
+    fetchLookupMock.mockResolvedValue({
+      success: true,
+      data: base({
+        verdict: 'CANDIDATE',
+        summary: 'Candidate',
+        candidate: {
+          id: 'cand-1', name: 'Bob', email: 'bob@x.com', status: 'INTERESTED', role: null,
+          company: null, title: null, mailbox: null, firstMailbox: null, repliedAt: null,
+          lastInboundAt: null, lastOutboundAt: null, createdAt: '2026-10-05T10:00:00.000Z',
+        },
+        drafts: { total: 1, byStatus: { [status]: 1 }, latest: { id: 'd-7', status, threadId: 't', createdAt: '2026-10-06T00:00:00.000Z' } },
+      }),
+    });
+    const { user } = await openAndType('bob@x.com');
+    await user.click(await screen.findByRole('button', { name: /open conversation/i }));
+    expect(screen.getByTestId('location')).toHaveTextContent('/inbox?item=d-7');
+  });
+
+  it('a SENT or DISCARDED latest draft opens the candidate instead', async () => {
+    fetchLookupMock.mockResolvedValue({
+      success: true,
+      data: base({
+        verdict: 'CANDIDATE',
+        summary: 'Candidate',
+        candidate: {
+          id: 'cand-1', name: 'Bob', email: 'bob@x.com', status: 'INTERESTED', role: null,
+          company: null, title: null, mailbox: null, firstMailbox: null, repliedAt: null,
+          lastInboundAt: null, lastOutboundAt: null, createdAt: '2026-10-05T10:00:00.000Z',
+        },
+        drafts: { total: 1, byStatus: { SENT: 1 }, latest: { id: 'd-7', status: 'SENT', threadId: 't', createdAt: '2026-10-06T00:00:00.000Z' } },
       }),
     });
     const { user } = await openAndType('bob@x.com');

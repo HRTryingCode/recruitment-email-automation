@@ -28,7 +28,7 @@ describe('Settings → Integrations', () => {
       configured: true, createEnabled: false, appEmail: 'rae@archive.com', leverUser: { id: 'lu1', name: 'Rae R' },
     });
     wrap(<IntegrationsSettings />);
-    expect(await screen.findByText('Gem: Connected')).toBeInTheDocument();
+    expect(await screen.findByText('Connected')).toHaveAttribute('data-status', 'OK');
     expect(screen.getByRole('button', { name: 'Disconnect' })).toBeInTheDocument();
     expect(await screen.findByText('Configured')).toBeInTheDocument();
     expect(screen.getByText('Disabled')).toBeInTheDocument();

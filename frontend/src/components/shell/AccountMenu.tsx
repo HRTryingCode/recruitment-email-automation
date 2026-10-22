@@ -64,7 +64,7 @@ export default function AccountMenu() {
           </DropdownMenuLabel>
         )}
         <DropdownMenuSeparator />
-        <GemConnect />
+        <GemConnect variant="menu" />
         <DropdownMenuSeparator />
         <DropdownMenuGroup>
           <DropdownMenuItem asChild>
