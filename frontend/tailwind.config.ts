@@ -1,5 +1,6 @@
 import type { Config } from 'tailwindcss';
 import tailwindcssAnimate from 'tailwindcss-animate';
+import shadcnCompat, { shadcnCompatTheme } from './tailwind.shadcn-compat';
 
 const config: Config = {
   darkMode: ['class'],
@@ -28,6 +29,7 @@ const config: Config = {
           'Menlo',
           'monospace',
         ],
+        heading: [shadcnCompatTheme.fontFamily.heading],
         display: [
           '"Inter Variable"',
           '"Inter"',
@@ -157,7 +159,12 @@ const config: Config = {
         // The luma Button compiles to `rounded-4xl`; pill-like by design.
         '4xl': '2rem',
       },
+      ringWidth: shadcnCompatTheme.ringWidth,
+      spacing: shadcnCompatTheme.spacing,
+      zIndex: shadcnCompatTheme.zIndex,
+      textUnderlineOffset: shadcnCompatTheme.textUnderlineOffset,
       boxShadow: {
+        ...shadcnCompatTheme.boxShadow,
         glow: '0 0 0 1px rgb(var(--accent-500) / 0.18), 0 8px 32px -8px rgb(var(--accent-500) / 0.25)',
         'card-hover':
           '0 8px 24px -8px rgb(0 0 0 / 0.18), 0 0 0 1px rgb(var(--accent-500) / 0.08)',
@@ -188,7 +195,7 @@ const config: Config = {
       },
     },
   },
-  plugins: [tailwindcssAnimate],
+  plugins: [tailwindcssAnimate, shadcnCompat],
 };
 
 export default config;
