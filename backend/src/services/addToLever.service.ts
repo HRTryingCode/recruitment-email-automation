@@ -23,7 +23,8 @@ import {
   type LeverStage,
   type LeverResumeFile,
 } from './leverWrite.service';
-import { appBaseUrl, lookupGemPerson, safeLinkedinUrl, type GemLookup, type GemLookupStatus } from './gem.service';
+import { appBaseUrl, lookupGemPerson, type GemLookup, type GemLookupStatus } from './gem.service';
+import { normalizeLinkedinUrl } from '../lib/linkedin';
 import { refreshCandidateLever } from './leverSync.service';
 import { logEvent } from './monitoring.service';
 import { safeError } from '../lib/safeError';
@@ -278,6 +279,36 @@ export async function findCandidateForPrefill(by: { id: string } | { email: stri
   })) as CandidateForPrefill | null;
 }
 
+const GEM_PREFILL_OUTCOME: Record<GemLookupStatus, string> = {
+  FOUND: 'found',
+  NOT_FOUND: 'not_found',
+  NOT_CONNECTED: 'not_connected',
+  NEEDS_REAUTH: 'needs_reauth',
+  UNAVAILABLE: 'error',
+};
+
+/**
+ * Gem lookup for a prefill, with one GEM_PREFILL SystemLog row per attempt
+ * so a "Gem didn't fill anything" report can be diagnosed. Outcome, timing
+ * and which fields came back only — never the values (candidate PII).
+ */
+async function timedGemLookup(userId: string, email: string): Promise<GemLookup> {
+  const t0 = Date.now();
+  const gem = await addToLeverDeps.gemLookup(userId, email).catch((): GemLookup => ({ status: 'UNAVAILABLE' }));
+  const p = gem.status === 'FOUND' ? gem.person : undefined;
+  await logEvent(
+    'GEM_PREFILL',
+    {
+      userId,
+      outcome: GEM_PREFILL_OUTCOME[gem.status],
+      durationMs: Date.now() - t0,
+      ...(p && { fields: { linkedin: !!p.linkedinUrl, title: !!p.title, location: !!p.location, resume: !!p.resume } }),
+    },
+    gem.status === 'UNAVAILABLE' ? 'WARN' : 'INFO'
+  );
+  return gem;
+}
+
 export async function buildPrefill(args: {
   actorUserId: string;
   email: string;
@@ -288,7 +319,7 @@ export async function buildPrefill(args: {
   const [postings, stages, gem, status, actor, latest] = await Promise.all([
     getOpenPostings(),
     getStages(),
-    addToLeverDeps.gemLookup(args.actorUserId, email).catch((): GemLookup => ({ status: 'UNAVAILABLE' })),
+    timedGemLookup(args.actorUserId, email),
     reader.findByEmail(email),
     actorEmail(args.actorUserId),
     prisma.emailMessage.findFirst({
@@ -321,7 +352,7 @@ export async function buildPrefill(args: {
     headline: buildHeadline(person?.title ?? c?.title, person?.company ?? c?.company),
     location: person?.location ?? null,
     phone: person?.phone ?? null,
-    linkedinUrl: c?.linkedinUrl ?? person?.linkedinUrl ?? null,
+    linkedinUrl: normalizeLinkedinUrl(c?.linkedinUrl) ?? person?.linkedinUrl ?? null,
     resume: {
       available: !!person?.resume,
       source: person?.resume?.source ?? null,
@@ -357,8 +388,8 @@ export const createRequestSchema = z.object({
   headline: optionalText(300),
   location: optionalText(200),
   phone: optionalText(50),
-  linkedinUrl: optionalText(500).refine((v) => !v || safeLinkedinUrl(v) !== null, {
-    message: 'linkedinUrl must be an https linkedin.com URL',
+  linkedinUrl: optionalText(500).refine((v) => !v || normalizeLinkedinUrl(v) !== null, {
+    message: 'linkedinUrl must be a linkedin.com URL',
   }),
   postingId: z.string().trim().min(1, 'postingId is required').max(100),
   stageId: z.string().trim().min(1).max(100).nullish(),
@@ -495,7 +526,7 @@ async function doCreate(args: {
     }
   }
 
-  const linkedinUrl = req.linkedinUrl ? safeLinkedinUrl(req.linkedinUrl) : null;
+  const linkedinUrl = req.linkedinUrl ? normalizeLinkedinUrl(req.linkedinUrl) : null;
   const { id: opportunityId } = await writer.createOpportunity(
     {
       name: req.name,

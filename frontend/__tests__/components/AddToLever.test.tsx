@@ -16,6 +16,8 @@ vi.mock('../../src/lib/leverApi', async () => {
     fetchLeverPostings: vi.fn(),
     fetchLeverPrefill: vi.fn(),
     createLeverOpportunity: vi.fn(),
+    startGemConnect: vi.fn(),
+    fetchGemStatus: vi.fn(),
   };
 });
 
@@ -148,6 +150,7 @@ describe('AddToLeverDialog', () => {
     const confirm = await screen.findByRole('button', { name: 'Add Jane Doe to Founding Engineer' });
     expect(confirm).toBeEnabled();
     expect(screen.getByRole('combobox', { name: 'Job' })).toHaveTextContent('Founding Engineer');
+    expect(screen.getByRole('combobox', { name: 'Job' })).toHaveTextContent('Suggested');
     expect(screen.getByRole('combobox', { name: 'Stage' })).toHaveTextContent('Interest Call');
 
     await userEvent.click(screen.getByRole('combobox', { name: 'Job' }));
@@ -162,7 +165,7 @@ describe('AddToLeverDialog', () => {
     expect(screen.getByLabelText('Headline')).toHaveValue('Staff Engineer at Acme');
     expect(screen.getByLabelText('Location')).toHaveValue('Berlin');
     expect(screen.getByLabelText('LinkedIn')).toHaveValue('https://www.linkedin.com/in/jane');
-    expect(screen.getByText('From Gem: LinkedIn PDF')).toBeInTheDocument();
+    expect(screen.getByText('From Gem: Jane_LinkedIn.pdf')).toBeInTheDocument();
     expect(screen.getByText('Gem outreach')).toBeInTheDocument();
     expect(screen.getByText('paul.b')).toBeInTheDocument();
     expect(screen.getByTestId('lever-note-preview')).toHaveTextContent('Sounds great');
@@ -178,13 +181,76 @@ describe('AddToLeverDialog', () => {
     expect(screen.getByRole('button', { name: 'Add Jane Doe to Product Designer' })).toBeEnabled();
   });
 
-  it('job search filters the list', async () => {
+  it('one Job field: no separate search box until the combobox opens', async () => {
     openDialog();
     await screen.findByRole('button', { name: /^Add Jane Doe to/ });
-    await userEvent.type(screen.getByLabelText('Search jobs'), 'ops');
+    expect(screen.queryByLabelText('Search jobs')).toBeNull();
+    expect(screen.getAllByRole('combobox', { name: 'Job' })).toHaveLength(1);
     await userEvent.click(screen.getByRole('combobox', { name: 'Job' }));
-    const options = await screen.findAllByRole('option');
-    expect(options.map((o) => o.textContent)).toEqual([expect.stringContaining('Ops Lead')]);
+    expect(await screen.findByLabelText('Search jobs')).toHaveFocus();
+  });
+
+  it('typing filters jobs (title, team or location); grouped by team with location shown', async () => {
+    api.fetchLeverPrefill.mockResolvedValue(prefill({ suggestedPostingId: null }));
+    openDialog();
+    await screen.findByRole('button', { name: /^Add Jane Doe to/ });
+    await userEvent.click(screen.getByRole('combobox', { name: 'Job' }));
+    const design = await screen.findByRole('group', { name: 'Design' });
+    expect(within(design).getByRole('option', { name: /Product Designer/ })).toHaveTextContent('Remote');
+    expect(screen.getByRole('group', { name: 'Eng' })).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText('Search jobs'), 'ops');
+    await waitFor(() => expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual([expect.stringContaining('Ops Lead')]));
+    await userEvent.clear(screen.getByLabelText('Search jobs'));
+    await userEvent.type(screen.getByLabelText('Search jobs'), 'nyc');
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(1));
+    expect(screen.getByRole('option')).toHaveTextContent('Founding Engineer');
+  });
+
+  it('no match → "No open jobs match"', async () => {
+    openDialog();
+    await screen.findByRole('button', { name: /^Add Jane Doe to/ });
+    await userEvent.click(screen.getByRole('combobox', { name: 'Job' }));
+    await userEvent.type(await screen.findByLabelText('Search jobs'), 'zzzz');
+    expect(await screen.findByText('No open jobs match')).toBeInTheDocument();
+  });
+
+  it('keyboard: open, filter, Enter picks the highlighted job and closes', async () => {
+    openDialog();
+    await screen.findByRole('button', { name: /^Add Jane Doe to/ });
+    screen.getByRole('combobox', { name: 'Job' }).focus();
+    await userEvent.keyboard('{Enter}');
+    await userEvent.type(await screen.findByLabelText('Search jobs'), 'design');
+    await userEvent.keyboard('{Enter}');
+    await waitFor(() => expect(screen.queryByLabelText('Search jobs')).toBeNull());
+    expect(screen.getByRole('combobox', { name: 'Job' })).toHaveTextContent('Product Designer');
+    expect(screen.getByRole('button', { name: 'Add Jane Doe to Product Designer' })).toBeEnabled();
+  });
+
+  it('keyboard: arrow keys move through jobs', async () => {
+    api.fetchLeverPrefill.mockResolvedValue(prefill({ suggestedPostingId: null }));
+    openDialog();
+    await screen.findByRole('button', { name: /^Add Jane Doe to/ });
+    await userEvent.click(screen.getByRole('combobox', { name: 'Job' }));
+    await screen.findByLabelText('Search jobs');
+    const first = screen.getAllByRole('option')[0]!;
+    expect(first).toHaveAttribute('aria-selected', 'true');
+    await userEvent.keyboard('{ArrowDown}');
+    expect(first).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getAllByRole('option')[1]).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('a scheme-less LinkedIn URL is accepted and sent canonical; a non-LinkedIn URL blocks submit', async () => {
+    api.fetchLeverPrefill.mockResolvedValue(prefill({ linkedinUrl: null }));
+    openDialog();
+    const li = await screen.findByLabelText('LinkedIn');
+    await userEvent.type(li, 'evil.com/in/jane');
+    expect(screen.getByText('Enter a linkedin.com URL')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add Jane Doe to Founding Engineer' })).toBeDisabled();
+    await userEvent.clear(li);
+    await userEvent.type(li, 'www.linkedin.com/in/jane?trk=x');
+    await userEvent.click(screen.getByRole('button', { name: 'Add Jane Doe to Founding Engineer' }));
+    await waitFor(() => expect(api.createLeverOpportunity).toHaveBeenCalledTimes(1));
+    expect(api.createLeverOpportunity.mock.calls[0]![1].linkedinUrl).toBe('https://www.linkedin.com/in/jane');
   });
 
   it('warns when already in Lever, and blocks the same job', async () => {
@@ -278,5 +344,84 @@ describe('AddToLeverDialog', () => {
     openDialog();
     expect(await screen.findByText('Add to Lever is turned off')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add Jane Doe to Founding Engineer' })).toBeDisabled();
+  });
+
+  describe('Gem', () => {
+    const EMPTY = {
+      headline: null,
+      location: null,
+      linkedinUrl: null,
+      resume: { available: false, source: null, filename: null },
+    };
+    let popup: { location: { href: string }; closed: boolean; close: () => void };
+
+    beforeEach(() => {
+      popup = { location: { href: 'about:blank' }, closed: false, close: vi.fn() };
+      vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+      api.startGemConnect.mockReset().mockResolvedValue('https://gem.test/authorize');
+      api.fetchGemStatus.mockReset().mockResolvedValue({ status: 'NOT_CONNECTED', lastError: null });
+    });
+
+    function gemCallbackPosts(result: string) {
+      window.dispatchEvent(
+        new MessageEvent('message', { data: { type: 'gem-oauth', result }, origin: window.location.origin })
+      );
+    }
+
+    it('not connected → callout; Connect Gem opens the popup, then the refetched prefill fills only EMPTY fields', async () => {
+      api.fetchLeverPrefill.mockResolvedValueOnce(prefill({ ...EMPTY, gem: { status: 'NOT_CONNECTED' } }));
+      openDialog();
+      expect(await screen.findByText('Connect Gem to fill in LinkedIn, title, location and résumé')).toBeInTheDocument();
+      expect(screen.getByText('No résumé')).toBeInTheDocument();
+      // The recruiter types a location while Gem is connecting.
+      await userEvent.type(screen.getByLabelText('Location'), 'Lisbon');
+
+      api.fetchLeverPrefill.mockResolvedValueOnce(prefill({ gem: { status: 'FOUND' } }));
+      await userEvent.click(screen.getByRole('button', { name: 'Connect Gem' }));
+      expect(window.open).toHaveBeenCalledWith('about:blank', 'gem-oauth', expect.any(String));
+      await waitFor(() => expect(popup.location.href).toBe('https://gem.test/authorize'));
+      gemCallbackPosts('connected');
+
+      await waitFor(() => expect(screen.getByLabelText('LinkedIn')).toHaveValue('https://www.linkedin.com/in/jane'));
+      expect(api.fetchLeverPrefill).toHaveBeenCalledTimes(2);
+      expect(screen.getByLabelText('Headline')).toHaveValue('Staff Engineer at Acme');
+      expect(screen.getByLabelText('Location')).toHaveValue('Lisbon');
+      expect(screen.getByLabelText('Name')).toHaveValue('Jane Doe');
+      expect(screen.getAllByText('Filled from Gem')).toHaveLength(2);
+      expect(screen.getByText('From Gem: Jane_LinkedIn.pdf')).toBeInTheDocument();
+      expect(screen.queryByText('Connect Gem to fill in LinkedIn, title, location and résumé')).toBeNull();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add Jane Doe to Founding Engineer' }));
+      await waitFor(() => expect(api.createLeverOpportunity).toHaveBeenCalled());
+      expect(api.createLeverOpportunity.mock.calls[0]![1]).toMatchObject({
+        location: 'Lisbon',
+        linkedinUrl: 'https://www.linkedin.com/in/jane',
+        includeResume: true,
+      });
+    });
+
+    it('connected but the person isn\'t in Gem → muted "Not found in Gem", no callout', async () => {
+      api.fetchLeverPrefill.mockResolvedValue(prefill({ ...EMPTY, gem: { status: 'NOT_FOUND' } }));
+      openDialog();
+      expect(await screen.findByText('Not found in Gem')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Connect Gem/ })).toBeNull();
+    });
+
+    it('NEEDS_REAUTH → "Reconnect Gem"', async () => {
+      api.fetchLeverPrefill.mockResolvedValue(prefill({ ...EMPTY, gem: { status: 'NEEDS_REAUTH' } }));
+      openDialog();
+      expect(await screen.findByRole('button', { name: 'Reconnect Gem' })).toBeInTheDocument();
+    });
+
+    it('a cancelled connect says so and keeps the callout', async () => {
+      api.fetchLeverPrefill.mockResolvedValue(prefill({ ...EMPTY, gem: { status: 'NOT_CONNECTED' } }));
+      openDialog();
+      await userEvent.click(await screen.findByRole('button', { name: 'Connect Gem' }));
+      await waitFor(() => expect(popup.location.href).toBe('https://gem.test/authorize'));
+      gemCallbackPosts('denied');
+      expect(await screen.findByText('Gem connection was cancelled.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Connect Gem' })).toBeEnabled();
+      expect(api.fetchLeverPrefill).toHaveBeenCalledTimes(1);
+    });
   });
 });

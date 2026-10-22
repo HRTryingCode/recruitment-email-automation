@@ -12,8 +12,9 @@ vi.mock('../../src/lib/leverApi', () => ({
 }));
 const api = vi.mocked(leverApi);
 
+let qc: QueryClient;
 function wrap() {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
       <GemConnect navigate={nav} />
@@ -46,6 +47,15 @@ describe('GemConnect', () => {
     expect(await screen.findByText('Gem: Connected')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
     await waitFor(() => expect(api.disconnectGem).toHaveBeenCalled());
+  });
+
+  it('disconnect invalidates cached Add to Lever prefills (built for the old connection)', async () => {
+    api.fetchGemStatus.mockResolvedValue({ status: 'OK', lastError: null });
+    api.disconnectGem.mockResolvedValue();
+    wrap();
+    qc.setQueryData(['lever-prefill', 'c:c1'], { stale: false });
+    await userEvent.click(await screen.findByRole('button', { name: 'Disconnect' }));
+    await waitFor(() => expect(qc.getQueryState(['lever-prefill', 'c:c1'])?.isInvalidated).toBe(true));
   });
 
   it('NEEDS_REAUTH → "Reconnect"', async () => {

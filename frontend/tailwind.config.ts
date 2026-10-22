@@ -42,57 +42,60 @@ const config: Config = {
       colors: {
         // ---- shadcn/ui semantic tokens (luma preset, taupe baseColor) -----
         // The OKLCH CSS variables live in index.css under :root / .dark.
-        // We wire them via `oklch(from var(--x) l c h / <alpha-value>)` so the
-        // Tailwind v3 alpha shorthand (`bg-primary/80`) and plain (`bg-primary`)
-        // both work — the `from` keyword expands the variable's L/C/H into
-        // the outer oklch() and Tailwind substitutes <alpha-value>.
-        background: 'oklch(from var(--background) l c h / <alpha-value>)',
-        foreground: 'oklch(from var(--foreground) l c h / <alpha-value>)',
-        border: 'oklch(from var(--border) l c h / <alpha-value>)',
-        input: 'oklch(from var(--input) l c h / <alpha-value>)',
-        ring: 'oklch(from var(--ring) l c h / <alpha-value>)',
+        // We wire them via `oklch(from var(--x) l c h / calc(alpha * <alpha-value>))`
+        // so the Tailwind v3 alpha shorthand (`bg-primary/80`) and plain
+        // (`bg-primary`) both work — the `from` keyword expands the variable's
+        // L/C/H/alpha into the outer oklch() and Tailwind substitutes
+        // <alpha-value>. Multiplying by `alpha` keeps translucent tokens
+        // translucent: dark `--input` is `oklch(1 0 0 / 15%)`, and without it
+        // `bg-input/50` rendered as 50% white (light-grey inputs on dark).
+        background: 'oklch(from var(--background) l c h / calc(alpha * <alpha-value>))',
+        foreground: 'oklch(from var(--foreground) l c h / calc(alpha * <alpha-value>))',
+        border: 'oklch(from var(--border) l c h / calc(alpha * <alpha-value>))',
+        input: 'oklch(from var(--input) l c h / calc(alpha * <alpha-value>))',
+        ring: 'oklch(from var(--ring) l c h / calc(alpha * <alpha-value>))',
         card: {
-          DEFAULT: 'oklch(from var(--card) l c h / <alpha-value>)',
-          foreground: 'oklch(from var(--card-foreground) l c h / <alpha-value>)',
+          DEFAULT: 'oklch(from var(--card) l c h / calc(alpha * <alpha-value>))',
+          foreground: 'oklch(from var(--card-foreground) l c h / calc(alpha * <alpha-value>))',
         },
         popover: {
-          DEFAULT: 'oklch(from var(--popover) l c h / <alpha-value>)',
-          foreground: 'oklch(from var(--popover-foreground) l c h / <alpha-value>)',
+          DEFAULT: 'oklch(from var(--popover) l c h / calc(alpha * <alpha-value>))',
+          foreground: 'oklch(from var(--popover-foreground) l c h / calc(alpha * <alpha-value>))',
         },
         primary: {
-          DEFAULT: 'oklch(from var(--primary) l c h / <alpha-value>)',
-          foreground: 'oklch(from var(--primary-foreground) l c h / <alpha-value>)',
+          DEFAULT: 'oklch(from var(--primary) l c h / calc(alpha * <alpha-value>))',
+          foreground: 'oklch(from var(--primary-foreground) l c h / calc(alpha * <alpha-value>))',
         },
         secondary: {
-          DEFAULT: 'oklch(from var(--secondary) l c h / <alpha-value>)',
-          foreground: 'oklch(from var(--secondary-foreground) l c h / <alpha-value>)',
+          DEFAULT: 'oklch(from var(--secondary) l c h / calc(alpha * <alpha-value>))',
+          foreground: 'oklch(from var(--secondary-foreground) l c h / calc(alpha * <alpha-value>))',
         },
         muted: {
-          DEFAULT: 'oklch(from var(--muted) l c h / <alpha-value>)',
-          foreground: 'oklch(from var(--muted-foreground) l c h / <alpha-value>)',
+          DEFAULT: 'oklch(from var(--muted) l c h / calc(alpha * <alpha-value>))',
+          foreground: 'oklch(from var(--muted-foreground) l c h / calc(alpha * <alpha-value>))',
         },
         destructive: {
-          DEFAULT: 'oklch(from var(--destructive) l c h / <alpha-value>)',
-          foreground: 'oklch(from var(--primary-foreground) l c h / <alpha-value>)',
+          DEFAULT: 'oklch(from var(--destructive) l c h / calc(alpha * <alpha-value>))',
+          foreground: 'oklch(from var(--primary-foreground) l c h / calc(alpha * <alpha-value>))',
         },
         sidebar: {
-          DEFAULT: 'oklch(from var(--sidebar) l c h / <alpha-value>)',
-          foreground: 'oklch(from var(--sidebar-foreground) l c h / <alpha-value>)',
-          primary: 'oklch(from var(--sidebar-primary) l c h / <alpha-value>)',
+          DEFAULT: 'oklch(from var(--sidebar) l c h / calc(alpha * <alpha-value>))',
+          foreground: 'oklch(from var(--sidebar-foreground) l c h / calc(alpha * <alpha-value>))',
+          primary: 'oklch(from var(--sidebar-primary) l c h / calc(alpha * <alpha-value>))',
           'primary-foreground':
-            'oklch(from var(--sidebar-primary-foreground) l c h / <alpha-value>)',
-          accent: 'oklch(from var(--sidebar-accent) l c h / <alpha-value>)',
+            'oklch(from var(--sidebar-primary-foreground) l c h / calc(alpha * <alpha-value>))',
+          accent: 'oklch(from var(--sidebar-accent) l c h / calc(alpha * <alpha-value>))',
           'accent-foreground':
-            'oklch(from var(--sidebar-accent-foreground) l c h / <alpha-value>)',
-          border: 'oklch(from var(--sidebar-border) l c h / <alpha-value>)',
-          ring: 'oklch(from var(--sidebar-ring) l c h / <alpha-value>)',
+            'oklch(from var(--sidebar-accent-foreground) l c h / calc(alpha * <alpha-value>))',
+          border: 'oklch(from var(--sidebar-border) l c h / calc(alpha * <alpha-value>))',
+          ring: 'oklch(from var(--sidebar-ring) l c h / calc(alpha * <alpha-value>))',
         },
         chart: {
-          1: 'oklch(from var(--chart-1) l c h / <alpha-value>)',
-          2: 'oklch(from var(--chart-2) l c h / <alpha-value>)',
-          3: 'oklch(from var(--chart-3) l c h / <alpha-value>)',
-          4: 'oklch(from var(--chart-4) l c h / <alpha-value>)',
-          5: 'oklch(from var(--chart-5) l c h / <alpha-value>)',
+          1: 'oklch(from var(--chart-1) l c h / calc(alpha * <alpha-value>))',
+          2: 'oklch(from var(--chart-2) l c h / calc(alpha * <alpha-value>))',
+          3: 'oklch(from var(--chart-3) l c h / calc(alpha * <alpha-value>))',
+          4: 'oklch(from var(--chart-4) l c h / calc(alpha * <alpha-value>))',
+          5: 'oklch(from var(--chart-5) l c h / calc(alpha * <alpha-value>))',
         },
         // ---- Semantic foreground tokens ----------------------------------
         // Flip light/dark via CSS variables in index.css. The single RGB
