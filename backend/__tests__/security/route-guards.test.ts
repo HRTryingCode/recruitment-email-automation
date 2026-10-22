@@ -32,6 +32,7 @@ const MANIFEST: Record<string, Guard> = {
   'GET /api/internal/cron/watchdog': 'cron',
   'GET /api/internal/cron/sweep-stuck-messages': 'cron',
   'GET /api/internal/cron/systemlog-retention': 'cron',
+  'GET /api/internal/cron/coverage-summary': 'cron',
   'GET /api/mailboxes/gmail/callback': 'oauth',
 
   'GET /api/mailboxes/': 'auth',
@@ -66,6 +67,13 @@ const MANIFEST: Record<string, Guard> = {
   'POST /api/drafts/:id/send': 'auth',
 
   'GET /api/internal/sync-health': 'auth',
+
+  // B3 sender coverage: summary for any user; expected-sender registry is admin-managed.
+  'GET /api/coverage/': 'auth',
+  'GET /api/coverage/expected-senders': 'admin',
+  'POST /api/coverage/expected-senders': 'admin',
+  'PATCH /api/coverage/expected-senders/:id': 'admin',
+  'DELETE /api/coverage/expected-senders/:id': 'admin',
   'GET /api/internal/debug/mailbox': 'admin',
   'GET /api/internal/debug/candidate': 'admin',
   'GET /api/internal/debug/drafts': 'admin',
