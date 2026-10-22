@@ -302,6 +302,66 @@ describe('U0 draft actions', () => {
     });
   });
 
+  describe('POST /api/drafts/:id/undismiss', () => {
+    it('puts a dismissed draft back to PENDING and clears the dismissal', async () => {
+      const store = installDraft({
+        status: 'DISCARDED',
+        dismissReason: 'not_needed',
+        dismissNote: 'n',
+        dismissedByUserId: ME,
+        externalDraftId: 'gd-1',
+      });
+      mockPrisma.emailDraft.count.mockResolvedValue(0);
+      const res = await request(app).post('/api/drafts/draft-1/undismiss').set('Authorization', AUTH).send({});
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({ id: 'draft-1', status: 'PENDING' });
+      expect(store.get()).toMatchObject({
+        status: 'PENDING',
+        dismissReason: null,
+        dismissNote: null,
+        dismissedByUserId: null,
+        externalDraftId: null,
+      });
+      expect(logged('DRAFT_UNDISMISSED')).toMatchObject({ draftId: 'draft-1', actorUserId: ME });
+    });
+
+    it('409 for a draft that is not discarded', async () => {
+      installDraft({ status: 'PENDING' });
+      const res = await request(app).post('/api/drafts/draft-1/undismiss').set('Authorization', AUTH).send({});
+      expect(res.status).toBe(409);
+    });
+
+    it('409 for a draft discarded some other way (not via dismiss)', async () => {
+      installDraft({ status: 'DISCARDED', dismissedByUserId: null });
+      const res = await request(app).post('/api/drafts/draft-1/undismiss').set('Authorization', AUTH).send({});
+      expect(res.status).toBe(409);
+    });
+
+    it('409 when the thread already has another live draft', async () => {
+      const store = installDraft({ status: 'DISCARDED', dismissedByUserId: ME });
+      mockPrisma.emailDraft.count.mockResolvedValue(1);
+      const res = await request(app).post('/api/drafts/draft-1/undismiss').set('Authorization', AUTH).send({});
+      expect(res.status).toBe(409);
+      expect(store.get().status).toBe('DISCARDED');
+      const where = mockPrisma.emailDraft.count.mock.calls[0][0].where;
+      expect(where).toMatchObject({ threadId: 'thread-1', id: { not: 'draft-1' } });
+    });
+
+    it('409 (not 500) when a live draft appears concurrently', async () => {
+      installDraft({ status: 'DISCARDED', dismissedByUserId: ME });
+      mockPrisma.emailDraft.count.mockResolvedValue(0);
+      mockPrisma.emailDraft.updateMany.mockRejectedValue(Object.assign(new Error('unique'), { code: 'P2002' }));
+      const res = await request(app).post('/api/drafts/draft-1/undismiss').set('Authorization', AUTH).send({});
+      expect(res.status).toBe(409);
+    });
+
+    it('404 for an unknown draft', async () => {
+      mockPrisma.emailDraft.findUnique.mockResolvedValue(null);
+      const res = await request(app).post('/api/drafts/nope/undismiss').set('Authorization', AUTH).send({});
+      expect(res.status).toBe(404);
+    });
+  });
+
   describe('snooze', () => {
     it('snoozes until a future time within 30 days', async () => {
       const store = installDraft({ status: 'PENDING', returnedFromSnoozeAt: new Date() });
@@ -381,6 +441,20 @@ describe('U0 draft actions', () => {
         aiBodyText: 'AI text',
         hasEdits: true,
       });
+    });
+    it('GET /:id names the editor and the expiry of a pending draft', async () => {
+      installDraft({
+        status: 'PENDING',
+        bodyText: 'Edited',
+        editedByUserId: 'u-ana',
+        createdAt: new Date('2026-10-22T10:00:00Z'),
+      });
+      mockPrisma.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
+        where.id === 'u-ana' ? { id: 'u-ana', name: 'Ana Recruiter', email: 'ana@archive.com', role: 'recruiter' } : { id: where.id, role: 'admin', email: 'x@archive.com' }
+      );
+      const res = await request(app).get('/api/drafts/draft-1').set('Authorization', AUTH);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({ editedByName: 'Ana Recruiter', expiresAt: '2026-11-12T10:00:00.000Z' });
     });
   });
 

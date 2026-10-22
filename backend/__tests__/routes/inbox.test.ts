@@ -121,6 +121,27 @@ describe('GET /api/inbox', () => {
     expect(res.body.data.nextCursor).toBeNull();
   });
 
+  it('names who edited the draft and when a pending draft expires', async () => {
+    programRaw([{ id: 'draft-1', kind: 'draft', sortAt: new Date('2026-10-22T10:00:00Z') }]);
+    mockPrisma.emailDraft.findMany.mockResolvedValue([
+      { ...draftRow, bodyText: 'edited', editedAt: new Date('2026-10-22T11:00:00Z'), editedByUserId: 'u-ana' },
+    ]);
+    mockPrisma.user.findMany.mockResolvedValue([{ id: 'u-ana', name: 'Ana Recruiter', email: 'ana@archive.com' }]);
+    const res = await request(app).get('/api/inbox?view=interested').set('Authorization', AUTH);
+    const [item] = res.body.data.items;
+    expect(item.draft).toMatchObject({ hasEdits: true, editedByName: 'Ana Recruiter' });
+    expect(item.draft.expiresAt).toBe('2026-11-12T10:00:00.000Z');
+  });
+
+  it('has no expiry for sent drafts and no editor name without edits', async () => {
+    programRaw([{ id: 'draft-1', kind: 'draft', sortAt: new Date('2026-10-22T10:00:00Z') }]);
+    mockPrisma.emailDraft.findMany.mockResolvedValue([{ ...draftRow, status: 'SENT', editedByUserId: null }]);
+    const res = await request(app).get('/api/inbox?view=sent_today').set('Authorization', AUTH);
+    const [item] = res.body.data.items;
+    expect(item.draft.expiresAt).toBeNull();
+    expect(item.draft.editedByName).toBeNull();
+  });
+
   it('releases expired snoozes before reading, so they count again', async () => {
     programRaw([]);
     await request(app).get('/api/inbox').set('Authorization', AUTH).expect(200);
