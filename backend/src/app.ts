@@ -11,6 +11,7 @@ import candidateLeverRouter from './routes/candidate-lever';
 import emailsRouter from './routes/emails';
 import draftsRouter from './routes/drafts';
 import webhooksRouter from './routes/webhooks';
+import leverWebhookRouter from './routes/webhooks-lever';
 import healthRouter from './routes/health';
 import authRouter from './routes/auth';
 import internalCronRouter from './routes/internal-cron';
@@ -126,8 +127,9 @@ app.use(express.urlencoded({ extended: true }));
 // ── Public routes ─────────────────────────────────────────────────────────
 app.use('/api/health', healthRouter);
 app.use('/api/auth', authRouter);
-// Webhooks must remain unauthenticated for Google Pub/Sub push.
-app.use('/api/webhooks', webhooksRouter);
+// Webhooks must remain unauthenticated: Google Pub/Sub push (OIDC-verified
+// in-handler) and Lever (HMAC-signature-verified in-handler, H2).
+app.use('/api/webhooks', webhooksRouter, leverWebhookRouter);
 // Internal cron endpoint — authenticated via CRON_SECRET header, not JWT.
 app.use('/api/internal/cron', internalCronRouter);
 

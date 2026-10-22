@@ -13,11 +13,12 @@ vi.mock('../../src/db/client', () => {
 
 // public   — no auth at all (health, sign-in)
 // pubsub   — authenticated in-handler by verifyPubSubJwt (webhooks.ts)
+// signature — authenticated in-handler by Lever's HMAC signature (webhooks-lever.ts)
 // cron     — authenticated in-handler by CRON_SECRET (internal-cron.ts)
 // oauth    — authenticated by the one-time OAuth state row (app.ts callback)
 // auth     — requireAuth (any allowed @archive.com user)
 // admin    — requireAuth + requireAdmin
-type Guard = 'public' | 'pubsub' | 'cron' | 'oauth' | 'auth' | 'admin';
+type Guard = 'public' | 'pubsub' | 'signature' | 'cron' | 'oauth' | 'auth' | 'admin';
 
 const MANIFEST: Record<string, Guard> = {
   'GET /api/health/': 'public',
@@ -26,6 +27,8 @@ const MANIFEST: Record<string, Guard> = {
   'POST /api/auth/google': 'public',
   'GET /api/auth/me': 'auth',
   'POST /api/webhooks/gmail': 'pubsub',
+  // H2: Lever webhooks; 503 unless LEVER_WEBHOOK_SIGNATURE_TOKENS is set.
+  'POST /api/webhooks/lever': 'signature',
   'GET /api/internal/cron/renew-watches': 'cron',
   'GET /api/internal/cron/reconcile': 'cron',
   'GET /api/internal/cron/purge-orphan-bodies': 'cron',
