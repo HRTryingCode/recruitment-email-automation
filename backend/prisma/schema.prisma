@@ -289,3 +289,17 @@ model GemConnection {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 }
+
+/// One row per accepted Lever webhook delivery (H2), keyed by the delivery's
+/// dedupe key (Lever's `id` when sent, else `event:opportunityId:triggeredAt`)
+/// so a redelivery doesn't refresh twice. A few hundred tiny rows a day at
+/// most; not pruned yet.
+model LeverWebhookEvent {
+  id            String   @id
+  event         String
+  opportunityId String?
+  triggeredAt   DateTime
+  createdAt     DateTime @default(now())
+
+  @@index([createdAt])
+}

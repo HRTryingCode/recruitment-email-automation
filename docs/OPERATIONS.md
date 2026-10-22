@@ -28,6 +28,12 @@ that matter for diagnosing ingestion problems:
 | `isActive` | `false` only after a manual disconnect (`DELETE /api/mailboxes/:id`). A revoked token does **not** flip this — check `authStatus`. Inactive mailboxes are omitted from sync-health. |
 | `error` | `true` when the backend could not compute part of the row (count fields are then `null`, not `0`). Retry; persistent `true` = DB pool exhaustion. |
 
+App-wide fields come back in `meta` next to the per-mailbox `data` array:
+
+| Field | What it tells you |
+|---|---|
+| `meta.leverWebhooksLast24h` / `meta.lastLeverWebhookAt` | `LEVER_WEBHOOK_RECEIVED` rows in the last 24h and the newest one ([Lever webhooks](#lever-webhooks)). `null` = query failed. `0` with webhooks configured = check Lever's webhook settings. |
+
 The dashboard's health pill ranks states worst-first: rose **"N mailboxes:
 reconnect required"** (NEEDS_REAUTH or expired watch) → rose **"N mailboxes
 not syncing"** (3+ reconcile failures or no reconcile in 3h) → amber (incomplete
@@ -66,6 +72,7 @@ when issues appear, one "resolved" message when they clear — never every run.
 | `reconcile_dead` | critical | Dead-man's switch: no `RECONCILIATION_RUN` at all in 2h (cron not running / function crashing). |
 | `reconcile_deadline` | warning | Last 3 reconcile summaries all hit the 45s start budget (mailboxes being skipped). |
 | `webhook_errors` | warning | ≥20 `WEBHOOK_HANDLER_ERROR` rows in the last hour. |
+| `lever_webhook_silent` | warning | `LEVER_WEBHOOK_SIGNATURE_TOKENS` is set but no `LEVER_WEBHOOK_RECEIVED` in 24h ([Lever webhooks](#lever-webhooks)). Statuses still refresh every 3h. |
 
 State is the latest `WATCHDOG_STATE` row in `SystemLog` (`details.active` =
 issues already announced). An issue is only recorded as announced if the Slack
@@ -137,7 +144,44 @@ Failure modes:
 | Every row `ERROR` / `leverError = http_401`, runs `aborted` | Key revoked or rotated | Issue a new read key in Lever (Settings → Integrations → API), update `LEVER_API_KEY`, redeploy, run the cron by hand. |
 | `leverError = http_429` on many rows | Another integration is sharing the Lever rate budget | Rows retry automatically after 3h; if persistent, lower the cron frequency. |
 | `deadlineReached: true` every run | More stale candidates than one run can check | Fine — the oldest are checked first, so all rows rotate through. |
-| Badge says "Lever unknown" with "not checked yet" | Candidate created since the last run | Wait for the next run or use the refresh endpoint. |
+| Badge says "Lever unknown" with "not checked yet" | Candidate created since the last run, and the on-create check failed (`LEVER_REFRESH_FAILED`) | Wait for the next run or use the refresh endpoint. |
+
+### Lever webhooks
+
+Lever status is near-real-time (H2) from two event sources; the crons above stay as the safety net.
+
+- **Our writes**: when ingestion creates a Candidate, or `PATCH /api/candidates/:id` changes its email, the row is checked against Lever in the background (`scheduleLeverRefresh`, `waitUntil`) — the badge is right within seconds. Failures are logged as `LEVER_REFRESH_FAILED` (WARN) and never block the request. No-op when `LEVER_API_KEY` is unset.
+- **Lever's writes**: `POST /api/webhooks/lever` receives `applicationCreated`, `candidateStageChange`, `candidateArchiveChange`, `candidateHired`, `candidateDeleted`. Only `event` and `data.opportunityId` are read from the payload; the opportunity's emails and status are re-read from Lever (GET only). Every Candidate with that `leverOpportunityId`, or one of the opportunity's emails, is refreshed (max 10 per delivery).
+
+**Auth.** Public route, verified in-handler: `signature` must equal hex HMAC-SHA256 of `token + triggeredAt`, keyed with that webhook's signature token (constant-time compare), and `triggeredAt` must be within 5 min of now. `LEVER_WEBHOOK_SIGNATURE_TOKENS` holds all tokens comma-separated (Lever issues one per webhook); any may match. Unset → `503`, nothing processed.
+
+**Responses.** `401` bad/stale signature (one sampled `LEVER_WEBHOOK_REJECTED` WARN row per minute per instance). `200 {ignored: true}` for other event types or a missing `opportunityId`. Otherwise `200` immediately and the work runs in `waitUntil`. Lever retries any non-2xx up to 5 times with backoff.
+
+**Dedupe.** Each accepted delivery inserts a `LeverWebhookEvent` row keyed by Lever's `id` when sent, else `event:opportunityId:triggeredAt`; a redelivery hits the primary key and is skipped. If the insert fails for another reason the delivery is processed anyway (a refresh is idempotent).
+
+**Logs.** `LEVER_WEBHOOK_RECEIVED` (INFO, `{event, opportunityId}`) per new delivery — counted in sync-health `meta` and by the `lever_webhook_silent` watchdog check. `LEVER_WEBHOOK_ERROR` (ERROR) if background processing throws. No emails, tokens or payloads are logged.
+
+**Setup (Lever super admin, one time):**
+
+1. In Lever: **Settings → Integrations and API → Webhooks**.
+2. Enable each of these five webhooks and set its URL to `https://recruiting-email-automation-api.vercel.app/api/webhooks/lever`: **Application created**, **Candidate stage change**, **Candidate archive state change**, **Candidate hired**, **Candidate deleted**. No conditions (all postings, all stages).
+3. Copy each webhook's **signature token** (shown under the webhook once it's enabled).
+4. In Vercel → Project → Settings → Environment Variables (Production): set `LEVER_WEBHOOK_SIGNATURE_TOKENS` to all five tokens, comma-separated. Redeploy (env changes need a new deployment).
+5. Use Lever's **Verify** / test button on one webhook (or move a test candidate's stage) and confirm `meta.leverWebhooksLast24h` in sync-health goes up and the candidate's badge changes within seconds. A `401` in Lever's delivery log means a token is missing or mistyped.
+
+Rotating a token in Lever: add the new token to the env var, redeploy, then remove the old one.
+
+**Programmatic setup.** Lever's API reference lists webhook management endpoints (List / Create / Update / Delete a webhook, `POST /webhooks` to create; scopes `webhooks:read:admin` / `webhooks:write:admin`). Our `LEVER_API_KEY` is read-mostly and the app never calls them; if a future key has the webhook permission, the five webhooks could be created with one `POST https://api.lever.co/v1/webhooks` each (`{"url": "https://recruiting-email-automation-api.vercel.app/api/webhooks/lever", "event": "candidateStageChange"}` etc.) and the returned signature tokens put into `LEVER_WEBHOOK_SIGNATURE_TOKENS`. Check the exact request/response fields in Lever's reference before doing so; the dashboard steps above are the supported path.
+
+Failure modes:
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `lever_webhook_silent` warning; Lever's delivery log shows `401` | Token missing from / mistyped in `LEVER_WEBHOOK_SIGNATURE_TOKENS`, or rotated in Lever | Re-copy the tokens, update the env var, redeploy. |
+| Lever's delivery log shows `503` | `LEVER_WEBHOOK_SIGNATURE_TOKENS` unset in this deployment | Set it and redeploy. |
+| `lever_webhook_silent` warning; nothing in Lever's delivery log | Webhooks disabled/deleted in Lever (or just a very quiet day) | Re-enable in Lever. Statuses still refresh every 3h meanwhile. |
+| `LEVER_WEBHOOK_REJECTED` with `reason: stale` | Lever retrying a delivery more than 5 min after `triggeredAt` | Expected for late retries; the 3h sync catches anything missed. |
+| Bulk action in Lever (hundreds of archives) shows some `429`s in Lever's log | `/api` rate limit (500 req / 15 min per IP) | Lever retries; the 3h sync covers the rest. |
 
 ## Add to Lever (F3)
 
@@ -363,6 +407,7 @@ Set under **Project Settings → Environment Variables** (Production scope).
 | `CRON_SECRET` | Bearer secret for `/api/internal/cron/*`. |
 | `LEVER_API_KEY` | Lever API key (Bearer). Optional — unset = Lever status and Add to Lever disabled. Add to Lever needs `opportunities:write:admin` + `notes:write`. See [Lever status](#lever-status-read-only) and [Add to Lever](#add-to-lever-f3). |
 | `LEVER_CREATE_ENABLED` | `true` enables Add to Lever creates (F3). Anything else = off (403, button disabled). |
+| `LEVER_WEBHOOK_SIGNATURE_TOKENS` | Comma-separated signature tokens, one per Lever webhook (H2). Unset = `POST /api/webhooks/lever` answers 503 and the `lever_webhook_silent` check is off. Read per request. See [Lever webhooks](#lever-webhooks). |
 | `GEM_MCP_URL` | Optional — defaults to `https://mcp.gem.com/mcp`. |
 | `GEM_OAUTH_REDIRECT_BASE` | Optional — origin for the Gem OAuth redirect URI; defaults to `FRONTEND_URL`, else the prod domain on Vercel. |
 | `SLACK_ALERT_WEBHOOK_URL` | Slack incoming-webhook URL for watchdog alerts. Optional — unset = alerting disabled (no-op, warned once). See [Alerting](#alerting). |

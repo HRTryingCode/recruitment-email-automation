@@ -170,7 +170,8 @@ export type HealthIssueType =
   | 'reconcile_stale'
   | 'reconcile_dead'
   | 'reconcile_deadline'
-  | 'webhook_errors';
+  | 'webhook_errors'
+  | 'lever_webhook_silent';
 
 export interface HealthIssue {
   /** Stable identity for state-change dedupe, e.g. `needs_reauth:<mailboxId>`. */
@@ -192,6 +193,8 @@ export const WATCHDOG_THRESHOLDS = {
   deadlineStreak: 3,
   /** WEBHOOK_HANDLER_ERROR rows in the last hour. */
   webhookErrorsPerHour: 20,
+  /** H2: Lever webhooks configured but no LEVER_WEBHOOK_RECEIVED for this long. */
+  leverWebhookSilentMs: 24 * HOUR_MS,
 };
 const LOOKBACK_MS = 4 * HOUR_MS;
 
@@ -314,6 +317,31 @@ export async function collectHealthIssues(now: Date = new Date()): Promise<Healt
       title: `Reconcile hit its time budget ${streak} runs in a row`,
       detail: 'Some mailboxes are being skipped every hour (RECONCILE_DEADLINE_REACHED).',
     });
+  }
+
+  // Only once a Lever super admin has set up the webhooks (H2). Warning, not
+  // critical: the 3h lever-sync keeps statuses correct, just slower.
+  const leverWebhooksConfigured = (process.env.LEVER_WEBHOOK_SIGNATURE_TOKENS ?? '')
+    .split(',')
+    .some((tok) => tok.trim() !== '');
+  if (leverWebhooksConfigured) {
+    const recent = await prisma.systemLog.findFirst({
+      where: {
+        event: 'LEVER_WEBHOOK_RECEIVED',
+        createdAt: { gte: new Date(t - WATCHDOG_THRESHOLDS.leverWebhookSilentMs) },
+      },
+      select: { id: true },
+    });
+    if (!recent) {
+      issues.push({
+        key: 'lever_webhook_silent',
+        type: 'lever_webhook_silent',
+        severity: 'warning',
+        title: 'No Lever webhook received in 24h',
+        detail:
+          'LEVER_WEBHOOK_SIGNATURE_TOKENS is set but nothing has arrived. Check the webhooks in Lever (Settings → Integrations and API → Webhooks) and LEVER_WEBHOOK_REJECTED logs (rotated token?). Lever status still refreshes every 3h.',
+      });
+    }
   }
 
   if (webhookErrorsLastHour >= WATCHDOG_THRESHOLDS.webhookErrorsPerHour) {

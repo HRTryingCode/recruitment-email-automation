@@ -34,9 +34,10 @@ export interface MockPrisma {
     'findUnique' | 'findFirst' | 'findMany' | 'count' | 'groupBy' | 'create' | 'update' | 'updateMany'
   >;
   expectedSender: MockedMethods<'findMany' | 'findUnique' | 'upsert' | 'update' | 'delete'>;
-  systemLog: MockedMethods<'create' | 'findMany' | 'findFirst'>;
+  systemLog: MockedMethods<'create' | 'findMany' | 'findFirst' | 'count'>;
   oAuthState: MockedMethods<'create' | 'findUnique' | 'update' | 'updateMany' | 'deleteMany'>;
   gemConnection: MockedMethods<'findUnique' | 'upsert' | 'update' | 'updateMany' | 'deleteMany'>;
+  leverWebhookEvent: MockedMethods<'create' | 'deleteMany'>;
   $transaction: Mock;
   $queryRaw: Mock;
 }
@@ -82,9 +83,10 @@ export function buildPrismaMock(): MockPrisma {
       'updateMany'
     ),
     expectedSender: methods('findMany', 'findUnique', 'upsert', 'update', 'delete'),
-    systemLog: methods('create', 'findMany', 'findFirst'),
+    systemLog: methods('create', 'findMany', 'findFirst', 'count'),
     oAuthState: methods('create', 'findUnique', 'update', 'updateMany', 'deleteMany'),
     gemConnection: methods('findUnique', 'upsert', 'update', 'updateMany', 'deleteMany'),
+    leverWebhookEvent: methods('create', 'deleteMany'),
     $transaction: vi.fn(),
     $queryRaw: vi.fn(),
   };

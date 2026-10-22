@@ -66,12 +66,13 @@ function parseDetails(raw: string): Record<string, unknown> {
 // Auth-gated by the user JWT (mounted with requireAuth in app.ts). Returns
 // per-mailbox sync health for the dashboard / debug tooling: auth status,
 // watch-expiry countdown, last sync time, last reconciliation result and
-// failure streak, message + draft + review + webhook-error counts.
+// failure streak, message + draft + review + webhook-error counts; `meta`
+// carries app-wide Lever webhook delivery stats (H2).
 // Read-only — does not trigger any sync work.
 //
-// Exactly 3 queries regardless of mailbox count (audit M2: the old per-mailbox
-// fan-out was 6×N queries on a 1-connection pool and timed out into zeroed,
-// healthy-looking rows). Partial failures set `error: true` on the row.
+// A fixed 3 queries regardless of mailbox count, plus 2 for the Lever meta
+// (audit M2: the old per-mailbox fan-out was 6×N queries on a 1-connection
+// pool and timed out into zeroed, healthy-looking rows). Partial failures set `error: true` on the row.
 router.get('/sync-health', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const now = Date.now();
@@ -185,7 +186,28 @@ router.get('/sync-health', async (_req: Request, res: Response, next: NextFuncti
       };
     });
 
-    res.status(200).json({ success: true, data: health });
+    // Lever webhook deliveries (H2), app-wide rather than per mailbox, so in
+    // `meta`. Nulls mean "unknown", never "zero".
+    const meta: { leverWebhooksLast24h: number | null; lastLeverWebhookAt: string | null } = {
+      leverWebhooksLast24h: null,
+      lastLeverWebhookAt: null,
+    };
+    try {
+      meta.leverWebhooksLast24h = await prisma.systemLog.count({
+        where: { event: 'LEVER_WEBHOOK_RECEIVED', createdAt: { gte: dayAgo } },
+      });
+      const last = await prisma.systemLog.findFirst({
+        where: { event: 'LEVER_WEBHOOK_RECEIVED' },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true },
+      });
+      meta.lastLeverWebhookAt = last ? last.createdAt.toISOString() : null;
+    } catch (err) {
+      console.error('[sync-health] Lever webhook query failed:', safeError(err));
+      meta.leverWebhooksLast24h = null;
+    }
+
+    res.status(200).json({ success: true, data: health, meta });
   } catch (err) {
     next(err);
   }

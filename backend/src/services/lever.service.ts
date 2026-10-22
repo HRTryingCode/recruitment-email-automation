@@ -257,6 +257,24 @@ export class LeverClient {
     };
   }
 
+  /**
+   * Contact emails of one opportunity, lowercased (H2 webhooks: the payload
+   * names only the opportunity). null when unconfigured, deleted (404) or on
+   * any other failure; never throws.
+   */
+  async getOpportunityEmails(opportunityId: string): Promise<string[] | null> {
+    if (!this.configured) return null;
+    try {
+      const r = await this.get<{ data?: { emails?: unknown[] } }>(`/opportunities/${encodeURIComponent(opportunityId)}`);
+      return (r.data?.emails ?? [])
+        .filter((e): e is string => typeof e === 'string')
+        .map((e) => e.trim().toLowerCase())
+        .filter((e) => e !== '');
+    } catch {
+      return null;
+    }
+  }
+
   async findByEmail(email: string): Promise<LeverStatus> {
     const checkedAt = new Date().toISOString();
     const base = { primary: null, opportunities: [] as LeverOpportunity[], checkedAt };

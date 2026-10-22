@@ -235,3 +235,23 @@ describe('TokenBucket', () => {
     expect(sleeps[0]).toBeLessThanOrEqual(125);
   });
 });
+
+describe('LeverClient.getOpportunityEmails (H2 webhooks)', () => {
+  it('GETs /opportunities/:id and returns its emails lowercased', async () => {
+    const f = fakeFetch((url) =>
+      url.pathname === '/v1/opportunities/opp-1'
+        ? { status: 200, body: { data: { id: 'opp-1', emails: ['Ada@Example.com', ' b@x.io ', 7] } } }
+        : { status: 404 }
+    );
+    await expect(client(f.fn).getOpportunityEmails('opp-1')).resolves.toEqual(['ada@example.com', 'b@x.io']);
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls[0]!.init?.method).toBe('GET');
+  });
+
+  it('returns null for a deleted opportunity (404) or any error, never throws', async () => {
+    const f = fakeFetch(() => ({ status: 404 }));
+    await expect(client(f.fn).getOpportunityEmails('gone')).resolves.toBeNull();
+    const unconfigured = new LeverClient({ apiKey: '', fetchImpl: f.fn });
+    await expect(unconfigured.getOpportunityEmails('opp-1')).resolves.toBeNull();
+  });
+});

@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../db/client';
 import { createError } from '../middleware/error';
 import { logEvent } from '../services/monitoring.service';
+import { scheduleLeverRefresh } from '../services/leverRealtime.service';
 import { serializeEmailMessages } from '../lib/emailMessageSerializer';
 import { classifyReply } from '../services/claude.service';
 import { requireAdmin } from '../middleware/requireAdmin';
@@ -361,10 +362,13 @@ router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => 
     // Guard against email collisions explicitly so the caller gets a 409 with
     // a clear message instead of Prisma's opaque P2002 surfacing as a 500.
     // Stored lowercased and compared case-insensitively (M12).
+    // The Lever match is by email, so a changed email re-checks Lever (H2).
+    let emailChanged = false;
     if (parsed.data.email) {
       const email = normalizeEmail(parsed.data.email);
       data.email = email;
       if (email !== current.email.toLowerCase()) {
+        emailChanged = true;
         const existing = await prisma.candidate.findFirst({
           where: { email: { equals: email, mode: 'insensitive' } },
         });
@@ -398,6 +402,7 @@ router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => 
         { candidateId: id, draftsDiscarded: discardResult.count, via: 'status_change' },
         'INFO'
       );
+      if (emailChanged) scheduleLeverRefresh(id, 'email_changed');
       return res.json({ success: true, data: updated });
     }
 
@@ -405,6 +410,7 @@ router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => 
       where: { id },
       data,
     });
+    if (emailChanged) scheduleLeverRefresh(id, 'email_changed');
 
     res.json({ success: true, data: updated });
   } catch (err) {
