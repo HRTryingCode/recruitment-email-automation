@@ -7,6 +7,12 @@ import { logEvent } from './monitoring.service';
 import { decrypt, encrypt } from '../lib/crypto';
 import { safeError, isAuthRevokedError, MailboxNeedsReauthError } from '../lib/safeError';
 import { markMailboxNeedsReauth, AUTH_STATUS_NEEDS_REAUTH, AUTH_STATUS_OK } from './mailboxAuth.service';
+import {
+  isInternalAddress,
+  isMailboxOwnAddress,
+  mailboxOwnAddresses,
+  sendAsEmailsFromGmail,
+} from '../lib/senderIdentity';
 import type { Mailbox, EmailThread } from '@prisma/client';
 
 /**
@@ -244,18 +250,25 @@ const SENDER_DOMAIN_BLACKLIST = new Set([
   'group.calendar.google.com',
 ]);
 
-function shouldSkipClassification(opts: {
+export function shouldSkipClassification(opts: {
   fromAddress: string;
   fromName?: string | null;
   subject: string;
   mailboxEmail: string;
+  /** Mailbox.sendAsAddresses — aliases are the mailbox's own outbound. */
+  mailboxAliases?: string[];
 }): boolean {
   const from = opts.fromAddress.toLowerCase().trim();
   const name = (opts.fromName ?? '').toLowerCase();
   const subject = opts.subject.toLowerCase();
 
   if (!from) return true;
-  if (from === opts.mailboxEmail.toLowerCase()) return true; // outbound
+  // outbound (primary address or any sendAs alias)
+  if (isMailboxOwnAddress({ emailAddress: opts.mailboxEmail, sendAsAddresses: opts.mailboxAliases }, from)) {
+    return true;
+  }
+  // Colleagues (incl. unconnected executive send-aliases) are never candidates.
+  if (isInternalAddress(from, config.internalDomains)) return true;
 
   const domain = from.split('@')[1] ?? '';
   if (!domain) return true;
@@ -442,6 +455,7 @@ async function classifyAndDraft(opts: {
       fromName: parsed.fromName,
       subject: parsed.subject,
       mailboxEmail: mailbox.emailAddress,
+      mailboxAliases: mailbox.sendAsAddresses,
     })
   ) {
     return;
@@ -927,7 +941,7 @@ async function createLiveDraft(
   }
 }
 
-async function fetchAndStoreMessage(
+export async function fetchAndStoreMessage(
   gmail: ReturnType<typeof google.gmail>,
   mailbox: Mailbox,
   externalMessageId: string,
@@ -960,8 +974,8 @@ async function fetchAndStoreMessage(
     }
 
     const parsed = parseGmailMessage(externalMessageId, fullMsg.data);
-    const isOutbound =
-      parsed.fromAddress.toLowerCase() === mailbox.emailAddress.toLowerCase();
+    // Primary address or any stored sendAs alias (audit M11).
+    const isOutbound = isMailboxOwnAddress(mailbox, parsed.fromAddress);
 
     // Upsert thread. lastMessageAt/subject only ever move forward (M24):
     // messages arrive out of order across webhook / reconcile / resync, so the
@@ -1023,11 +1037,20 @@ async function fetchAndStoreMessage(
         // at least one inbound message before this outbound message.
         // Without this check, the original outreach email would set repliedAt
         // and mark the candidate as "Replied" before they've said anything.
+        // "Inbound" = not from this mailbox (primary or alias) and not from
+        // a colleague on an internal domain.
         const priorInbound = await prisma.emailMessage.findFirst({
           where: {
             threadId: thread.id,
-            fromAddress: { not: mailbox.emailAddress },
             receivedAt: { lt: parsed.receivedAt },
+            AND: [
+              ...mailboxOwnAddresses(mailbox).map((addr) => ({
+                NOT: { fromAddress: { equals: addr, mode: 'insensitive' as const } },
+              })),
+              ...config.internalDomains.map((domain) => ({
+                NOT: { fromAddress: { endsWith: `@${domain}`, mode: 'insensitive' as const } },
+              })),
+            ],
           },
         });
 
@@ -1761,6 +1784,7 @@ export async function fetchMailboxSignature(mailboxId: string): Promise<string |
       const saClient = await saAuth.getClient();
       const saGmail = google.gmail({ version: 'v1', auth: saClient as Parameters<typeof google.gmail>[0]['auth'] });
       const res = await saGmail.users.settings.sendAs.list({ userId: 'me' });
+      await persistSendAsAddresses(mailbox.id, res.data.sendAs);
       const primary =
         (res.data.sendAs ?? []).find((s) => s.isPrimary) ?? (res.data.sendAs ?? [])[0];
       if (primary?.signature) return primary.signature;
@@ -1779,6 +1803,7 @@ export async function fetchMailboxSignature(mailboxId: string): Promise<string |
     const auth = getAuthenticatedClient(credentials);
     const gmail = google.gmail({ version: 'v1', auth });
     const res = await gmail.users.settings.sendAs.list({ userId: 'me' });
+    await persistSendAsAddresses(mailbox.id, res.data.sendAs);
     const primary =
       (res.data.sendAs ?? []).find((s) => s.isPrimary) ?? (res.data.sendAs ?? [])[0];
     if (primary?.signature) return primary.signature;
@@ -1793,6 +1818,46 @@ export async function fetchMailboxSignature(mailboxId: string): Promise<string |
   // existing gmail.modify scope and extract the signature block from its HTML.
   // No extra scopes needed — we already have read access to all messages.
   return fetchSignatureFromGmailSent(mailbox);
+}
+
+/**
+ * Store a mailbox's sendAs aliases (audit M11/H2). Best-effort: a failed
+ * write must never break signature fetching or ingestion.
+ */
+async function persistSendAsAddresses(
+  mailboxId: string,
+  sendAs: Parameters<typeof sendAsEmailsFromGmail>[0]
+): Promise<string[] | null> {
+  const addresses = sendAsEmailsFromGmail(sendAs);
+  if (addresses.length === 0) return null;
+  try {
+    await prisma.mailbox.update({
+      where: { id: mailboxId },
+      data: { sendAsAddresses: addresses, sendAsSyncedAt: new Date() },
+    });
+    return addresses;
+  } catch (err) {
+    console.warn(`[Gmail] Failed to persist sendAs list for mailbox ${mailboxId}:`, safeError(err));
+    return null;
+  }
+}
+
+/**
+ * Re-read users.settings.sendAs.list for a mailbox and store the aliases.
+ * Works with the gmail.modify scope we already hold. Returns the stored list,
+ * or null when Gmail or the write failed (never throws).
+ */
+export async function refreshSendAsAddresses(mailboxId: string): Promise<string[] | null> {
+  try {
+    const mailbox = await prisma.mailbox.findUnique({ where: { id: mailboxId } });
+    if (!mailbox) return null;
+    const gmail = await getGmailClient(mailbox);
+    const res = await gmail.users.settings.sendAs.list({ userId: 'me' });
+    return await persistSendAsAddresses(mailbox.id, res.data.sendAs);
+  } catch (err) {
+    console.warn(`[Gmail] refreshSendAsAddresses failed for mailbox ${mailboxId}:`, safeError(err));
+    return null;
+  }
 }
 
 /**

@@ -21,6 +21,8 @@ interface Config {
   allowedOrigins: string[];
   nodeEnv: string;
   draftCcEmail: string;
+  /** Company email domains. Senders on these are colleagues, never candidates. */
+  internalDomains: string[];
 }
 
 const PLACEHOLDER_JWT_SECRET = 'default-dev-secret-change-in-production';
@@ -28,6 +30,14 @@ const PLACEHOLDER_JWT_SECRET = 'default-dev-secret-change-in-production';
 // Production Vercel origin used when ALLOWED_ORIGINS is unset, so a misconfigured
 // deploy fails closed (only the prod origin) rather than open.
 const DEFAULT_PROD_ORIGIN = 'https://recruiting-email-automation-api.vercel.app';
+
+function parseInternalDomains(raw: string | undefined): string[] {
+  const list = (raw ?? '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase().replace(/^@/, ''))
+    .filter((s) => s.length > 0);
+  return list.length > 0 ? list : ['archive.com'];
+}
 
 function parseAllowedOrigins(raw: string | undefined): string[] {
   if (!raw || raw.trim() === '') return [DEFAULT_PROD_ORIGIN];
@@ -144,4 +154,5 @@ export const config: Config = {
   allowedOrigins: parseAllowedOrigins(process.env.ALLOWED_ORIGINS),
   nodeEnv: process.env.NODE_ENV ?? 'development',
   draftCcEmail: process.env.DRAFT_CC_EMAIL ?? 'sofia@archive.com',
+  internalDomains: parseInternalDomains(process.env.INTERNAL_DOMAINS),
 };

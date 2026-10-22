@@ -49,6 +49,11 @@ model Mailbox {
   /// hourly reconcile processes mailboxes oldest-first by this column so a
   /// deadline-hit run never starves the same mailboxes twice in a row.
   lastReconciledAt DateTime?
+  /// Lowercased Gmail sendAs addresses (users.settings.sendAs.list), incl.
+  /// the primary. Messages from any of these count as outbound (audit M11)
+  /// and these aliases count as monitored for sender coverage (audit H2).
+  sendAsAddresses String[]     @default([])
+  sendAsSyncedAt  DateTime?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   threads       EmailThread[]
@@ -195,4 +200,24 @@ model OAuthState {
   consumedAt DateTime?
 
   @@index([createdAt])
+}
+
+/// Addresses we expect recruiting mail to be sent from (e.g. Gem sequence
+/// send-aliases). Diffed against connected mailboxes + their sendAs aliases
+/// by coverage.service to flag unmonitored senders (audit H2).
+/// `source` = "ADMIN" (maintained via /api/coverage) or "GEM" (future sync).
+model ExpectedSender {
+  id               String   @id @default(cuid())
+  /// Always stored lowercased.
+  emailAddress     String   @unique
+  displayName      String?
+  source           String   @default("ADMIN")
+  /// Id in the upstream system (e.g. Gem user id) when source != ADMIN.
+  externalId       String?
+  /// Sends seen upstream in the last 30 days; null = unknown.
+  expectedSends30d Int?
+  notes            String?
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 }
