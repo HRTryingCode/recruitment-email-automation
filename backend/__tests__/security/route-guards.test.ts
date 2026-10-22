@@ -30,6 +30,8 @@ const MANIFEST: Record<string, Guard> = {
   'GET /api/internal/cron/reconcile': 'cron',
   'GET /api/internal/cron/purge-orphan-bodies': 'cron',
   'GET /api/internal/cron/watchdog': 'cron',
+  'GET /api/internal/cron/sweep-stuck-messages': 'cron',
+  'GET /api/internal/cron/systemlog-retention': 'cron',
   'GET /api/mailboxes/gmail/callback': 'oauth',
 
   'GET /api/mailboxes/': 'auth',
