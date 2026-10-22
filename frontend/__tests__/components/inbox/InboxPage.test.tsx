@@ -52,6 +52,13 @@ describe('InboxPage', () => {
     expect(await screen.findByText('Inbox zero — nothing waiting')).toBeInTheDocument();
   });
 
+  it('explains what lands in each empty view', async () => {
+    installInbox([]);
+    renderInbox('/inbox?view=snoozed');
+    expect(await screen.findByText('Nothing snoozed')).toBeInTheDocument();
+    expect(screen.getByText('Press S on a reply to bring it back later.')).toBeInTheDocument();
+  });
+
   it('shows an error with Retry that refetches', async () => {
     installInbox(ITEMS);
     let fail = true;
@@ -64,6 +71,36 @@ describe('InboxPage', () => {
     fail = false;
     await user.click(retry);
     expect(await screen.findByRole('button', { name: /Ada Example/ })).toBeInTheDocument();
+  });
+
+  it('rows and the pane flag failed sends, returned snoozes, edits and expiry', async () => {
+    const base = item('d1', 'needs_review');
+    installInbox(
+      [
+        item('d1', 'needs_review', {
+          draft: {
+            ...base.draft!,
+            status: 'FAILED',
+            sendError: 'Gmail rejected the message',
+            returnedFromSnoozeAt: new Date().toISOString(),
+            hasEdits: true,
+            editedByName: 'Ana Recruiter',
+            expiresAt: new Date(Date.now() + 2 * 86_400_000 + 60_000).toISOString(),
+          },
+        }),
+      ],
+      { d1: { status: 'FAILED', sendError: 'Gmail rejected the message', bodyText: 'Edited body', editedByName: 'Ana Recruiter', hasEdits: true } }
+    );
+    renderInbox('/inbox?view=needs_review');
+    const row = await screen.findByRole('button', { name: /Ada Example/ });
+    expect(within(row).getByText('Send failed')).toBeInTheDocument();
+    expect(within(row).getByText('Back from snooze')).toBeInTheDocument();
+    expect(within(row).getByText('Edited by Ana')).toBeInTheDocument();
+    expect(within(row).getByText('Expires in 2d')).toBeInTheDocument();
+    await userEvent.setup().click(row);
+    const pane = await screen.findByRole('region', { name: 'Reply to Ada Example' });
+    expect(within(pane).getByText('Edited by Ana')).toBeInTheDocument();
+    expect(within(pane).getByText('Send failed')).toBeInTheDocument();
   });
 
   it('list rows show mailbox, label in words, snippet, age and presence', async () => {
@@ -93,7 +130,7 @@ describe('InboxPage', () => {
     expect(within(pane).getByRole('textbox', { name: 'Reply' })).toHaveValue(
       "Hi Ada,\n\nThanks for getting back to me! Let's find a time.\n\nBest,\nRae"
     );
-    expect(within(pane).getByText('Sending as rae@archive.com · CC no one · Lever: no change')).toBeInTheDocument();
+    expect(within(pane).getByText('Sending as rae@archive.com · CC no one')).toBeInTheDocument();
     expect(within(pane).queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
     expect(pane.textContent).not.toMatch(/\d%/);
   });

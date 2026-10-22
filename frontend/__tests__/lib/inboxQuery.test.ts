@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as api from '../../src/lib/api';
-import { INBOX_POLL_MS, inboxQueryOptions, inboxSortFrom, inboxViewFrom, waitingCount } from '../../src/lib/inboxQuery';
+import { INBOX_POLL_MS, inboxCounts, inboxQueryOptions, inboxSortFrom, inboxViewFrom, waitingCount } from '../../src/lib/inboxQuery';
 
 vi.mock('../../src/lib/api', () => ({ fetchInbox: vi.fn() }));
 
@@ -15,11 +15,32 @@ describe('inboxQueryOptions', () => {
     expect(INBOX_POLL_MS).toBe(15_000);
   });
 
+  // The options are infinite (U1b pages through nextCursor); call queryFn the way React Query does.
+  const run = (o: ReturnType<typeof inboxQueryOptions>, pageParam: string | null = null) =>
+    (o.queryFn as (ctx: { pageParam: string | null }) => unknown)({ pageParam });
+
   it('fetches with order and role (role omitted when empty)', () => {
-    void inboxQueryOptions({ view: 'interested', mailboxId: 'mb1', sort: 'oldest', roles: ['SDR'] }).queryFn();
+    void run(inboxQueryOptions({ view: 'interested', mailboxId: 'mb1', sort: 'oldest', roles: ['SDR'] }));
     expect(api.fetchInbox).toHaveBeenLastCalledWith({ view: 'interested', mailboxId: 'mb1', order: 'oldest', role: ['SDR'] });
-    void inboxQueryOptions({ view: 'needs_review' }).queryFn();
+    void run(inboxQueryOptions({ view: 'needs_review' }));
     expect(api.fetchInbox).toHaveBeenLastCalledWith({ view: 'needs_review', mailboxId: undefined, order: 'newest', role: undefined });
+  });
+
+  it('pages through nextCursor', () => {
+    const o = inboxQueryOptions({ view: 'needs_review' });
+    void run(o, 'c2');
+    expect(api.fetchInbox).toHaveBeenLastCalledWith({ view: 'needs_review', mailboxId: undefined, order: 'newest', role: undefined, cursor: 'c2' });
+    const page = (nextCursor: string | null) => ({ success: true, data: { items: [], counts: {} as never, nextCursor } });
+    expect(o.getNextPageParam(page('c3'), [], null, [])).toBe('c3');
+    expect(o.getNextPageParam(page(null), [], null, [])).toBeUndefined();
+  });
+});
+
+describe('inboxCounts', () => {
+  it('reads the first page (every page carries the whole view\'s counts)', () => {
+    const counts = { needs_review: 1, interested: 2, not_interested: 3, snoozed: 0, sent_today: 0 };
+    expect(inboxCounts({ pages: [{ success: true, data: { items: [], counts, nextCursor: null } }], pageParams: [null] })).toBe(counts);
+    expect(inboxCounts(undefined)).toBeUndefined();
   });
 });
 

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AlarmClock, AlertCircle, ArrowLeft, ChevronDown, Lock, Send, Undo2, X } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -18,11 +18,12 @@ import {
   type InboxItem,
   type LeverCandidateFields,
 } from '@/lib/api';
-import { messagePlainText, sendLine } from '@/lib/inbox';
+import { lockWarning, messagePlainText, sendLine } from '@/lib/inbox';
 import { formatTimeAgo } from '@/lib/utils';
 import type { DraftEditorState } from '@/hooks/useDraftEditor';
 import { LabelChip, PresenceChip, RoleChip, firstName } from './chips';
 import DraftEditor from './DraftEditor';
+import DraftFlags from './DraftFlags';
 import EvidenceMessage from './EvidenceMessage';
 import LeverSection, { type LeverFields } from '@/components/lever/LeverSection';
 
@@ -45,7 +46,7 @@ export function LockedAlert({ lock, onCancel }: { lock: LockState; onCancel: () 
       <Lock />
       <AlertTitle>{`${firstName(lock.name)} is editing this reply`}</AlertTitle>
       <AlertDescription className="flex flex-col gap-2">
-        <span>They opened it first. Sending now may overwrite their changes.</span>
+        <span>{`They opened it first. ${lockWarning(lock.actionLabel)}`}</span>
         <span className="flex flex-wrap gap-2">
           <Button size="sm" variant="destructive" onClick={lock.retry}>
             {lock.actionLabel}
@@ -165,6 +166,8 @@ interface Props {
   onRewrite: (instruction: string) => void;
   onRegenerate: () => void;
   rewriting: boolean;
+  /** Offered while the editor still shows the last rewrite's text. */
+  onUndoRewrite?: () => void;
   onChangeCc: (ccEmail: string | null) => void;
   /** Dismiss and Snooze menus (owned by the page so D/S can open them). */
   menus: ReactNode;
@@ -173,6 +176,15 @@ interface Props {
 export default function ReplyPane(props: Props) {
   const { item, draft, loading, error, onRetry, editor, presence, lock, onCancelLock, onClose } = props;
   const name = draft?.thread?.candidate?.name ?? item?.candidate?.name ?? 'Unknown candidate';
+  // Opening a reply moves focus to its heading (screen readers hear who it
+  // is), unless focus is already inside the pane (E, a banner's Review).
+  const sectionRef = useRef<HTMLElement | null>(null);
+  const headingRef = useRef<HTMLHeadingElement | null>(null);
+  const shownId = draft?.id;
+  useEffect(() => {
+    if (!shownId || sectionRef.current?.contains(document.activeElement)) return;
+    headingRef.current?.focus({ preventScroll: true });
+  }, [shownId]);
 
   if (loading || (!draft && !error)) {
     return (
@@ -218,17 +230,20 @@ export default function ReplyPane(props: Props) {
   const sendable = isSendable(draft);
 
   return (
-    <section aria-label={`Reply to ${name}`} className="flex h-full min-h-0 flex-col">
+    <section ref={sectionRef} aria-label={`Reply to ${name}`} className="flex h-full min-h-0 flex-col">
       <header className="flex items-start gap-3 border-b border-border p-4">
         <Button size="icon-sm" variant="ghost" aria-label="Back to list" onClick={onClose} className="lg:hidden">
           <ArrowLeft />
         </Button>
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="truncate font-heading text-base font-semibold text-foreground">{name}</h2>
+            <h2 ref={headingRef} tabIndex={-1} className="truncate font-heading text-base font-semibold text-foreground outline-none">
+              {name}
+            </h2>
             <RoleChip role={role} />
             <LabelChip classification={draft.classification} confidenceLabel={draft.confidenceLabel} />
             <PresenceChip presence={presence} />
+            <DraftFlags flags={draft} />
           </div>
           <p className="truncate text-sm text-muted-foreground">
             {candidate?.email ?? item?.candidate?.email}
@@ -276,6 +291,7 @@ export default function ReplyPane(props: Props) {
             rewriting={props.rewriting}
             onRewrite={props.onRewrite}
             onRegenerate={props.onRegenerate}
+            onUndoRewrite={props.onUndoRewrite}
           />
         </div>
       </div>

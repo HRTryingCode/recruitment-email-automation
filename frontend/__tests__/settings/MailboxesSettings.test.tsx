@@ -166,3 +166,14 @@ describe('mailboxActionError', () => {
     expect(mailboxActionError(err, 'resync')).toBe(msg);
   });
 });
+
+describe('Settings → Notifications (U1b)', () => {
+  it('has a Notifications section with the desktop alerts toggle', async () => {
+    vi.stubGlobal('Notification', Object.assign(vi.fn(), { permission: 'default', requestPermission: vi.fn() }));
+    renderPage();
+    const section = await screen.findByRole('region', { name: 'Notifications' });
+    expect(section).toHaveAttribute('id', 'notifications');
+    expect(within(section).getByRole('button', { name: /Desktop alerts/ })).toHaveAttribute('aria-pressed', 'false');
+    vi.unstubAllGlobals();
+  });
+});

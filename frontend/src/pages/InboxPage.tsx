@@ -12,22 +12,24 @@ import { focusEditor } from '@/components/inbox/DraftEditor';
 import InboxList, { itemKey } from '@/components/inbox/InboxList';
 import InboxListControls from '@/components/inbox/InboxListControls';
 import InboxRail from '@/components/inbox/InboxRail';
-import ReplyPane, { isSendable } from '@/components/inbox/ReplyPane';
+import OpenReply from '@/components/inbox/OpenReply';
+import { isSendable } from '@/components/inbox/ReplyPane';
 import ShortcutHelpDialog from '@/components/inbox/ShortcutHelpDialog';
 import SnoozeMenu from '@/components/inbox/SnoozeMenu';
-import { useDraftEditor } from '@/hooks/useDraftEditor';
-import { useDraftPresence } from '@/hooks/useDraftPresence';
 import { useInboxActions } from '@/hooks/useInboxActions';
+import { useInboxList } from '@/hooks/useInboxList';
+import { useLiveAnnouncer } from '@/hooks/useLiveAnnouncer';
+import { useNewReplyAlerts } from '@/hooks/useNewReplyAlerts';
+import { useSendWatch } from '@/hooks/useSendWatch';
 import { useInboxShortcuts } from '@/hooks/useInboxShortcuts';
 import { useInboxUrlState } from '@/hooks/useInboxUrlState';
 import { useTriageDraft, type TriageResult } from '@/hooks/useTriageDraft';
-import { fetchCandidate, fetchDraft, type InboxView } from '@/lib/api';
-import { inboxQueryOptions } from '@/lib/inboxQuery';
+import { fetchCandidate, fetchDraft, type InboxItem, type InboxView } from '@/lib/api';
 import { fetchLeverMe } from '@/lib/leverApi';
 import { prefetchAddToLever } from '@/lib/leverQueries';
 import { toastWarning } from '@/lib/toast';
 import { LIVE_DRAFT_STATUSES } from '@/lib/candidates';
-import { VIEWS, groupByRole, isInboxView, nextItemId } from '@/lib/inbox';
+import { VIEWS, groupByRole, isInboxView, mergePages, nextItemId } from '@/lib/inbox';
 import { cn } from '@/lib/utils';
 
 export { INBOX_POLL_MS } from '@/lib/inboxQuery';
@@ -97,23 +99,13 @@ export default function InboxPage() {
     [listView, view, setPlace, setItem]
   );
 
-  const inboxQ = useQuery({
-    // Shared with the shell's nav badge (same key) — see lib/inboxQuery.
-    ...inboxQueryOptions({ view: listView, mailboxId, sort, roles }),
-    placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[1] === listView ? prev : undefined),
-  });
-  const roleCounts = useMemo(() => inboxQ.data?.data.roleCounts ?? [], [inboxQ.data]);
-  const groups = useMemo(
-    () => (grouped ? groupByRole(inboxQ.data?.data.items ?? [], roleCounts) : undefined),
-    [grouped, inboxQ.data, roleCounts]
-  );
+  const list = useInboxList({ view: listView, mailboxId, sort, roles, grouped });
+  const { roleCounts } = list;
+  const groups = useMemo(() => (grouped ? groupByRole(list.items, roleCounts) : undefined), [grouped, list.items, roleCounts]);
   // Display order: grouped sections flatten in order, so ↑/↓ walk across them.
-  const items = useMemo(
-    () => (groups ? groups.flatMap((g) => g.items) : (inboxQ.data?.data.items ?? [])),
-    [groups, inboxQ.data]
-  );
+  const items = useMemo(() => (groups ? groups.flatMap((g) => g.items) : list.items), [groups, list.items]);
   const keys = useMemo(() => items.map(itemKey), [items]);
-  const counts = inboxQ.data?.data.counts;
+  const counts = list.counts;
   const current = items.find((i) => itemKey(i) === itemId);
 
   const candidateOpen = !!itemId?.startsWith('candidate:');
@@ -124,9 +116,24 @@ export default function InboxPage() {
     enabled: !!draftId,
   });
   const draft = draftQ.data?.data;
-  const editor = useDraftEditor(draft);
-  const presence = useDraftPresence(draftId, editor.focused || editor.dirty ? 'editing' : 'viewing');
-  const actions = useInboxActions({ keys, setItem: openItem });
+  // Editor state lives in OpenReply; the page only needs "has unsaved edits" for ⌘Z.
+  const editorDirty = useRef(false);
+  const alerts = useNewReplyAlerts(counts, `${mailboxId ?? ''}|${roles.join('\n')}`);
+  // A send that fails lands in Needs review; Open goes straight there.
+  const openFailed = useCallback((id: string) => setPlace('needs_review', id), [setPlace]);
+  const refreshList = useCallback(() => void qc.invalidateQueries({ queryKey: ['inbox'] }), [qc]);
+  const sendWatch = useSendWatch(openFailed, refreshList);
+  const nameByKey = useMemo(() => new Map(items.map((i) => [itemKey(i), i.candidate?.name ?? 'Unknown candidate'])), [items]);
+  const nameOf = useCallback((key: string) => nameByKey.get(key), [nameByKey]);
+  const live = useLiveAnnouncer();
+  const actions = useInboxActions({
+    keys,
+    setItem: openItem,
+    onLocalChange: alerts.resync,
+    onSent: sendWatch.watch,
+    nameOf,
+    announce: live.announce,
+  });
 
   const itemIdRef = useRef(itemId);
   const listViewRef = useRef(listView);
@@ -151,7 +158,7 @@ export default function InboxPage() {
 
   // Legacy ?candidateId= (old Drafts tab, Today, Slack): open that
   // candidate's row if it's in this view, else their newest live draft.
-  const listReady = !!inboxQ.data;
+  const listReady = list.ready;
   useEffect(() => {
     if (!legacyCandidateId || !listReady) return;
     const hit = items.find((i) => i.candidate?.id === legacyCandidateId);
@@ -202,21 +209,33 @@ export default function InboxPage() {
     .filter((i) => i.kind === 'draft' && checked.has(i.id))
     .map((i) => ({ id: i.id, name: i.candidate?.name ?? 'Unknown candidate', email: i.candidate?.email ?? '' }));
 
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = list;
+  const loadMore = useCallback(() => {
+    if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+
   const name = draft?.thread?.candidate?.name ?? current?.candidate?.name ?? 'candidate';
   const sendable = isSendable(draft) && draft?.id === draftId;
 
-  const doSend = () => {
-    if (!draft || !sendable || actions.sending) return;
-    actions.send(draft, editor.body, name, () => editor.reset(editor.body));
-  };
-
+  // With nothing picked yet the first reply is the cursor, so ↵ works at once.
+  const listCursor = cursor && keys.includes(cursor) ? cursor : keys[0];
+  const go = (key: string) => (itemId ? openItem(key) : setCursor(key));
   const move = (delta: number) => {
     if (keys.length === 0) return;
-    const base = itemId ?? cursor;
+    const base = itemId ?? listCursor;
     const at = base ? keys.indexOf(base) : -1;
-    const next = keys[Math.min(Math.max(at + delta, 0), keys.length - 1)];
-    if (itemId) openItem(next);
-    else setCursor(next);
+    // ↓ past the last loaded reply: load the next page, then step into it.
+    if (delta > 0 && at === keys.length - 1 && list.hasNextPage) {
+      void list.fetchNextPage().then((res) => {
+        const loaded = mergePages((res.data?.pages ?? []).map((p) => p.data.items));
+        const shown: InboxItem[] = grouped ? groupByRole(loaded, roleCounts).flatMap((g) => g.items) : loaded;
+        const shownKeys = shown.map(itemKey);
+        const next = shownKeys[shownKeys.indexOf(keys[at]) + 1];
+        if (next) go(next);
+      });
+      return;
+    }
+    go(keys[Math.min(Math.max(at + delta, 0), keys.length - 1)]);
   };
 
   const close = () => {
@@ -234,12 +253,8 @@ export default function InboxPage() {
     next: () => move(1),
     prev: () => move(-1),
     open: () => {
-      if (!itemId && cursor) openItem(cursor);
+      if (!itemId && listCursor) openItem(listCursor);
     },
-    edit: () => {
-      if (sendable && draft) focusEditor(draft.id);
-    },
-    send: doSend,
     undo: actions.undoLast,
     dismiss: () => {
       if (sendable) setDismissOpen(true);
@@ -249,7 +264,7 @@ export default function InboxPage() {
     },
     close,
     help: () => setHelpOpen(true),
-  });
+  }, true, (id) => id === 'undo' && actions.canUndoLast() && !editorDirty.current);
 
   const menus =
     draft && itemId ? (
@@ -267,7 +282,8 @@ export default function InboxPage() {
       </>
     ) : null;
 
-  const mobileHeader = (
+  // Stable props so the memo'd list skips re-rendering while the pane changes.
+  const mobileHeader = useMemo(() => (
     <div className="flex gap-2 xl:hidden">
       <Select value={listView} onValueChange={(v) => isInboxView(v) && setView(v as InboxView)}>
         <SelectTrigger size="sm" aria-label="View" className="w-full">
@@ -282,7 +298,24 @@ export default function InboxPage() {
         </SelectContent>
       </Select>
     </div>
+  ), [listView, counts, setView]);
+  const listControls = useMemo(
+    () => (
+      <InboxListControls
+        sort={sort}
+        onSortChange={setSort}
+        roles={roles}
+        onRolesChange={setRoles}
+        roleCounts={roleCounts}
+        grouped={grouped}
+        onGroupedChange={setGrouped}
+      />
+    ),
+    [sort, setSort, roles, setRoles, roleCounts, grouped, setGrouped]
   );
+  const { refetch: refetchList } = list;
+  const retryList = useCallback(() => void refetchList(), [refetchList]);
+  const openBatch = useCallback(() => setBatchOpen(true), []);
 
   return (
     <div className="flex min-h-0 w-full flex-1 bg-background text-foreground">
@@ -300,30 +333,23 @@ export default function InboxPage() {
           view={listView}
           items={items}
           total={counts?.[listView]}
-          loading={inboxQ.isLoading}
-          error={inboxQ.isError}
-          onRetry={() => void inboxQ.refetch()}
+          loading={list.isLoading}
+          error={list.isError}
+          onRetry={retryList}
+          hasMore={list.hasNextPage}
+          loadingMore={list.isFetchingNextPage}
+          onLoadMore={loadMore}
           selectedKey={itemId}
-          focusedKey={itemId ? undefined : cursor}
+          focusedKey={itemId ? undefined : listCursor}
           highlightKey={highlight}
-          onOpen={(key) => openItem(key)}
+          onOpen={openItem}
           checked={checked}
           onCheckedChange={setChecked}
-          onBatchSend={() => setBatchOpen(true)}
+          onBatchSend={openBatch}
           header={mobileHeader}
           groups={groups}
           roleFiltered={roles.length > 0}
-          controls={
-            <InboxListControls
-              sort={sort}
-              onSortChange={setSort}
-              roles={roles}
-              onRolesChange={setRoles}
-              roleCounts={roleCounts}
-              grouped={grouped}
-              onGroupedChange={setGrouped}
-            />
-          }
+          controls={listControls}
         />
       </div>
 
@@ -358,29 +384,22 @@ export default function InboxPage() {
               </div>
             )}
             <div className="min-h-0 flex-1">
-              <ReplyPane
+              <OpenReply
+                draftId={draftId!}
                 item={current}
                 draft={draft?.id === draftId ? draft : undefined}
                 loading={draftQ.isLoading}
                 error={draftQ.isError}
                 onRetry={() => void draftQ.refetch()}
-                editor={editor}
-                presence={presence}
-                lock={actions.lock}
-                onCancelLock={actions.clearLock}
+                actions={actions}
+                name={name}
+                sendable={sendable}
+                menus={menus}
                 onClose={() => {
                   setCursor(itemId);
                   openItem(undefined);
                 }}
-                onSend={doSend}
-                sending={actions.sending}
-                onUndo={() => draft && void actions.undo(draft.id)}
-                onUnsnooze={() => draft && void actions.unsnooze(draft.id)}
-                onRewrite={(instruction) => draft && actions.rewrite(draft, editor.body, editor.dirty, instruction, editor.reset)}
-                onRegenerate={() => draft && actions.regenerate(draft, editor.body, editor.dirty, editor.reset)}
-                rewriting={actions.rewriting}
-                onChangeCc={(cc) => draft && actions.changeCc(draft, cc)}
-                menus={menus}
+                dirtyRef={editorDirty}
               />
             </div>
           </div>
@@ -410,6 +429,9 @@ export default function InboxPage() {
         }}
       />
       <ShortcutHelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
+      <div data-testid="inbox-live" role="status" aria-live="polite" className="sr-only">
+        {live.message}
+      </div>
     </div>
   );
 }

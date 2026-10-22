@@ -138,7 +138,11 @@ export interface Call {
 }
 
 /** Install the default handlers over `items`; returns the store and call log. */
-export function installInbox(initial: InboxItem[], drafts: Record<string, Partial<EmailDraft>> = {}) {
+export function installInbox(
+  initial: InboxItem[],
+  drafts: Record<string, Partial<EmailDraft>> = {},
+  opts: { pageSize?: number } = {}
+) {
   const store = { items: [...initial], calls: [] as Call[] };
   const views: InboxView[] = ['needs_review', 'interested', 'not_interested', 'snoozed', 'sent_today'];
   const log = async (request: Request) => {
@@ -179,7 +183,12 @@ export function installInbox(initial: InboxItem[], drafts: Record<string, Partia
       }));
       let items = inView.filter(roleOk);
       if (url.searchParams.get('order') === 'oldest') items = [...items].reverse();
-      return ok({ items, counts, roleCounts, nextCursor: null });
+      // Offset cursor: enough to exercise paging (the real one is keyset).
+      const start = Number(url.searchParams.get('cursor') ?? 0);
+      const size = opts.pageSize ?? items.length;
+      const page = items.slice(start, start + size);
+      const nextCursor = start + size < items.length ? String(start + size) : null;
+      return ok({ items: page, counts, roleCounts, nextCursor });
     }),
     http.get('*/api/drafts/cc-options', () =>
       ok([
@@ -217,6 +226,12 @@ export function installInbox(initial: InboxItem[], drafts: Record<string, Partia
       await log(request);
       remove(String(params.id));
       return ok({ id: params.id as string, status: 'DISCARDED' });
+    }),
+    http.post('*/api/drafts/:id/undismiss', async ({ request, params }) => {
+      await log(request);
+      const it = initial.find((i) => i.id === params.id);
+      if (it && !store.items.some((i) => i.id === it.id)) store.items.push(it);
+      return ok({ id: params.id as string, status: 'PENDING' });
     }),
     http.post('*/api/drafts/:id/snooze', async ({ request, params }) => {
       const call = await log(request);

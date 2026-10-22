@@ -84,6 +84,42 @@ describe('one-step send', () => {
     await waitFor(() => expect(posts(store, '/d1/send')).toHaveLength(1));
   });
 
+  it('sending from the editor leaves it, so ⌘Z undoes the send', async () => {
+    const store = installInbox(ITEMS);
+    renderInbox('/inbox?view=interested&item=d1');
+    const box = within(await openPane()).getByRole('textbox', { name: 'Reply' });
+    box.focus();
+    fireEvent.keyDown(box, { key: 'Enter', metaKey: true });
+    await openPane('Ben Sample');
+    expect(document.activeElement).not.toBe(box);
+    expect(document.activeElement?.tagName).not.toBe('TEXTAREA');
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'z', metaKey: true });
+    await waitFor(() => expect(posts(store, '/d1/undo-send')).toHaveLength(1));
+  });
+
+  it('⌘Z in the next reply\'s untouched editor still undoes the send', async () => {
+    const store = installInbox(ITEMS);
+    const user = userEvent.setup();
+    renderInbox('/inbox?view=interested&item=d1');
+    await user.click(within(await openPane()).getByRole('button', { name: /^Send/ }));
+    const next = within(await openPane('Ben Sample')).getByRole('textbox', { name: 'Reply' });
+    next.focus();
+    fireEvent.keyDown(next, { key: 'z', metaKey: true });
+    await waitFor(() => expect(posts(store, '/d1/undo-send')).toHaveLength(1));
+  });
+
+  it('⌘Z in an editor with unsaved changes is the text undo, not undo-send', async () => {
+    const store = installInbox(ITEMS);
+    const user = userEvent.setup();
+    renderInbox('/inbox?view=interested&item=d1');
+    await user.click(within(await openPane()).getByRole('button', { name: /^Send/ }));
+    const next = within(await openPane('Ben Sample')).getByRole('textbox', { name: 'Reply' });
+    await user.type(next, ' typo');
+    fireEvent.keyDown(next, { key: 'z', metaKey: true });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(posts(store, '/d1/undo-send')).toHaveLength(0);
+  });
+
   it('sending the last reply in a view falls back to the previous one', async () => {
     installInbox(ITEMS);
     const user = userEvent.setup();
@@ -125,6 +161,37 @@ describe('dismiss', () => {
     await waitFor(() => expect(posts(store, '/d1/dismiss')).toHaveLength(1));
     expect(posts(store, '/d1/dismiss')[0].body).toEqual({ reason });
     expect(await openPane('Ben Sample')).toBeInTheDocument();
+  });
+
+  it('Undo on the dismiss toast restores the reply and reopens it', async () => {
+    const store = installInbox(ITEMS);
+    const user = userEvent.setup();
+    renderInbox('/inbox?view=interested&item=d1');
+    await user.click(within(await openPane()).getByRole('button', { name: /Dismiss/ }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Spam' }));
+    expect(await openPane('Ben Sample')).toBeInTheDocument();
+    const toast = (await screen.findByText('Dismissed')).closest('[data-sonner-toast]') as HTMLElement;
+    await user.click(within(toast).getByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(posts(store, '/d1/undismiss')).toHaveLength(1));
+    expect(await screen.findByText('Back in the inbox')).toBeInTheDocument();
+    expect(await openPane('Ada Example')).toBeInTheDocument();
+    expect(search().get('item')).toBe('d1');
+  });
+
+  it('a failed undismiss says why', async () => {
+    installInbox(ITEMS);
+    server.use(
+      http.post('*/api/drafts/d1/undismiss', () =>
+        HttpResponse.json({ success: false, error: 'This thread already has a newer reply' }, { status: 409 })
+      )
+    );
+    const user = userEvent.setup();
+    renderInbox('/inbox?view=interested&item=d1');
+    await user.click(within(await openPane()).getByRole('button', { name: /Dismiss/ }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Spam' }));
+    const toast = (await screen.findByText('Dismissed')).closest('[data-sonner-toast]') as HTMLElement;
+    await user.click(within(toast).getByRole('button', { name: 'Undo' }));
+    expect(await screen.findByText('This thread already has a newer reply')).toBeInTheDocument();
   });
 
   it('D opens the dismiss menu', async () => {
@@ -229,6 +296,8 @@ describe('presence lock (423)', () => {
     await user.click(await screen.findByRole('menuitem', { name: 'Spam' }));
     const alert = await within(pane).findByRole('alert');
     expect(alert).toHaveTextContent('Sofia is editing this reply');
+    expect(alert).toHaveTextContent('Dismissing now may overwrite their changes.');
+    expect(alert).not.toHaveTextContent('Sending');
     await user.click(within(alert).getByRole('button', { name: 'Dismiss anyway' }));
     await waitFor(() => expect(posts(store, '/d1/dismiss').at(-1)!.body).toEqual({ reason: 'spam', override: true }));
   });
@@ -287,6 +356,38 @@ describe('rewrites', () => {
     await waitFor(() => expect((box as HTMLTextAreaElement).value).toMatch(/^Rewritten/));
   });
 
+  it('"Undo rewrite" brings back the text from before the rewrite', async () => {
+    const store = installInbox(ITEMS);
+    const user = userEvent.setup();
+    renderInbox('/inbox?view=interested&item=d1');
+    const pane = await openPane();
+    const box = within(pane).getByRole('textbox', { name: 'Reply' }) as HTMLTextAreaElement;
+    await user.type(box, ' PS');
+    const before = box.value;
+    await user.click(within(pane).getByRole('button', { name: 'Shorter' }));
+    await waitFor(() => expect(box.value).toMatch(/^Rewritten/));
+    // Offered both in the toast and next to the editor.
+    const toast = (await screen.findByText('Rewritten')).closest('[data-sonner-toast]') as HTMLElement;
+    expect(within(toast).getByRole('button', { name: 'Undo rewrite' })).toBeInTheDocument();
+    await user.click(within(pane).getByRole('button', { name: 'Undo rewrite' }));
+    await waitFor(() => expect(box.value).toBe(before));
+    const patches = store.calls.filter((c) => c.method === 'PATCH');
+    expect((patches.at(-1)!.body as { bodyText: string }).bodyText).toBe(before);
+    expect(within(pane).queryByRole('button', { name: 'Undo rewrite' })).not.toBeInTheDocument();
+  });
+
+  it('the editor\'s "Undo rewrite" goes away once the rewritten text is edited', async () => {
+    installInbox(ITEMS);
+    const user = userEvent.setup();
+    renderInbox('/inbox?view=interested&item=d1');
+    const pane = await openPane();
+    const box = within(pane).getByRole('textbox', { name: 'Reply' }) as HTMLTextAreaElement;
+    await user.click(within(pane).getByRole('button', { name: 'Shorter' }));
+    await within(pane).findByRole('button', { name: 'Undo rewrite' });
+    await user.type(box, '!');
+    expect(within(pane).queryByRole('button', { name: 'Undo rewrite' })).not.toBeInTheDocument();
+  });
+
   it('"Regenerate with instruction…" rewrites with the typed instruction', async () => {
     const store = installInbox(ITEMS);
     const user = userEvent.setup();
@@ -321,13 +422,23 @@ describe('keyboard navigation', () => {
     await waitFor(() => expect(search().get('item')).toBeNull());
   });
 
-  it('↓ then ↵ opens from the list', async () => {
+  it('the first reply is focused from the start, so ↵ opens it', async () => {
+    installInbox(ITEMS);
+    renderInbox('/inbox?view=interested');
+    const first = await screen.findByRole('button', { name: /Ada Example/ });
+    expect(first).toHaveAttribute('data-focused', 'true');
+    fireEvent.keyDown(document.body, { key: 'Enter' });
+    expect(await openPane('Ada Example')).toBeInTheDocument();
+  });
+
+  it('↓ then ↵ opens the second reply', async () => {
     installInbox(ITEMS);
     renderInbox('/inbox?view=interested');
     await screen.findByRole('button', { name: /Ada Example/ });
     fireEvent.keyDown(document.body, { key: 'ArrowDown' });
+    expect(screen.getByRole('button', { name: /Ben Sample/ })).toHaveAttribute('data-focused', 'true');
     fireEvent.keyDown(document.body, { key: 'Enter' });
-    expect(await openPane('Ada Example')).toBeInTheDocument();
+    expect(await openPane('Ben Sample')).toBeInTheDocument();
   });
 
   it('E focuses the reply editor', async () => {

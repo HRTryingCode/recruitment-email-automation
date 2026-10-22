@@ -13,7 +13,7 @@ import { requireAdmin } from '../middleware/requireAdmin';
 import { z } from 'zod';
 import { composeDraftHtml, stripHeaderBreaks } from '../lib/draftBody';
 import { waitUntil } from '@vercel/functions';
-import { CANCELABLE_DRAFT_STATUSES, DRAFT_EXPIRY_DAYS } from '../lib/draftStatus';
+import { CANCELABLE_DRAFT_STATUSES, DRAFT_EXPIRY_DAYS, LIVE_DRAFT_STATUSES, draftExpiresAt } from '../lib/draftStatus';
 import { confidenceLabel } from '../lib/confidence';
 import { runDelayedSend, runDelayedSendBatch, undoScheduledSend } from '../services/draftSend.service';
 import { findLockHolder, listPresence, heartbeatPresence, clearPresence, PRESENCE_MODES } from '../services/draftPresence.service';
@@ -475,6 +475,9 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
     );
 
     const presence = (await listPresence([id], req.userId)).get(id) ?? [];
+    const editor = draft.editedByUserId
+      ? await prisma.user.findUnique({ where: { id: draft.editedByUserId }, select: { name: true, email: true } })
+      : null;
     const data = {
       ...draft,
       thread: {
@@ -486,6 +489,8 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
       // U0: aiBodyText (the model's text; null = unknown, pre-U0) vs bodyText
       // (what will be sent) let the UI show changes / revert.
       hasEdits: draft.aiBodyText !== null && draft.aiBodyText !== draft.bodyText,
+      editedByName: editor ? editor.name || editor.email : null,
+      expiresAt: draftExpiresAt(draft.status, draft.createdAt),
       confidenceLabel: confidenceLabel(draft.confidence),
       presence,
     };
@@ -1403,6 +1408,53 @@ router.post('/:id/dismiss', async (req: Request, res: Response, next: NextFuncti
     // The note is free text about a candidate: stored, never logged.
     await logEvent('DRAFT_DISMISSED', { draftId: id, reason: reason ?? null, actorUserId: req.userId }, 'INFO');
     res.json({ success: true, data: { id, status: 'DISCARDED' } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/drafts/:id/undismiss
+// Undo for Dismiss: a draft discarded via /dismiss goes back to PENDING, as
+// long as its thread hasn't gained another live draft since. The Gmail draft
+// the dismiss deleted is gone, so externalDraftId is cleared.
+router.post('/:id/undismiss', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = String(req.params.id);
+    const draft = await prisma.emailDraft.findUnique({
+      where: { id },
+      select: { id: true, threadId: true, status: true, dismissedByUserId: true },
+    });
+    if (!draft) return next(createError('Draft not found', 404));
+    if (draft.status !== 'DISCARDED' || !draft.dismissedByUserId) {
+      return next(createError('Only a dismissed draft can be restored', 409));
+    }
+    const live = await prisma.emailDraft.count({
+      where: { threadId: draft.threadId, id: { not: id }, status: { in: LIVE_DRAFT_STATUSES } },
+    });
+    if (live > 0) return next(createError('This thread already has a newer reply', 409));
+
+    let restored: { count: number };
+    try {
+      restored = await prisma.emailDraft.updateMany({
+        where: { id, status: 'DISCARDED' },
+        data: {
+          status: 'PENDING',
+          dismissReason: null,
+          dismissNote: null,
+          dismissedByUserId: null,
+          externalDraftId: null,
+        },
+      });
+    } catch (err) {
+      // Lost a race with a new draft on the thread (one live draft per thread).
+      if ((err as { code?: unknown } | null)?.code === 'P2002') {
+        return next(createError('This thread already has a newer reply', 409));
+      }
+      throw err;
+    }
+    if (restored.count === 0) return next(createError('Only a dismissed draft can be restored', 409));
+    await logEvent('DRAFT_UNDISMISSED', { draftId: id, actorUserId: req.userId }, 'INFO');
+    res.json({ success: true, data: { id, status: 'PENDING' } });
   } catch (err) {
     next(err);
   }

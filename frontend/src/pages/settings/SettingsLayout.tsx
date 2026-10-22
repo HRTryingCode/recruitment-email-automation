@@ -16,7 +16,7 @@ export default function SettingsLayout() {
     <div className="flex flex-col gap-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
-        <p className="text-sm text-muted-foreground">Mailboxes, integrations and the team.</p>
+        <p className="text-sm text-muted-foreground">Mailboxes and notifications, integrations and the team.</p>
       </div>
       <nav aria-label="Settings sections" className="flex flex-wrap gap-1">
         {SECTIONS.map(({ path, label, icon: Icon }) => {

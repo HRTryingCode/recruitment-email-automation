@@ -23,10 +23,11 @@ export function toastWarning(message: string, description?: string) {
   });
 }
 
-export function toastError(message: string, description?: string) {
+export function toastError(message: string, description?: string, action?: { label: string; onClick: () => void }) {
   return sonner.error(message, {
     description,
     duration: ERROR_DURATION,
+    ...(action && { action }),
   });
 }
 

@@ -36,3 +36,9 @@ export const CANCELABLE_DRAFT_STATUSES: DraftStatus[] = ['PENDING', 'APPROVED', 
  * review queue and the inbox's live views (M16). Derived from createdAt.
  */
 export const DRAFT_EXPIRY_DAYS = 21;
+
+/** When a waiting (PENDING/APPROVED) draft expires; null for any other status. */
+export function draftExpiresAt(status: string, createdAt: Date): Date | null {
+  if (status !== 'PENDING' && status !== 'APPROVED') return null;
+  return new Date(new Date(createdAt).getTime() + DRAFT_EXPIRY_DAYS * 86_400_000);
+}

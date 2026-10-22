@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { generateDraftForThread, type EmailDraft, type InboxItem, type InboxPage, type InboxView } from '../lib/api';
+import { generateDraftForThread, type EmailDraft, type InboxItem, type InboxView } from '../lib/api';
+import type { InboxCache } from './useInboxList';
 import { VIEWS, viewForClass, type TriageClass } from '../lib/inbox';
 import { extractApiErrorMessage, toastSuccess } from '../lib/toast';
 
@@ -98,17 +99,20 @@ export function useTriageDraft({ currentKey, onDrafted, onOpen }: Options) {
 
 /** Optimistic move: drop the candidate row and shift one count from Needs review to `view`. */
 function moveInCache(qc: ReturnType<typeof useQueryClient>, item: InboxItem, view: InboxView) {
-  qc.setQueriesData<{ success: boolean; data: InboxPage }>({ queryKey: ['inbox'] }, (old) => {
-    if (!old?.data) return old;
-    const { items, counts } = old.data;
-    if (!items.some((i) => i.kind === 'candidate' && i.id === item.id)) return old;
+  qc.setQueriesData<InboxCache>({ queryKey: ['inbox'] }, (old) => {
+    if (!old?.pages?.length) return old;
+    const isRow = (i: InboxItem) => i.kind === 'candidate' && i.id === item.id;
+    if (!old.pages.some((p) => p.data.items.some(isRow))) return old;
     return {
       ...old,
-      data: {
-        ...old.data,
-        items: items.filter((i) => !(i.kind === 'candidate' && i.id === item.id)),
-        counts: { ...counts, needs_review: Math.max(0, counts.needs_review - 1), [view]: counts[view] + 1 },
-      },
+      pages: old.pages.map((p) => ({
+        ...p,
+        data: {
+          ...p.data,
+          items: p.data.items.filter((i) => !isRow(i)),
+          counts: { ...p.data.counts, needs_review: Math.max(0, p.data.counts.needs_review - 1), [view]: p.data.counts[view] + 1 },
+        },
+      })),
     };
   });
 }

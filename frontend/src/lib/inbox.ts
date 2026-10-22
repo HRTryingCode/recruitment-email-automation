@@ -16,12 +16,32 @@ export function labelFor(
   return { text: 'Unsure', tone: 'warning' };
 }
 
-export const VIEWS: Array<{ id: InboxView; label: string; empty: string }> = [
-  { id: 'needs_review', label: 'Needs review', empty: 'Inbox zero — nothing waiting' },
-  { id: 'interested', label: 'Interested', empty: 'Inbox zero — nothing waiting' },
-  { id: 'not_interested', label: 'Not interested', empty: 'Inbox zero — nothing waiting' },
-  { id: 'snoozed', label: 'Snoozed', empty: 'Nothing snoozed' },
-  { id: 'sent_today', label: 'Sent today', empty: 'Nothing sent yet today' },
+export const VIEWS: Array<{ id: InboxView; label: string; empty: string; hint: string }> = [
+  {
+    id: 'needs_review',
+    label: 'Needs review',
+    empty: 'Inbox zero — nothing waiting',
+    hint: "Unsure labels, failed sends and replies Claude couldn't read land here.",
+  },
+  {
+    id: 'interested',
+    label: 'Interested',
+    empty: 'Inbox zero — nothing waiting',
+    hint: 'Candidates who want to talk land here, with a hand-off reply drafted.',
+  },
+  {
+    id: 'not_interested',
+    label: 'Not interested',
+    empty: 'Inbox zero — nothing waiting',
+    hint: 'Polite declines land here — select several to send in one go.',
+  },
+  { id: 'snoozed', label: 'Snoozed', empty: 'Nothing snoozed', hint: 'Press S on a reply to bring it back later.' },
+  {
+    id: 'sent_today',
+    label: 'Sent today',
+    empty: 'Nothing sent yet today',
+    hint: 'Replies you send show up here, with undo while they are sending.',
+  },
 ];
 
 export function isInboxView(v: string | null | undefined): v is InboxView {
@@ -187,7 +207,7 @@ export function diffWords(before: string, after: string): Array<{ text: string; 
 }
 
 export function sendLine(mailbox: string, ccFirstName: string | null): string {
-  return `Sending as ${mailbox} · CC ${ccFirstName ?? 'no one'} · Lever: no change`;
+  return `Sending as ${mailbox} · CC ${ccFirstName ?? 'no one'}`;
 }
 
 /** Item to open after acting on `current`: the next one, else the previous, else none. */
@@ -240,4 +260,69 @@ export function draftedLine(opts: {
   const local = ccEmail.split('@')[0];
   const cc = opts.ccFirstName ?? local.charAt(0).toUpperCase() + local.slice(1);
   return `Hand-off to ${cc} from ${mailbox.split('@')[0]}@`;
+}
+
+// ── Inbox pass 2 (U1b) ───────────────────────────────────────────────────
+
+/** URL key of an item: the draft id, or `candidate:<id>` for draftless rows. */
+export function itemKey(item: InboxItem): string {
+  return item.kind === 'candidate' ? `candidate:${item.id}` : item.id;
+}
+
+/** Loaded pages in order; an item that slid across a page boundary between polls appears once. */
+export function mergePages(pages: InboxItem[][]): InboxItem[] {
+  const seen = new Set<string>();
+  const out: InboxItem[] = [];
+  for (const page of pages) {
+    for (const item of page) {
+      const key = itemKey(item);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(item);
+    }
+  }
+  return out;
+}
+
+/** The 423 alert's warning, worded for the action being blocked. */
+const LOCK_VERBS: Record<string, string> = {
+  Send: 'Sending',
+  Dismiss: 'Dismissing',
+  Rewrite: 'Rewriting',
+  Regenerate: 'Regenerating',
+  Change: 'Changing the CC',
+  Restore: 'Restoring',
+};
+
+export function lockWarning(actionLabel: string): string {
+  const verb = LOCK_VERBS[actionLabel.split(' ')[0]] ?? 'Acting';
+  return `${verb} now may overwrite their changes.`;
+}
+
+const EXPIRY_WARN_MS = 3 * 86_400_000;
+
+/** "Expires in 2d" / "Expires in 5h" / "Expires soon" within 3 days of expiry, else null. */
+export function expiresIn(expiresAt: string | null | undefined, now: number = Date.now()): string | null {
+  if (!expiresAt) return null;
+  const left = new Date(expiresAt).getTime() - now;
+  if (!(left > 0) || left > EXPIRY_WARN_MS) return null;
+  const hours = Math.floor(left / 3_600_000);
+  if (hours >= 24) return `Expires in ${Math.floor(hours / 24)}d`;
+  if (hours >= 1) return `Expires in ${hours}h`;
+  return 'Expires soon';
+}
+
+/** Views a new candidate reply can land in (snoozed/sent only change through our own actions). */
+const ARRIVAL_VIEWS: InboxView[] = ['needs_review', 'interested', 'not_interested'];
+
+/** How many replies arrived between two polls' counts; 0 without a baseline. */
+export function newReplyDelta(prev: Record<InboxView, number> | null, next: Record<InboxView, number>): number {
+  if (!prev) return 0;
+  const sum = (c: Record<InboxView, number>) => ARRIVAL_VIEWS.reduce((n, v) => n + (c[v] ?? 0), 0);
+  return Math.max(0, sum(next) - sum(prev));
+}
+
+/** Screen-reader summary after an action: "Sent to Ana. Opened Ben." */
+export function liveSummary(done: string, opened?: string): string {
+  return opened ? `${done}. Opened ${opened}.` : `${done}.`;
 }

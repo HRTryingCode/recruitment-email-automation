@@ -18,7 +18,7 @@
 // app after the draft was written, H5) items are in no live view.
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db/client';
-import { LIVE_DRAFT_STATUSES, DRAFT_EXPIRY_DAYS } from '../lib/draftStatus';
+import { LIVE_DRAFT_STATUSES, DRAFT_EXPIRY_DAYS, draftExpiresAt } from '../lib/draftStatus';
 import { LOW_CONFIDENCE_THRESHOLD } from '../lib/candidateState';
 import { confidenceLabel, type ConfidenceLabel } from '../lib/confidence';
 import { resolveDraftCc } from './draftCc.service';
@@ -213,6 +213,10 @@ export interface InboxDraftSummary {
   evidenceQuote: string | null;
   hasEdits: boolean;
   editedAt: Date | null;
+  /** Who made the edits (name, else email); null without edits. */
+  editedByName: string | null;
+  /** When a PENDING/APPROVED draft leaves the live views; null otherwise. */
+  expiresAt: Date | null;
   snoozedUntil: Date | null;
   returnedFromSnoozeAt: Date | null;
   scheduledSendAt: Date | null;
@@ -333,6 +337,11 @@ export async function getInbox(
     listPresence(draftIds, userId, now),
   ]);
   const draftById = new Map(drafts.map((d) => [d.id, d]));
+  const editorIds = [...new Set(drafts.flatMap((d) => (d.editedByUserId ? [d.editedByUserId] : [])))];
+  const editors = editorIds.length
+    ? await prisma.user.findMany({ where: { id: { in: editorIds } }, select: { id: true, name: true, email: true } })
+    : [];
+  const editorName = new Map(editors.map((u) => [u.id, u.name || u.email]));
   const candidateById = new Map(candidates.map((c) => [c.id, c]));
 
   const items: InboxItem[] = [];
@@ -343,6 +352,7 @@ export async function getInbox(
       const d = draftById.get(r.id);
       if (!d) continue; // deleted between the two queries
       const { mailbox, candidate } = d.thread;
+      const hasEdits = d.aiBodyText !== null && d.aiBodyText !== d.bodyText;
       items.push({
         ...base,
         draft: {
@@ -356,8 +366,10 @@ export async function getInbox(
           confidenceLabel: confidenceLabel(d.confidence),
           classificationReason: d.classificationReason,
           evidenceQuote: d.evidenceQuote,
-          hasEdits: d.aiBodyText !== null && d.aiBodyText !== d.bodyText,
+          hasEdits,
           editedAt: d.editedAt,
+          editedByName: hasEdits && d.editedByUserId ? (editorName.get(d.editedByUserId) ?? null) : null,
+          expiresAt: draftExpiresAt(d.status, d.createdAt),
           snoozedUntil: d.snoozedUntil,
           returnedFromSnoozeAt: d.returnedFromSnoozeAt,
           scheduledSendAt: d.scheduledSendAt,

@@ -33,10 +33,12 @@ interface Props {
   rewriting: boolean;
   onRewrite: (instruction: string) => void;
   onRegenerate: () => void;
+  /** Shown while the editor still holds the last rewrite's text. */
+  onUndoRewrite?: () => void;
 }
 
 /** Plain-text reply editor with preview, AI diff/revert and instruction rewrites. */
-export default function DraftEditor({ draft, editor, editable, rewriting, onRewrite, onRegenerate }: Props) {
+export default function DraftEditor({ draft, editor, editable, rewriting, onRewrite, onRegenerate, onUndoRewrite }: Props) {
   const [mode, setMode] = useState<Mode>('edit');
   const [instruction, setInstruction] = useState('');
   const ai = draft.aiBodyText ?? null;
@@ -128,6 +130,12 @@ export default function DraftEditor({ draft, editor, editable, rewriting, onRewr
               <RefreshCw data-icon="inline-start" />
               Regenerate
             </Button>
+            {onUndoRewrite && !rewriting && (
+              <Button size="xs" variant="ghost" onClick={onUndoRewrite}>
+                <Undo2 data-icon="inline-start" />
+                Undo rewrite
+              </Button>
+            )}
             {rewriting && <Spinner aria-label="Rewriting" />}
           </div>
           <form onSubmit={submitInstruction} className="flex items-center gap-2">

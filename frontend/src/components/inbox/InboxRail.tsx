@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useLocation } from 'react-router-dom';
-import { Bookmark } from 'lucide-react';
+import { BellRing, Bookmark } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -109,6 +109,14 @@ export default function InboxRail({ view, counts }: Props) {
           </nav>
         </>
       )}
+      <Separator />
+      {/* The toggle lives in Settings → Notifications; this is the way there. */}
+      <Button asChild variant="ghost" size="sm" className="w-full justify-start text-muted-foreground">
+        <Link to="/settings/mailboxes#notifications">
+          <BellRing data-icon="inline-start" />
+          Desktop alerts
+        </Link>
+      </Button>
     </div>
   );
 }

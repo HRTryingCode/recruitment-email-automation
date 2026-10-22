@@ -145,8 +145,8 @@ export interface EmailDraft {
   ccAddress?: string | null;
   /** Stored CC choice: null = default (pre-F4), '' = "No CC". Use ccAddress for display. */
   ccEmail?: string | null;
-  /** PENDING drafts move to the Expired bucket after this (createdAt + 21d). */
-  expiresAt?: string;
+  /** PENDING drafts move to the Expired bucket after this (createdAt + 21d); null once decided. */
+  expiresAt?: string | null;
   // ── U0 inbox ──
   /** One-step send fires at this time unless undone (status SCHEDULED). */
   scheduledSendAt?: string | null;
@@ -162,6 +162,8 @@ export interface EmailDraft {
   aiBodyText?: string | null;
   editedAt?: string | null;
   editedByUserId?: string | null;
+  /** Name (else email) of whoever made the edits (GET /drafts/:id). */
+  editedByName?: string | null;
   hasEdits?: boolean;
   classificationReason?: string | null;
   /** Exact quote from the candidate's latest message backing the label. */
@@ -210,7 +212,7 @@ interface PaginatedResponse<T> {
   meta: { total: number; page: number; limit: number };
 }
 
-interface SingleResponse<T> {
+export interface SingleResponse<T> {
   success: boolean;
   data: T;
 }
@@ -469,6 +471,12 @@ export async function dismissDraft(
   return res.data as SingleResponse<{ id: string; status: 'DISCARDED' }>;
 }
 
+/** Undo a dismiss: DISCARDED (via dismiss) → PENDING; 409 if the thread has a newer live draft. */
+export async function undismissDraft(id: string): Promise<SingleResponse<{ id: string; status: 'PENDING' }>> {
+  const res = await api.post(`/drafts/${id}/undismiss`, {});
+  return res.data as SingleResponse<{ id: string; status: 'PENDING' }>;
+}
+
 /** Hide from the inbox until `until` (ISO, future, ≤ 30 days). */
 export async function snoozeDraft(id: string, until: string): Promise<SingleResponse<{ id: string; snoozedUntil: string }>> {
   const res = await api.post(`/drafts/${id}/snooze`, { until });
@@ -532,6 +540,10 @@ export interface InboxItem {
     evidenceQuote: string | null;
     hasEdits: boolean;
     editedAt: string | null;
+    /** Who made the edits; null without edits (older backends omit it). */
+    editedByName?: string | null;
+    /** When a waiting draft expires; null once decided (older backends omit it). */
+    expiresAt?: string | null;
     snoozedUntil: string | null;
     returnedFromSnoozeAt: string | null;
     scheduledSendAt: string | null;

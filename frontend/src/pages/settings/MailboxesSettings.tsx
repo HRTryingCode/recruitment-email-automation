@@ -7,6 +7,7 @@ import MailboxHealthTable from '../../components/settings/MailboxHealthTable';
 import ResyncAllButton from '../../components/settings/ResyncAllButton';
 import UnmonitoredSenders from '../../components/UnmonitoredSenders';
 import ConnectMailboxCard from '../../components/shell/ConnectMailboxCard';
+import NotificationsSettings from '../../components/settings/NotificationsSettings';
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '../../components/ui/alert';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -68,6 +69,7 @@ export default function MailboxesSettings() {
         </CardContent>
       </Card>
       <UnmonitoredSenders />
+      <NotificationsSettings />
     </div>
   );
 }
