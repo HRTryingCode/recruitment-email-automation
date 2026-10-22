@@ -14,6 +14,11 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
+/** Plain-language "what this means and who can fix it" under a status row. */
+function Note({ children }: { children: React.ReactNode }) {
+  return <p className="pb-1.5 text-sm text-muted-foreground">{children}</p>;
+}
+
 export default function IntegrationsSettings() {
   const lever = useQuery({ queryKey: ['lever-me'], queryFn: fetchLeverMe, staleTime: 5 * 60_000, retry: false });
   const me = lever.data;
@@ -33,22 +38,34 @@ export default function IntegrationsSettings() {
       <Card>
         <CardHeader>
           <CardTitle>Lever</CardTitle>
-          <CardDescription>Read-only. Configured by an admin via environment settings.</CardDescription>
+          <CardDescription>Set up by an admin for the whole team. You can see the status here, but not change it.</CardDescription>
         </CardHeader>
         <CardContent>
           {lever.isLoading ? (
             <Skeleton className="h-16" />
           ) : lever.isError || !me ? (
-            <p className="text-sm text-muted-foreground">Could not load the Lever status.</p>
+            <p className="text-sm text-muted-foreground">Could not load the Lever status. Reload the page to try again.</p>
           ) : (
             <div className="flex flex-col">
               <Row label="Connection">
-                <Badge variant={me.configured ? 'success' : 'secondary'}>{me.configured ? 'Configured' : 'Not configured'}</Badge>
+                <Badge variant={me.configured ? 'success' : 'secondary'}>{me.configured ? 'Connected' : 'Not connected'}</Badge>
               </Row>
+              {!me.configured && <Note>Lever isn't connected. An admin needs to add the Lever API key in Vercel.</Note>}
               <Row label="Add to Lever">
-                <Badge variant={me.createEnabled ? 'success' : 'secondary'}>{me.createEnabled ? 'Enabled' : 'Disabled'}</Badge>
+                <Badge variant={me.createEnabled ? 'success' : 'secondary'}>{me.createEnabled ? 'On' : 'Off'}</Badge>
               </Row>
+              {me.configured && !me.createEnabled && (
+                <Note>
+                  The Add to Lever button is hidden for everyone. An admin needs to turn it on in Vercel.
+                </Note>
+              )}
               {me.leverUser && <Row label="Your Lever user">{me.leverUser.name ?? me.leverUser.id}</Row>}
+              {me.configured && !me.leverUser && me.appEmail && (
+                <Note>
+                  No Lever user matches {me.appEmail}, so candidates you add can't be credited to you. Ask a Lever admin to
+                  add this email to your Lever account.
+                </Note>
+              )}
               {me.appEmail && <Row label="Signed in as">{me.appEmail}</Row>}
             </div>
           )}

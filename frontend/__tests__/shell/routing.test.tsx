@@ -12,6 +12,7 @@ vi.mock('../../src/lib/api', () => ({
   getMe: vi.fn(),
   fetchMailboxes: vi.fn(),
   fetchDrafts: vi.fn(),
+  fetchInbox: vi.fn(),
   fetchSyncHealth: vi.fn(),
   fetchToday: vi.fn(),
   fetchLookup: vi.fn(),
@@ -72,7 +73,11 @@ beforeEach(() => {
   window.localStorage.setItem('auth_token', 'fake');
   vi.mocked(api.getMe).mockResolvedValue({ id: 'u1', email: 'rae@archive.com', name: 'Rae Recruiter' });
   vi.mocked(api.fetchMailboxes).mockResolvedValue({ success: true, data: MAILBOXES });
-  vi.mocked(api.fetchDrafts).mockResolvedValue({ success: true, data: [], meta: { total: 7, page: 1, limit: 1 } });
+  vi.mocked(api.fetchDrafts).mockResolvedValue({ success: true, data: [], meta: { total: 99, page: 1, limit: 1 } });
+  vi.mocked(api.fetchInbox).mockResolvedValue({
+    success: true,
+    data: { items: [], counts: { needs_review: 4, interested: 2, not_interested: 1, snoozed: 0, sent_today: 0 }, nextCursor: null },
+  });
   vi.mocked(api.fetchSyncHealth).mockResolvedValue({ success: true, data: [] });
   vi.mocked(api.fetchToday).mockResolvedValue({
     success: true,
@@ -153,10 +158,10 @@ describe('URL state across the shell', () => {
     expect(loc()).toBe('/inbox?mailboxId=mb2');
   });
 
-  it('shows the pending-draft count on the Inbox nav item', async () => {
+  it('shows the waiting count (from the inbox counts, not pending drafts) on the Inbox nav item', async () => {
     renderAt('/inbox');
-    expect(await screen.findByLabelText('7 pending')).toBeInTheDocument();
-    expect(api.fetchDrafts).toHaveBeenCalledWith({ status: 'PENDING', mailboxId: undefined, limit: 1 });
+    expect(await screen.findByLabelText('7 waiting')).toBeInTheDocument();
+    expect(api.fetchDrafts).not.toHaveBeenCalled();
   });
 
   it('a Gmail OAuth callback on / toasts once and strips the params', async () => {

@@ -71,8 +71,8 @@ export default function DraftCcSelect({ draft, onChange }: Props) {
         </Select>
       </div>
       {warnNoCc && (
-        <p role="status" className="mt-1.5 flex items-center gap-1.5 text-xs text-warning">
-          <AlertTriangle className="size-3.5 shrink-0" />
+        <p role="status" className="mt-1.5 flex items-center gap-1.5 text-xs text-foreground">
+          <AlertTriangle className="size-3.5 shrink-0 text-warning" aria-hidden />
           No one is CC'd, but this email still says you're looping someone in — pick a CC or edit the body.
         </p>
       )}

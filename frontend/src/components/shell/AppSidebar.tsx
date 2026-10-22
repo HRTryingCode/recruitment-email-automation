@@ -18,11 +18,11 @@ import {
 import { NAV_ITEMS } from './nav';
 
 interface Props {
-  /** Pending drafts for the current mailbox filter; badge on Inbox. */
-  pendingCount: number;
+  /** Replies waiting (needs review + interested + not interested) for the mailbox filter; badge on Inbox. */
+  waitingCount: number;
 }
 
-export default function AppSidebar({ pendingCount }: Props) {
+export default function AppSidebar({ waitingCount }: Props) {
   const { pathname } = useLocation();
   const [params] = useSearchParams();
   const { isMobile, setOpenMobile } = useSidebar();
@@ -67,8 +67,8 @@ export default function AppSidebar({ pendingCount }: Props) {
                       <span>{label}</span>
                     </Link>
                   </SidebarMenuButton>
-                  {path === '/inbox' && pendingCount > 0 && (
-                    <SidebarMenuBadge aria-label={`${pendingCount} pending`}>{pendingCount}</SidebarMenuBadge>
+                  {path === '/inbox' && waitingCount > 0 && (
+                    <SidebarMenuBadge aria-label={`${waitingCount} waiting`}>{waitingCount}</SidebarMenuBadge>
                   )}
                 </SidebarMenuItem>
               ))}

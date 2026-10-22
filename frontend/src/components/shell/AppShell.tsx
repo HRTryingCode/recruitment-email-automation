@@ -1,11 +1,13 @@
 import { useQuery } from '@tanstack/react-query';
-import { Outlet, useMatch } from 'react-router-dom';
-import { fetchDrafts, fetchMailboxes } from '../../lib/api';
+import { Outlet, useMatch, useSearchParams } from 'react-router-dom';
+import { fetchMailboxes } from '../../lib/api';
+import { inboxQueryOptions, inboxSortFrom, inboxViewFrom, waitingCount } from '../../lib/inboxQuery';
 import { useMailboxFilter } from '../../lib/urlState';
 import { cn } from '../../lib/utils';
 import { SidebarInset, SidebarProvider } from '../ui/sidebar';
 import AppHeader from './AppHeader';
 import AppSidebar from './AppSidebar';
+import ConnectMailboxCard from './ConnectMailboxCard';
 import StatusBanner from './StatusBanner';
 import ShortcutsDialog from './ShortcutsDialog';
 import { useOAuthCallbackToasts } from './useOAuthCallbackToasts';
@@ -20,25 +22,37 @@ export default function AppShell() {
   const [mailboxId, setMailboxId] = useMailboxFilter();
   // The Inbox is a full-bleed, viewport-high three-pane layout whose panes
   // scroll on their own; every other view is a centred, page-scrolling column.
-  const fullBleed = !!useMatch('/inbox');
+  const onInbox = !!useMatch('/inbox');
+  const onToday = !!useMatch('/today');
+  const fullBleed = onInbox;
+  const [params] = useSearchParams();
 
-  const { data: mailboxesData } = useQuery({
+  const { data: mailboxesData, isSuccess: mailboxesLoaded } = useQuery({
     queryKey: ['mailboxes'],
     queryFn: fetchMailboxes,
     staleTime: 60_000,
   });
 
-  // Badge = the Pending total for the selected mailbox (server count, M22).
-  const { data: pendingData } = useQuery({
-    queryKey: ['drafts', 'pending-count', mailboxId],
-    queryFn: () => fetchDrafts({ status: 'PENDING', mailboxId, limit: 1 }),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
-  });
+  // Badge = replies waiting in the rail's three triage views. On /inbox it
+  // reads the page's own query (same view, sort and role filter as the rail),
+  // elsewhere the default view — so it never disagrees with the rail or adds
+  // a poll. (Mid-triage, H8's list can briefly show another view; the badge
+  // then follows the URL's view, which is the one the rail highlights.)
+  const { data: inboxData } = useQuery(
+    inboxQueryOptions(
+      onInbox
+        ? { view: inboxViewFrom(params), mailboxId, sort: inboxSortFrom(params), roles: params.getAll('role') }
+        : { view: 'needs_review', mailboxId }
+    )
+  );
+
+  // First run: nothing can reach the Inbox or Today until a mailbox is
+  // connected. Only on a successful empty list — never while loading or on error.
+  const needsMailbox = mailboxesLoaded && (mailboxesData?.data.length ?? 0) === 0 && (onInbox || onToday);
 
   return (
     <SidebarProvider>
-      <AppSidebar pendingCount={pendingData?.meta.total ?? 0} />
+      <AppSidebar waitingCount={waitingCount(inboxData?.data.counts)} />
       <SidebarInset className={cn('min-w-0', fullBleed && 'h-svh overflow-hidden')}>
         <AppHeader
           mailboxes={mailboxesData?.data ?? []}
@@ -52,7 +66,7 @@ export default function AppShell() {
             fullBleed ? 'flex min-h-0 flex-col' : 'mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8'
           )}
         >
-          <Outlet />
+          {needsMailbox ? <ConnectMailboxCard className="m-auto max-w-md" /> : <Outlet />}
         </div>
       </SidebarInset>
       <ShortcutsDialog />

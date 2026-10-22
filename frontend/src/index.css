@@ -14,6 +14,9 @@
    * taupe until they are refactored; new code uses the shadcn tokens.
    * Status colours: success = interested/ok, warning = unsure/needs review,
    * destructive = not interested/error, info = neutral-informational.
+   * Text tokens are tuned for WCAG AA (4.5:1) small text, incl. muted text on
+   * `secondary` rows and tone text on its /10 badge tint —
+   * __tests__/design-system/contrast.test.ts enforces it in both themes.
    */
   :root {
     --background: oklch(1 0 0);
@@ -27,13 +30,13 @@
     --secondary: oklch(0.96 0.002 17.2);
     --secondary-foreground: oklch(0.214 0.009 43.1);
     --muted: oklch(0.96 0.002 17.2);
-    --muted-foreground: oklch(0.547 0.021 43.1);
+    --muted-foreground: oklch(0.52 0.021 43.1);
     --accent: oklch(0.96 0.002 17.2);
     --accent-foreground: oklch(0.214 0.009 43.1);
-    --destructive: oklch(0.577 0.245 27.325);
-    --success: oklch(0.527 0.154 150.069);
+    --destructive: oklch(0.52 0.245 27.325);
+    --success: oklch(0.5 0.154 150.069);
     --success-foreground: oklch(0.986 0.002 67.8);
-    --warning: oklch(0.555 0.163 48.998);
+    --warning: oklch(0.53 0.163 48.998);
     --warning-foreground: oklch(0.986 0.002 67.8);
     --info: oklch(0.5 0.134 242.749);
     --info-foreground: oklch(0.986 0.002 67.8);

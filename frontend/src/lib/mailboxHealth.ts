@@ -54,10 +54,10 @@ export function summarizeHealth(data: MailboxSyncHealth[], now: number = Date.no
   }
   if (data.some((d) => d.error)) return { tone: 'amber', label: 'Health data incomplete', unhealthy: false };
   if (data.some((d) => d.webhookErrorsLast24h >= WEBHOOK_ERRORS_ELEVATED)) {
-    return { tone: 'amber', label: 'Webhook errors elevated', unhealthy: false };
+    return { tone: 'amber', label: 'More Gmail delivery errors than usual', unhealthy: false };
   }
   if (data.some((d) => d.lastReconciliationFoundMissing >= DRIFT_HIGH)) {
-    return { tone: 'amber', label: 'High reconcile drift', unhealthy: false };
+    return { tone: 'amber', label: 'Catch-up sync is finding missed emails', unhealthy: false };
   }
   const expiringSoon = data.filter(
     (d) => d.watchExpiresInHours !== null && d.watchExpiresInHours < 24
@@ -65,16 +65,16 @@ export function summarizeHealth(data: MailboxSyncHealth[], now: number = Date.no
   if (expiringSoon > 0) {
     return {
       tone: 'amber',
-      label: `${expiringSoon} watch${expiringSoon === 1 ? '' : 'es'} expiring soon`,
+      label: `Live updates expire soon for ${expiringSoon} mailbox${expiringSoon === 1 ? '' : 'es'}`,
       unhealthy: false,
     };
   }
   return { tone: 'emerald', label: 'All mailboxes healthy', unhealthy: false };
 }
 
-/** Compact "watch expires in" label: −3h, < 1h, 12h, 5d, or "no watch". */
+/** Compact "live updates renew in" label: −3h, < 1h, 12h, 5d, or "off". */
 export function formatWatchExpiry(h: number | null): string {
-  if (h === null) return 'no watch';
+  if (h === null) return 'off';
   if (h < 0) return `−${Math.abs(Math.round(h))}h`;
   if (h < 1) return `< 1h`;
   if (h < 48) return `${Math.round(h)}h`;

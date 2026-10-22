@@ -95,6 +95,14 @@ describe('DraftCcSelect', () => {
     expect(await screen.findByText(/still says you're looping someone in/i)).toBeInTheDocument();
   });
 
+  it('the warning text is full-contrast foreground; only the icon carries the warning colour', async () => {
+    renderSelect(draft({ ccAddress: null }));
+    const note = (await screen.findByText(/still says you're looping someone in/i)).closest('[role="status"]')!;
+    expect(note).toHaveClass('text-foreground');
+    expect(note).not.toHaveClass('text-warning');
+    expect(note.querySelector('svg')).toHaveClass('text-warning');
+  });
+
   it('does not warn for No CC on a regular reply', async () => {
     renderSelect(draft({ ccAddress: null, bodyText: 'Hi Ada,\n\nThanks!' }));
     await screen.findByRole('combobox', { name: /cc/i });

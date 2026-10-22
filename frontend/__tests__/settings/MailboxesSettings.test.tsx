@@ -63,7 +63,7 @@ describe('Settings → Mailboxes', () => {
   it('renders the health table with per-mailbox state and a reconnect action', async () => {
     renderPage();
     expect(await screen.findByText('sofia@archive.com')).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: /watch expires/i })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /live updates/i })).toBeInTheDocument();
     expect(screen.getByText('1 mailbox: reconnect required')).toBeInTheDocument();
     expect(screen.getByText(/invalid_grant/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Reconnect aaron@archive.com' })).toBeInTheDocument();
@@ -112,6 +112,41 @@ describe('Settings → Mailboxes', () => {
     vi.mocked(api.fetchSyncHealth).mockRejectedValue(new Error('500'));
     renderPage();
     expect(await screen.findByText(/could not load mailbox health/i, undefined, { timeout: 4000 })).toBeInTheDocument();
+  });
+
+  it('the health table has no developer jargon', async () => {
+    const FAILING = { ...ROW, mailboxId: 'mb-3', emailAddress: 'paul@archive.com', consecutiveReconcileFailures: 4, lastReconcileError: 'ETIMEDOUT' };
+    const EXPIRED = { ...ROW, mailboxId: 'mb-4', emailAddress: 'ann@archive.com', watchExpiresInHours: -5 };
+    vi.mocked(api.fetchSyncHealth).mockResolvedValue({ success: true, data: [ROW, FAILING, EXPIRED] as MailboxSyncHealth[] });
+    const { container } = renderPage();
+    await screen.findByText('paul@archive.com');
+    expect(container.textContent).not.toMatch(/reconcil|drift|webhook|watch|vercel/i);
+    expect(screen.getByText(/catch-up sync failed 4 times in a row/i)).toBeInTheDocument();
+  });
+
+  it('the error state speaks human and offers Retry', async () => {
+    vi.mocked(api.fetchSyncHealth).mockRejectedValue(new Error('500'));
+    renderPage();
+    expect(
+      await screen.findByText(
+        'Something went wrong loading mailboxes. Try again, or ask an admin to check the server logs.',
+        undefined,
+        { timeout: 4000 }
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/vercel/i)).not.toBeInTheDocument();
+    vi.mocked(api.fetchSyncHealth).mockResolvedValue({ success: true, data: [ROW] });
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('sofia@archive.com')).toBeInTheDocument();
+  });
+
+  it('with no mailboxes, the empty state has a Connect Gmail button that starts sign-in', async () => {
+    vi.mocked(api.fetchSyncHealth).mockResolvedValue({ success: true, data: [] });
+    vi.mocked(api.addGmailMailbox).mockReturnValue(new Promise(() => {}));
+    renderPage();
+    expect(await screen.findByText('Connect a Gmail mailbox')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Connect Gmail' }));
+    expect(api.addGmailMailbox).toHaveBeenCalledTimes(1);
   });
 
   it('has no debug "Find candidate by email" box (⌘K replaces it)', async () => {
