@@ -357,21 +357,6 @@ export async function fetchSyncHealth(): Promise<SingleResponse<MailboxSyncHealt
   return res.data as SingleResponse<MailboxSyncHealth[]>;
 }
 
-export async function fixRepliedAt(): Promise<{ success: boolean; data: { checked: number; cleared: number } }> {
-  const res = await api.post('/internal/fix-replied-at');
-  return res.data as { success: boolean; data: { checked: number; cleared: number } };
-}
-
-export async function restoreDiscardedDrafts(): Promise<{ success: boolean; data: { checked: number; restored: number } }> {
-  const res = await api.post('/internal/restore-discarded-drafts');
-  return res.data as { success: boolean; data: { checked: number; restored: number } };
-}
-
-export async function purgeNoRoleCandidates(): Promise<{ success: boolean; data: { ignored: number; draftsDiscarded: number } }> {
-  const res = await api.post('/internal/purge-no-role-candidates');
-  return res.data as { success: boolean; data: { ignored: number; draftsDiscarded: number } };
-}
-
 export async function debugDrafts(): Promise<{ success: boolean; data: { total: number; byStatus: Record<string, unknown[]> } }> {
   const res = await api.get('/internal/debug/drafts');
   return res.data as { success: boolean; data: { total: number; byStatus: Record<string, unknown[]> } };
