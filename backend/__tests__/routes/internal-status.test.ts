@@ -52,50 +52,52 @@ describe('GET /api/internal/sync-health', () => {
       createdAt: new Date('2026-04-02T00:00:00Z'),
     };
 
-    mockPrisma.mailbox.findMany.mockResolvedValueOnce([mb1, mb2]);
+    mockPrisma.mailbox.findMany.mockResolvedValue([mb1, mb2]);
 
-    // Recent webhook errors (used for the global error count, bucketed by emailAddress).
-    mockPrisma.systemLog.findMany.mockResolvedValueOnce([
-      {
-        details: JSON.stringify({ emailAddress: 'inbox@archive.com', error: 'boom' }),
-      },
-      {
-        details: JSON.stringify({ emailAddress: 'inbox@archive.com', error: 'boom2' }),
-      },
-      {
-        details: JSON.stringify({ emailAddress: 'second@archive.com', error: 'boom3' }),
-      },
-    ]);
+    // Every mock below is keyed on the query's `where` arguments rather than
+    // on call order, so adding, removing or reordering queries in the handler
+    // can't silently hand one query another query's fixture (finding L18).
+    type Where = { where?: Record<string, unknown> };
 
-    // mb-1: per-mailbox awaits — order matches the Promise.all() in
-    // internal-status.ts: findFirst, count(24h), count(total messages),
-    // count(total candidates), count(pending drafts), count(needs-review).
-    mockPrisma.emailMessage.findFirst.mockResolvedValueOnce({ receivedAt: lastMsgAt });
-    mockPrisma.emailMessage.count
-      .mockResolvedValueOnce(7) // messagesLast24h
-      .mockResolvedValueOnce(42); // totalMessages
-    mockPrisma.candidate.count
-      .mockResolvedValueOnce(5) // totalCandidates
-      .mockResolvedValueOnce(1); // candidatesNeedsReview
-    mockPrisma.emailDraft.count.mockResolvedValueOnce(2);
-    mockPrisma.systemLog.findMany.mockResolvedValueOnce([
-      {
-        id: 'log-1',
-        createdAt: new Date(now.getTime() - 30 * 60 * 1000),
-        details: JSON.stringify({ mailboxId: 'mb-1', missingBefore: 3, ingested: 3 }),
-      },
-    ]);
+    mockPrisma.systemLog.findMany.mockImplementation(async ({ where }: Where = {}) => {
+      switch (where?.event) {
+        // Recent webhook errors, bucketed by emailAddress for the error count.
+        case 'WEBHOOK_HANDLER_ERROR':
+          return [
+            { details: JSON.stringify({ emailAddress: 'inbox@archive.com', error: 'boom' }) },
+            { details: JSON.stringify({ emailAddress: 'inbox@archive.com', error: 'boom2' }) },
+            { details: JSON.stringify({ emailAddress: 'second@archive.com', error: 'boom3' }) },
+          ];
+        // Latest reconciliation runs; only mb-1 has one.
+        case 'RECONCILIATION_RUN':
+          return [
+            {
+              id: 'log-1',
+              createdAt: new Date(now.getTime() - 30 * 60 * 1000),
+              details: JSON.stringify({ mailboxId: 'mb-1', missingBefore: 3, ingested: 3 }),
+            },
+          ];
+        default:
+          return [];
+      }
+    });
 
-    // mb-2: per-mailbox awaits — quiet mailbox, no recent activity
-    mockPrisma.emailMessage.findFirst.mockResolvedValueOnce(null);
-    mockPrisma.emailMessage.count
-      .mockResolvedValueOnce(0) // messagesLast24h
-      .mockResolvedValueOnce(0); // totalMessages
-    mockPrisma.candidate.count
-      .mockResolvedValueOnce(0) // totalCandidates
-      .mockResolvedValueOnce(0); // candidatesNeedsReview
-    mockPrisma.emailDraft.count.mockResolvedValueOnce(0);
-    mockPrisma.systemLog.findMany.mockResolvedValueOnce([]);
+    // mb-1 is active with recent mail; mb-2 is a quiet mailbox with nothing.
+    mockPrisma.emailMessage.findFirst.mockImplementation(async ({ where }: Where = {}) =>
+      where?.mailboxId === 'mb-1' ? { receivedAt: lastMsgAt } : null
+    );
+    mockPrisma.emailMessage.count.mockImplementation(async ({ where }: Where = {}) => {
+      if (where?.mailboxId !== 'mb-1') return 0;
+      return where.receivedAt ? 7 /* messagesLast24h */ : 42 /* totalMessages */;
+    });
+    mockPrisma.candidate.count.mockImplementation(async ({ where }: Where = {}) => {
+      if (where?.mailboxId !== 'mb-1') return 0;
+      return where.status === 'NEEDS_REVIEW' ? 1 : 5 /* totalCandidates */;
+    });
+    mockPrisma.emailDraft.count.mockImplementation(async ({ where }: Where = {}) => {
+      const thread = where?.thread as { mailboxId?: string } | undefined;
+      return where?.status === 'PENDING' && thread?.mailboxId === 'mb-1' ? 2 : 0;
+    });
 
     const res = await request(app)
       .get('/api/internal/sync-health')
@@ -118,7 +120,10 @@ describe('GET /api/internal/sync-health', () => {
       candidatesNeedsReview: 1,
       lastReconciliationFoundMissing: 3,
       webhookErrorsLast24h: 2,
+      lastWebhookError: 'boom',
     });
+    expect(health1.totalMessages).toBe(42);
+    expect(health1.totalCandidates).toBe(5);
     expect(typeof health1.watchExpiry).toBe('string');
     expect(typeof health1.watchExpiresInHours).toBe('number');
     expect(health1.lastSyncedMessageAt).toBe(lastMsgAt.toISOString());
