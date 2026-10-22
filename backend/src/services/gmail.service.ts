@@ -21,6 +21,7 @@ import { normalizeEmail, resolveCandidateStatus, shouldSkipNotRecruiting } from 
 import { loopInSentence } from '../lib/handoffLoopIn';
 import { ccFirstName, resolveDraftCc, NO_CC } from './draftCc.service';
 import type { Mailbox, EmailThread, Prisma } from '@prisma/client';
+import { LIVE_DRAFT_STATUSES, CANCELABLE_DRAFT_STATUSES } from '../lib/draftStatus';
 
 /**
  * Serialize an OAuth2 / service-account credentials object for storage.
@@ -493,7 +494,7 @@ export async function findBlockingDraft(
   threadId: string,
   isHandoffInbox: boolean
 ): Promise<{ id: string; status: string } | null> {
-  const statuses = isHandoffInbox ? ['PENDING', 'APPROVED', 'SENT'] : ['PENDING', 'APPROVED'];
+  const statuses: string[] = isHandoffInbox ? [...LIVE_DRAFT_STATUSES, 'SENT'] : [...LIVE_DRAFT_STATUSES];
   return prisma.emailDraft.findFirst({
     where: { threadId, status: { in: statuses } },
     select: { id: true, status: true },
@@ -975,12 +976,13 @@ export async function recordOutboundMessage(
         data: { repliedAt: receivedAt },
       });
 
-      // Discard any PENDING or APPROVED drafts on this thread — they're
-      // now stale because the recruiter already sent a manual reply.
+      // Discard any cancelable live drafts on this thread (incl. a SCHEDULED
+      // one-step send) — they're now stale because the recruiter already sent
+      // a manual reply. An in-flight SENDING draft is left to finish.
       const superseded = await prisma.emailDraft.updateMany({
         where: {
           threadId: thread.id,
-          status: { in: ['PENDING', 'APPROVED'] },
+          status: { in: CANCELABLE_DRAFT_STATUSES },
         },
         data: { status: 'DISCARDED' },
       });
@@ -2565,7 +2567,7 @@ export async function reclassifyOrphanedThreads(mailboxId: string): Promise<{ th
     where: {
       mailboxId,
       candidateId: { not: null },
-      drafts: { none: { status: { in: ['PENDING', 'APPROVED'] } } },
+      drafts: { none: { status: { in: LIVE_DRAFT_STATUSES } } },
       messages: {
         some: {
           fromAddress: { not: mailbox.emailAddress },

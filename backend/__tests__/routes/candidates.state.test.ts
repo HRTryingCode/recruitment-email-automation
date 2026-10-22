@@ -134,7 +134,7 @@ describe('/api/candidates — candidate state (H6, M18, M19, M20, L16, M12)', ()
       expect(res.status).toBe(200);
       expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
       expect(mockPrisma.emailDraft.updateMany).toHaveBeenCalledWith({
-        where: { threadId: { in: ['t-1'] }, status: { in: ['PENDING', 'APPROVED'] } },
+        where: { threadId: { in: ['t-1'] }, status: { in: ['PENDING', 'APPROVED', 'SCHEDULED', 'FAILED'] } },
         data: { status: 'DISCARDED' },
       });
     });

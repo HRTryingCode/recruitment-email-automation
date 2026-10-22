@@ -270,6 +270,17 @@ describe('recordOutboundMessage (H6, M14)', () => {
     expect(JSON.parse(superseded!.details)).toMatchObject({ reason: 'manual_reply', count: 2 });
   });
 
+  it('a manual reply also cancels a SCHEDULED one-step send, but never an in-flight SENDING one (U0)', async () => {
+    mockPrisma.candidate.updateMany.mockResolvedValue({ count: 1 });
+    mockPrisma.emailMessage.findFirst.mockResolvedValue({ id: 'in-1' });
+    mockPrisma.candidate.update.mockResolvedValue({});
+    mockPrisma.emailDraft.updateMany.mockResolvedValue({ count: 1 });
+    await recordOutboundMessage(mailbox, { id: 'th-1', candidateId: 'cand-1' }, at);
+    const where = mockPrisma.emailDraft.updateMany.mock.calls[0][0].where;
+    expect(where.status.in).toContain('SCHEDULED');
+    expect(where.status.in).not.toContain('SENDING');
+  });
+
   it('does nothing for a thread with no candidate', async () => {
     await recordOutboundMessage(mailbox, { id: 'th-1', candidateId: null }, at);
     expect(mockPrisma.candidate.updateMany).not.toHaveBeenCalled();

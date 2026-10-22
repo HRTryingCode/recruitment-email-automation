@@ -10,6 +10,7 @@ import { deriveReplyStatus, normalizeEmail } from '../lib/candidateState';
 import { DRAFT_EXPIRY_DAYS } from './drafts';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
+import { CANCELABLE_DRAFT_STATUSES } from '../lib/draftStatus';
 
 const router = Router();
 
@@ -392,7 +393,7 @@ router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => 
         prisma.emailDraft.updateMany({
           where: {
             threadId: { in: threads.map((t) => t.id) },
-            status: { in: ['PENDING', 'APPROVED'] },
+            status: { in: CANCELABLE_DRAFT_STATUSES },
           },
           data: { status: 'DISCARDED' },
         }),
@@ -443,7 +444,7 @@ router.post('/:id/ignore', async (req: Request, res: Response, next: NextFunctio
       prisma.emailDraft.updateMany({
         where: {
           threadId: { in: threadIds },
-          status: { in: ['PENDING', 'APPROVED'] },
+          status: { in: CANCELABLE_DRAFT_STATUSES },
         },
         data: { status: 'DISCARDED' },
       }),

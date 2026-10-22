@@ -18,7 +18,7 @@ describe('findBlockingDraft (M23 dedup)', () => {
     mockPrisma.emailDraft.findFirst.mockResolvedValue({ id: 'd1', status: 'PENDING' });
     await expect(findBlockingDraft('t1', false)).resolves.toEqual({ id: 'd1', status: 'PENDING' });
     expect(mockPrisma.emailDraft.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { threadId: 't1', status: { in: ['PENDING', 'APPROVED'] } } })
+      expect.objectContaining({ where: { threadId: 't1', status: { in: ['PENDING', 'APPROVED', 'SCHEDULED', 'SENDING', 'FAILED'] } } })
     );
   });
 
@@ -26,7 +26,7 @@ describe('findBlockingDraft (M23 dedup)', () => {
     mockPrisma.emailDraft.findFirst.mockResolvedValue({ id: 'd0', status: 'SENT' });
     await expect(findBlockingDraft('t1', true)).resolves.toEqual({ id: 'd0', status: 'SENT' });
     expect(mockPrisma.emailDraft.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { threadId: 't1', status: { in: ['PENDING', 'APPROVED', 'SENT'] } } })
+      expect.objectContaining({ where: { threadId: 't1', status: { in: ['PENDING', 'APPROVED', 'SCHEDULED', 'SENDING', 'FAILED', 'SENT'] } } })
     );
   });
 
