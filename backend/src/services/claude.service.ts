@@ -128,6 +128,10 @@ export interface ClassificationResult {
   confidence: number;
   reasoning: string;
   role: string | null;
+  /** One-line reason shown in the inbox (≤ REASON_MAX_CHARS); null when absent (U0). */
+  reason?: string | null;
+  /** Exact substring of the classified message backing the label; null if the model's quote wasn't exact (U0). */
+  evidenceQuote?: string | null;
   /** True when Claude could not be reached or its output was unusable. Callers must not draft on this. */
   isFallback?: boolean;
 }
@@ -159,7 +163,7 @@ export interface DraftReplyResult {
  * drafts can be grouped by the prompt that wrote them (M14).
  */
 export const PROMPT_VERSIONS = {
-  classify: 'classify-2026-10-22',
+  classify: 'classify-2026-10-22b',
   handoff: 'handoff-2026-10-22b',
   reply: 'reply-2026-10-22',
   rewrite: 'rewrite-2026-10-22',
@@ -344,6 +348,38 @@ function coerceRole(raw: unknown): string | null {
   return trimmed;
 }
 
+export const REASON_MAX_CHARS = 140;
+export const EVIDENCE_MAX_CHARS = 200;
+
+// U0: optional explanation fields. Anything malformed becomes null rather
+// than failing the whole classification.
+const classifierEvidenceSchema = z.object({
+  reason: z
+    .string()
+    .trim()
+    .min(1)
+    .transform((r) => r.slice(0, REASON_MAX_CHARS))
+    .nullable()
+    .optional()
+    .catch(null),
+  evidenceQuote: z.string().trim().min(1).max(EVIDENCE_MAX_CHARS).nullable().optional().catch(null),
+});
+
+/**
+ * Reason + evidence from the classifier output. The quote is kept only when it
+ * appears verbatim in the message we classified, so the inbox never shows the
+ * candidate "saying" something they didn't.
+ */
+function coerceEvidence(raw: unknown, messageBody: string): { reason: string | null; evidenceQuote: string | null } {
+  const parsed = classifierEvidenceSchema.safeParse(raw && typeof raw === 'object' ? raw : {});
+  const data = parsed.success ? parsed.data : {};
+  const quote = data.evidenceQuote ?? null;
+  return {
+    reason: data.reason ?? null,
+    evidenceQuote: quote !== null && messageBody.includes(quote) ? quote : null,
+  };
+}
+
 function coerceClassificationResult(raw: unknown): ClassificationResult {
   if (!raw || typeof raw !== 'object') {
     return safeFallback('response was not an object');
@@ -415,7 +451,9 @@ Respond with a JSON object in this EXACT format (no markdown fences, no commenta
   "needsReview": <boolean>,
   "confidence": <number between 0 and 1>,
   "reasoning": "<brief explanation, 1-2 sentences>",
-  "role": "<extracted role title or null>"
+  "role": "<extracted role title or null>",
+  "reason": "<why this label, for a recruiter skimming an inbox, max 140 characters>",
+  "evidenceQuote": "<the shortest EXACT, unaltered substring of the new message that supports the label, max 200 characters, or null>"
 }
 
 Classify both the candidate's interest (classification) AND the kind of message it is (messageType) using the rules in the system prompt. Use the prior thread context above to distinguish a NEW_INQUIRY (first candidate reply) from a FOLLOWUP (continuation of an existing back-and-forth). Extract the role title following the Role Extraction rules above (concise, max ~60 chars, null if not mentioned).
@@ -449,7 +487,7 @@ ${emailBody}`,
     return safeFallback(`JSON parse failed: ${message}`);
   }
 
-  return coerceClassificationResult(parsed);
+  return { ...coerceClassificationResult(parsed), ...coerceEvidence(parsed, emailBody) };
 }
 
 const UNTRUSTED_NOTICE =

@@ -6,7 +6,8 @@ import request from 'supertest';
 import { buildPrismaMock, resetPrismaMock, type MockPrisma } from '../_setup/mockPrisma';
 import { loadApp, bearer } from '../_setup/testApp';
 
-const { waitUntil, runDelayedSend, deleteDraft, sendDraft, sendAsList } = vi.hoisted(() => ({
+const { waitUntil, runDelayedSend, deleteDraft, sendDraft, sendAsList, rewriteDraftWithNotes } = vi.hoisted(() => ({
+  rewriteDraftWithNotes: vi.fn(),
   waitUntil: vi.fn(),
   runDelayedSend: vi.fn(),
   deleteDraft: vi.fn(),
@@ -26,6 +27,12 @@ vi.mock('../../src/services/gmail.service', async () => {
     '../../src/services/gmail.service'
   );
   return { ...actual, deleteDraft, sendDraft, fetchMailboxSignature: vi.fn().mockResolvedValue(null) };
+});
+vi.mock('../../src/services/claude.service', async () => {
+  const actual = await vi.importActual<typeof import('../../src/services/claude.service')>(
+    '../../src/services/claude.service'
+  );
+  return { ...actual, rewriteDraftWithNotes };
 });
 vi.mock('../../src/db/client', () => {
   const prisma = buildPrismaMock();
@@ -397,6 +404,24 @@ describe('U0 draft actions', () => {
       const res = await request(app).patch('/api/drafts/draft-1').set('Authorization', AUTH).send({ bodyText: 'x' });
       expect(res.status).toBe(423);
       expect(res.body.lockedBy).toBe('Sofia Delgado');
+    });
+  });
+
+  describe('POST /api/drafts/:id/dictate', () => {
+    it('counts as a recruiter edit', async () => {
+      const store = installDraft({ status: 'PENDING' });
+      rewriteDraftWithNotes.mockResolvedValueOnce({ bodyText: 'Rewritten' });
+      const res = await request(app).post('/api/drafts/draft-1/dictate').set('Authorization', AUTH).send({ notes: 'shorter' });
+      expect(res.status).toBe(200);
+      expect(store.get()).toMatchObject({ bodyText: 'Rewritten', aiBodyText: 'AI text', editedByUserId: ME });
+    });
+
+    it('423 while someone else is editing', async () => {
+      installDraft({ status: 'PENDING' });
+      otherUserEditing();
+      const res = await request(app).post('/api/drafts/draft-1/dictate').set('Authorization', AUTH).send({ notes: 'x' });
+      expect(res.status).toBe(423);
+      expect(rewriteDraftWithNotes).not.toHaveBeenCalled();
     });
   });
 });

@@ -599,12 +599,15 @@ type RegenerateOk = {
   draft: Awaited<ReturnType<typeof prisma.emailDraft.update>>;
   originalMessage: OriginalMessagePayload;
   mailboxId: string;
+  /** True when the recruiter's edited body was kept and only aiBodyText changed (U0). */
+  keptEdits: boolean;
 };
 type RegenerateFail = { ok: false; status: number; message: string };
 
 async function regenerateDraftById(
   id: string,
-  actorUserId?: string
+  actorUserId?: string,
+  opts: { keepEdits?: boolean } = {}
 ): Promise<RegenerateOk | RegenerateFail> {
   const draft = await prisma.emailDraft.findUnique({
     where: { id },
@@ -763,15 +766,30 @@ async function regenerateDraftById(
     replyMeta = draftReply.meta;
   }
 
+  // U0: never discard recruiter edits silently. An edited draft keeps its
+  // body unless the caller passes keepEdits:false; the new model text always
+  // lands in aiBodyText so the UI can offer it.
+  const hasEdits =
+    draft.editedAt != null || (draft.aiBodyText != null && draft.aiBodyText !== draft.bodyText);
+  const keptEdits = hasEdits && (opts.keepEdits ?? true);
   const updated = await prisma.emailDraft.update({
     where: { id },
     data: {
-      subject: replySubject,
-      bodyText: replyBodyText,
-      bodyHtml: replyBodyHtml,
+      aiBodyText: replyBodyText,
       classification: classificationResult.classification,
       confidence: classificationResult.confidence,
+      classificationReason: classificationResult.reason ?? null,
+      evidenceQuote: classificationResult.evidenceQuote ?? null,
       ...draftMetaColumns(replyMeta),
+      ...(keptEdits
+        ? {}
+        : {
+            subject: replySubject,
+            bodyText: replyBodyText,
+            bodyHtml: replyBodyHtml,
+            editedAt: null,
+            editedByUserId: null,
+          }),
     },
   });
 
@@ -817,7 +835,7 @@ async function regenerateDraftById(
 
   await logEvent('DRAFT_REGENERATED', { draftId: id, mailboxId: mailbox.id, actorUserId }, 'INFO');
 
-  return { ok: true, draft: updated, originalMessage, mailboxId: mailbox.id };
+  return { ok: true, draft: updated, originalMessage, mailboxId: mailbox.id, keptEdits };
 }
 
 // POST /api/drafts/regenerate-pending
@@ -857,17 +875,26 @@ router.post('/regenerate-pending', requireAdmin, async (req: Request, res: Respo
   }
 });
 
-// POST /api/drafts/:id/regenerate
+const regenerateSchema = z.object({
+  // Edited drafts keep their body by default (U0); false replaces it.
+  keepEdits: z.boolean().optional(),
+  override: z.boolean().optional(),
+});
+
+// POST /api/drafts/:id/regenerate  { keepEdits?, override? }
 router.post('/:id/regenerate', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const parsed = regenerateSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return next(createError('Invalid body', 400));
     const id = String(req.params.id);
-    const result = await regenerateDraftById(id, req.userId);
+    if (await rejectIfLocked(req, res, id, 'regenerate', parsed.data.override)) return;
+    const result = await regenerateDraftById(id, req.userId, { keepEdits: parsed.data.keepEdits });
     if (!result.ok) {
       return next(createError(result.message, result.status));
     }
     res.json({
       success: true,
-      data: { ...result.draft, originalMessage: result.originalMessage },
+      data: { ...result.draft, originalMessage: result.originalMessage, keptEdits: result.keptEdits },
     });
   } catch (err) {
     next(err);
@@ -896,6 +923,7 @@ router.post('/:id/dictate', async (req: Request, res: Response, next: NextFuncti
 
     if (!draft) return next(createError('Draft not found', 404));
     if (draft.status !== 'PENDING') return next(createError('Only PENDING drafts can be rewritten', 400));
+    if (await rejectIfLocked(req, res, id, 'dictate', req.body?.override === true)) return;
 
     const { thread } = draft;
     const { candidate, mailbox } = thread;
@@ -920,6 +948,9 @@ router.post('/:id/dictate', async (req: Request, res: Response, next: NextFuncti
       data: {
         bodyText: newBodyText,
         bodyHtml: composeDraftHtml(newBodyText, sig.html, sig.plain),
+        // Recruiter-directed rewrite: an edit, so aiBodyText keeps the original.
+        editedAt: new Date(),
+        editedByUserId: req.userId ?? null,
         ...draftMetaColumns(rewritten.meta),
       },
       include: draftWithThreadInclude,

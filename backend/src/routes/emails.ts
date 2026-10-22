@@ -196,6 +196,8 @@ router.post(
 
       let classification: Classification;
       let confidence: number;
+      let classificationReason: string | null = null;
+      let evidenceQuote: string | null = null;
       if (triageClassification) {
         classification = triageClassification;
         confidence = 1;
@@ -214,6 +216,8 @@ router.post(
           return next(createError('The classifier is unavailable right now; no draft was created. Please retry.', 502));
         }
         ({ classification, confidence } = classificationResult);
+        classificationReason = classificationResult.reason ?? null;
+        evidenceQuote = classificationResult.evidenceQuote ?? null;
       }
 
       const signatureHtml = await fetchMailboxSignature(mailbox.id);
@@ -274,8 +278,11 @@ router.post(
           subject,
           bodyText,
           bodyHtml,
+          aiBodyText: bodyText,
           classification,
           confidence,
+          classificationReason,
+          evidenceQuote,
           status: 'PENDING',
           ccEmail: resolveDraftCc(null, mailbox.emailAddress) ?? NO_CC,
           ...draftMetaColumns(meta),
