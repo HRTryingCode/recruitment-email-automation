@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  fetchCandidates,
+  fetchCandidateCounts,
   fetchMailboxes,
   fetchDrafts,
   fetchSyncHealth,
@@ -11,7 +11,6 @@ import {
   reclassifyMailbox,
   debugCandidate,
   addGmailMailbox,
-  type Candidate,
   type Mailbox,
   type EmailDraft,
   type MailboxSyncHealth,
@@ -863,15 +862,18 @@ export default function Dashboard({
 }: Props) {
   const queryClient = useQueryClient();
 
-  const { data: candidatesData, isLoading: loadingCandidates } = useQuery({
-    queryKey: ['candidates', { mailboxId }],
-    queryFn: () => fetchCandidates({ mailboxId, limit: 500 }),
+  // Counts come from the server over every candidate, not a 500-row sample
+  // (M18). Keyed under 'candidates' so candidate mutations refresh them.
+  const { data: countsData, isLoading: loadingCandidates } = useQuery({
+    queryKey: ['candidates', 'counts', { mailboxId }],
+    queryFn: () => fetchCandidateCounts({ mailboxId }),
     staleTime: 30_000,
   });
 
+  // Only the quick-triage rows are downloaded; the pill uses meta.total.
   const { data: draftsData, isLoading: loadingDrafts } = useQuery({
-    queryKey: ['drafts', { mailboxId }],
-    queryFn: () => fetchDrafts({ limit: 500, mailboxId }),
+    queryKey: ['drafts', 'triage', { mailboxId }],
+    queryFn: () => fetchDrafts({ status: 'PENDING', limit: 5, mailboxId }),
     staleTime: 30_000,
   });
 
@@ -888,21 +890,16 @@ export default function Dashboard({
     retry: 1,
   });
 
-  const candidates = candidatesData?.data ?? [];
+  const counts = countsData?.data;
   const allDrafts = draftsData?.data ?? [];
   const mailboxes = mailboxesData?.data ?? [];
   const syncHealth = syncHealthData?.data ?? [];
 
-  const awaitingReply = candidates.filter((c) => {
-    if (!c.role) return false; // no role = spam/noise, don't count
-    const status =
-      c.replyStatus ??
-      (c.repliedAt ? 'REPLIED' : c.threads?.length ? 'AWAITING_REPLY' : 'NEW');
-    return status === 'AWAITING_REPLY';
-  }).length;
-  const needsReview = candidates.filter((c) => c.status === 'NEEDS_REVIEW').length;
+  // Role-less candidates (spam/noise) are excluded server-side.
+  const awaitingReply = counts?.awaitingReply ?? 0;
+  const needsReview = counts?.needsReview ?? 0;
   const pendingDrafts = allDrafts.filter((d) => d.status === 'PENDING');
-  const pendingDraftCount = pendingDrafts.length;
+  const pendingDraftCount = draftsData?.meta.total ?? pendingDrafts.length;
 
   // Top 5 most-recent pending drafts for the quick triage panel
   const triageDrafts = useMemo(
@@ -916,18 +913,12 @@ export default function Dashboard({
     [pendingDrafts]
   );
 
-  const mailboxCandidateMap: Record<string, Candidate[]> = {};
-  for (const c of candidates) {
-    if (!c.mailboxId) continue;
-    if (!mailboxCandidateMap[c.mailboxId]) mailboxCandidateMap[c.mailboxId] = [];
-    mailboxCandidateMap[c.mailboxId].push(c);
-  }
-
+  const candidateCountByMailbox: Record<string, number> = {};
   const pendingDraftCountByMailbox: Record<string, number> = {};
-  for (const d of pendingDrafts) {
-    const mbId = d.thread?.mailbox?.id;
-    if (!mbId) continue;
-    pendingDraftCountByMailbox[mbId] = (pendingDraftCountByMailbox[mbId] ?? 0) + 1;
+  for (const row of counts?.byMailbox ?? []) {
+    if (!row.mailboxId) continue;
+    candidateCountByMailbox[row.mailboxId] = row.candidates;
+    pendingDraftCountByMailbox[row.mailboxId] = row.pendingDrafts;
   }
 
   const healthSummary = summarizeHealth(syncHealth);
@@ -1012,7 +1003,7 @@ export default function Dashboard({
           testId="action-pill-awaiting"
           count={awaitingReply}
           label="awaiting reply"
-          hint="Sent — no candidate response yet"
+          hint="Candidate replied — you haven't yet"
           icon={Clock}
           tone="amber"
           loading={loadingCandidates}
@@ -1104,7 +1095,7 @@ export default function Dashboard({
               <AccountRow
                 key={mailbox.id}
                 mailbox={mailbox}
-                candidateCount={(mailboxCandidateMap[mailbox.id] ?? []).length}
+                candidateCount={candidateCountByMailbox[mailbox.id] ?? 0}
                 pendingDraftCount={pendingDraftCountByMailbox[mailbox.id] ?? 0}
                 needsReconnect={reconnectMailboxIds.has(mailbox.id)}
                 onSwitchToDrafts={onSwitchToDrafts}

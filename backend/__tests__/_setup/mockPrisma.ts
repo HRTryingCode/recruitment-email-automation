@@ -24,7 +24,7 @@ export interface MockPrisma {
   user: MockedMethods<'findUnique' | 'findMany' | 'create' | 'update'>;
   mailbox: MockedMethods<'findUnique' | 'findMany' | 'update' | 'updateMany' | 'upsert'>;
   candidate: MockedMethods<
-    'findUnique' | 'findMany' | 'count' | 'create' | 'update' | 'updateMany'
+    'findUnique' | 'findFirst' | 'findMany' | 'count' | 'create' | 'update' | 'updateMany' | 'upsert'
   >;
   emailDraft: MockedMethods<
     'findUnique' | 'findFirst' | 'findMany' | 'count' | 'create' | 'update' | 'updateMany'
@@ -52,11 +52,13 @@ export function buildPrismaMock(): MockPrisma {
     mailbox: methods('findUnique', 'findMany', 'update', 'updateMany', 'upsert'),
     candidate: methods(
       'findUnique',
+      'findFirst',
       'findMany',
       'count',
       'create',
       'update',
-      'updateMany'
+      'updateMany',
+      'upsert'
     ),
     emailDraft: methods(
       'findUnique',

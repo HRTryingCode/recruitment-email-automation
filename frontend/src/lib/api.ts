@@ -75,6 +75,9 @@ export interface Candidate {
   mailbox?: Pick<Mailbox, 'id' | 'emailAddress' | 'provider'>;
   threads?: EmailThread[];
   repliedAt?: string | null;
+  /** Candidate's latest message; awaiting reply = this > lastOutboundAt. */
+  lastInboundAt?: string | null;
+  lastOutboundAt?: string | null;
   replyStatus?: ReplyStatus;
   createdAt: string;
   updatedAt: string;
@@ -175,16 +178,51 @@ interface SingleResponse<T> {
 }
 
 // Candidates
+export type CandidateSortColumn =
+  | 'name'
+  | 'email'
+  | 'company'
+  | 'role'
+  | 'status'
+  | 'createdAt'
+  | 'updatedAt'
+  | 'lastInboundAt';
+
 export async function fetchCandidates(filters?: {
   status?: string;
+  replyStatus?: ReplyStatus;
   mailboxId?: string;
   page?: number;
   limit?: number;
   includeIgnored?: boolean;
   search?: string;
+  sort?: CandidateSortColumn;
+  dir?: 'asc' | 'desc';
 }): Promise<PaginatedResponse<Candidate>> {
   const res = await api.get('/candidates', { params: filters });
   return res.data as PaginatedResponse<Candidate>;
+}
+
+export interface CandidateCounts {
+  candidates: number;
+  awaitingReply: number;
+  needsReview: number;
+  pendingDrafts: number;
+  byMailbox: Array<{
+    mailboxId: string | null;
+    candidates: number;
+    awaitingReply: number;
+    needsReview: number;
+    pendingDrafts: number;
+  }>;
+}
+
+/** Server-side pipeline counts for the dashboard (M18). */
+export async function fetchCandidateCounts(filters?: {
+  mailboxId?: string;
+}): Promise<SingleResponse<CandidateCounts>> {
+  const res = await api.get('/candidates/counts', { params: filters });
+  return res.data as SingleResponse<CandidateCounts>;
 }
 
 export async function fetchCandidate(id: string): Promise<SingleResponse<Candidate>> {
@@ -321,8 +359,18 @@ export async function dictateDraft(id: string, notes: string): Promise<SingleRes
 }
 
 // Threads
-export async function generateDraftForThread(threadId: string): Promise<SingleResponse<EmailDraft>> {
-  const res = await api.post(`/emails/threads/${threadId}/draft`);
+/**
+ * Generate a draft for a thread. `classification` is a recruiter's triage
+ * decision (M17) and replaces the server's re-classification.
+ */
+export async function generateDraftForThread(
+  threadId: string,
+  classification?: 'INTERESTED' | 'NOT_INTERESTED' | 'NEUTRAL'
+): Promise<SingleResponse<EmailDraft>> {
+  const res = await api.post(
+    `/emails/threads/${threadId}/draft`,
+    classification ? { classification } : undefined
+  );
   return res.data as SingleResponse<EmailDraft>;
 }
 

@@ -131,10 +131,56 @@ export interface ClassificationResult {
   isFallback?: boolean;
 }
 
+/** Token usage as reported by the Messages API, stored per draft (M14). */
+export interface DraftUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number | null;
+  cache_creation_input_tokens: number | null;
+}
+
+/** What produced a draft: stored on EmailDraft so outcomes can be compared (M14). */
+export interface DraftGenerationMeta {
+  model: string;
+  promptVersion: string;
+  usage: DraftUsage | null;
+}
+
 export interface DraftReplyResult {
   subject: string;
   bodyText: string;
   bodyHtml: string;
+  meta?: DraftGenerationMeta;
+}
+
+/**
+ * Bump the matching entry whenever a prompt's wording changes, so stored
+ * drafts can be grouped by the prompt that wrote them (M14).
+ */
+export const PROMPT_VERSIONS = {
+  classify: 'classify-2026-10-22',
+  handoff: 'handoff-2026-10-22',
+  reply: 'reply-2026-10-22',
+  rewrite: 'rewrite-2026-10-22',
+} as const;
+
+function draftMeta(
+  model: string,
+  promptVersion: string,
+  usage: Partial<DraftUsage> | null | undefined
+): DraftGenerationMeta {
+  return {
+    model,
+    promptVersion,
+    usage: usage
+      ? {
+          input_tokens: usage.input_tokens ?? 0,
+          output_tokens: usage.output_tokens ?? 0,
+          cache_read_input_tokens: usage.cache_read_input_tokens ?? null,
+          cache_creation_input_tokens: usage.cache_creation_input_tokens ?? null,
+        }
+      : null,
+  };
 }
 
 export interface ExampleReply {
@@ -351,7 +397,7 @@ export async function classifyReply(
   let response;
   try {
     response = await client.messages.create({
-      model: 'claude-sonnet-4-6',
+      model: config.claudeClassifierModel,
       max_tokens: 1024,
       system: CACHED_SYSTEM,
       messages: [
@@ -447,13 +493,33 @@ function parseDraftReply(text: string, subject: string | null): DraftReplyResult
 // - 'ethan_interviews_sofia_schedules': Ethan + Influencer Marketing — Ethan interviews, Sofia handles scheduling
 export type HandoffType = 'coordinator' | 'sofia_interviews' | 'ethan_interviews_sofia_schedules';
 
-export function getHandoffType(mailboxEmail: string, candidateRole: string | null): HandoffType {
-  const email = mailboxEmail.toLowerCase();
-  const isEthan = email.includes('ethan');
-  if (!isEthan) return 'coordinator';
+/**
+ * Whose hand-off rules a mailbox follows. Keyed by full address (M4): a
+ * substring match on 'ethan' missed emaenza@, Ethan's main inbox.
+ * Mailbox.handoffProfile, when set, overrides this map.
+ */
+export type HandoffProfile = 'ethan' | 'coordinator';
+
+const HANDOFF_PROFILE_BY_ADDRESS: Record<string, HandoffProfile> = {
+  'emaenza@archive.com': 'ethan',
+  'ethanmaenza@archive.com': 'ethan',
+};
+
+export function getHandoffType(
+  mailboxEmail: string,
+  candidateRole: string | null,
+  handoffProfile?: string | null
+): HandoffType {
+  const profile =
+    handoffProfile === 'ethan' || handoffProfile === 'coordinator'
+      ? handoffProfile
+      : HANDOFF_PROFILE_BY_ADDRESS[mailboxEmail.trim().toLowerCase()] ?? 'coordinator';
+  if (profile !== 'ethan') return 'coordinator';
   const role = (candidateRole ?? '').toLowerCase();
-  const isInfluencer = role.includes('influencer');
-  return isInfluencer ? 'ethan_interviews_sofia_schedules' : 'sofia_interviews';
+  if (role.includes('influencer')) return 'ethan_interviews_sofia_schedules';
+  if (/\bcsm\b/.test(role) || role.includes('customer success')) return 'sofia_interviews';
+  // Unknown role under Ethan: don't claim who interviews.
+  return 'coordinator';
 }
 
 function handoffInstruction(type: HandoffType, ccName: string, ccEmail: string): string {
@@ -484,8 +550,9 @@ export async function generateHandoffDraftReply(
   const handoffType = thread.handoffType ?? 'coordinator';
   const loopInExample = handoffInstruction(handoffType, thread.ccName, thread.ccEmail);
 
+  const model = config.claudeDraftModel;
   const response = await client.messages.create({
-    model: 'claude-sonnet-4-6',
+    model,
     max_tokens: 1024,
     system: CACHED_SYSTEM,
     messages: [
@@ -527,7 +594,10 @@ Requirements:
     throw new Error('No text response from Claude');
   }
 
-  return parseDraftReply(textContent.text, replySubject(thread.subject));
+  return {
+    ...parseDraftReply(textContent.text, replySubject(thread.subject)),
+    meta: draftMeta(model, PROMPT_VERSIONS.handoff, response.usage),
+  };
 }
 
 export async function rewriteDraftWithNotes(
@@ -538,8 +608,9 @@ export async function rewriteDraftWithNotes(
 ): Promise<DraftReplyResult> {
   const firstName = deriveFirstName(caller);
 
+  const model = config.claudeDraftModel;
   const response = await client.messages.create({
-    model: 'claude-sonnet-4-6',
+    model,
     max_tokens: 2048,
     system: CACHED_SYSTEM,
     messages: [
@@ -576,7 +647,10 @@ Requirements:
     throw new Error('No text response from Claude');
   }
 
-  return parseDraftReply(textContent.text, null);
+  return {
+    ...parseDraftReply(textContent.text, null),
+    meta: draftMeta(model, PROMPT_VERSIONS.rewrite, response.usage),
+  };
 }
 
 export async function generateDraftReply(
@@ -605,8 +679,9 @@ export async function generateDraftReply(
     examplesBlock = `\n\nSTYLE EXAMPLES — real replies ${firstName} has sent before. Mirror this exact writing style, length, and tone. If they are short, be short. If they skip pleasantries, skip them:\n\n${exampleLines}`;
   }
 
+  const model = config.claudeDraftModel;
   const response = await client.messages.create({
-    model: 'claude-sonnet-4-6',
+    model,
     max_tokens: 2048,
     system: CACHED_SYSTEM,
     messages: [
@@ -649,5 +724,8 @@ Requirements:
     throw new Error('No text response from Claude');
   }
 
-  return parseDraftReply(textContent.text, replySubject(thread.subject));
+  return {
+    ...parseDraftReply(textContent.text, replySubject(thread.subject)),
+    meta: draftMeta(model, PROMPT_VERSIONS.reply, response.usage),
+  };
 }

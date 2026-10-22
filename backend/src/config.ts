@@ -23,7 +23,15 @@ interface Config {
   draftCcEmail: string;
   /** Company email domains. Senders on these are colleagues, never candidates. */
   internalDomains: string[];
+  /** Model for classifyReply. Override with CLAUDE_CLASSIFIER_MODEL. */
+  claudeClassifierModel: string;
+  /** Model for draft generation / rewrites. Override with CLAUDE_DRAFT_MODEL. */
+  claudeDraftModel: string;
 }
+
+// The model prod has always run. Changing it is a deliberate env change, not
+// a side effect of a deploy (L13).
+const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-6';
 
 const PLACEHOLDER_JWT_SECRET = 'default-dev-secret-change-in-production';
 
@@ -164,4 +172,6 @@ export const config: Config = {
   nodeEnv: process.env.NODE_ENV ?? 'development',
   draftCcEmail: process.env.DRAFT_CC_EMAIL ?? 'sofia@archive.com',
   internalDomains: parseInternalDomains(process.env.INTERNAL_DOMAINS),
+  claudeClassifierModel: process.env.CLAUDE_CLASSIFIER_MODEL || DEFAULT_CLAUDE_MODEL,
+  claudeDraftModel: process.env.CLAUDE_DRAFT_MODEL || DEFAULT_CLAUDE_MODEL,
 };
