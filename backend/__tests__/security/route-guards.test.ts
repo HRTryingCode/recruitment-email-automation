@@ -89,6 +89,11 @@ const MANIFEST: Record<string, Guard> = {
   'POST /api/drafts/batch-send': 'auth',
   // U0 inbox queue.
   'GET /api/inbox/': 'auth',
+  // U0 saved views: team-shared ones are admin-only, checked in-handler.
+  'GET /api/views/': 'auth',
+  'POST /api/views/': 'auth',
+  'PATCH /api/views/:id': 'auth',
+  'DELETE /api/views/:id': 'auth',
 
   'GET /api/internal/sync-health': 'auth',
 
