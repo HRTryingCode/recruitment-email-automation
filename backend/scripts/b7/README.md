@@ -1,6 +1,6 @@
 # B7 data backfills (NOT RUN)
 
-Run these by hand, in order, after `11_candidate_state` is applied, and only
+Run these by hand, in order, after `9c_candidate_state` is applied, and only
 with explicit per-session authorization for writes to prod Supabase.
 Each file opens with read-only preview SELECTs, and its writes sit inside one
 `BEGIN … COMMIT`. Run the preview, check the numbers, then run the
