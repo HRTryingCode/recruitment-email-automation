@@ -21,12 +21,15 @@ type Guard = 'public' | 'pubsub' | 'cron' | 'oauth' | 'auth' | 'admin';
 
 const MANIFEST: Record<string, Guard> = {
   'GET /api/health/': 'public',
+  // B1 uptime probe: unauthenticated, returns issue counts only (no ids/addresses).
+  'GET /api/health/deep': 'public',
   'POST /api/auth/google': 'public',
   'GET /api/auth/me': 'auth',
   'POST /api/webhooks/gmail': 'pubsub',
   'GET /api/internal/cron/renew-watches': 'cron',
   'GET /api/internal/cron/reconcile': 'cron',
   'GET /api/internal/cron/purge-orphan-bodies': 'cron',
+  'GET /api/internal/cron/watchdog': 'cron',
   'GET /api/mailboxes/gmail/callback': 'oauth',
 
   'GET /api/mailboxes/': 'auth',
