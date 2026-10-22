@@ -42,7 +42,7 @@ describe('Settings → Integrations', () => {
     vi.mocked(leverApi.fetchGemStatus).mockResolvedValue({ status: 'NOT_CONNECTED', lastError: null });
     vi.mocked(leverApi.fetchLeverMe).mockResolvedValue({ configured: false, createEnabled: false, appEmail: null, leverUser: null });
     wrap(<IntegrationsSettings />);
-    expect(await screen.findByText("Lever isn't connected. An admin needs to add the Lever API key in Vercel.")).toBeInTheDocument();
+    expect(await screen.findByText("Lever isn't connected yet. Ask an admin to connect Lever.")).toBeInTheDocument();
     expect(screen.queryByText('Not configured')).not.toBeInTheDocument();
   });
 
@@ -52,7 +52,7 @@ describe('Settings → Integrations', () => {
       configured: true, createEnabled: false, appEmail: 'rae@archive.com', leverUser: { id: 'lu1', name: 'Rae R' },
     });
     wrap(<IntegrationsSettings />);
-    expect(await screen.findByText(/an admin needs to turn it on in Vercel/i)).toBeInTheDocument();
+    expect(await screen.findByText(/ask an admin to turn on add to lever/i)).toBeInTheDocument();
   });
 
   it('explains a signed-in user with no matching Lever account', async () => {

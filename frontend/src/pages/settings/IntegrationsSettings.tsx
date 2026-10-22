@@ -51,13 +51,13 @@ export default function IntegrationsSettings() {
               <Row label="Connection">
                 <Badge variant={me.configured ? 'success' : 'secondary'}>{me.configured ? 'Connected' : 'Not connected'}</Badge>
               </Row>
-              {!me.configured && <Note>Lever isn't connected. An admin needs to add the Lever API key in Vercel.</Note>}
+              {!me.configured && <Note>Lever isn't connected yet. Ask an admin to connect Lever.</Note>}
               <Row label="Add to Lever">
                 <Badge variant={me.createEnabled ? 'success' : 'secondary'}>{me.createEnabled ? 'On' : 'Off'}</Badge>
               </Row>
               {me.configured && !me.createEnabled && (
                 <Note>
-                  The Add to Lever button is hidden for everyone. An admin needs to turn it on in Vercel.
+                  The Add to Lever button is hidden for everyone. Ask an admin to turn on Add to Lever.
                 </Note>
               )}
               {me.leverUser && <Row label="Your Lever user">{me.leverUser.name ?? me.leverUser.id}</Row>}

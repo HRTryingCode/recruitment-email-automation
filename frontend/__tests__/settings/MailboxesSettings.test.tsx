@@ -6,8 +6,10 @@ import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import MailboxesSettings from '../../src/pages/settings/MailboxesSettings';
 import { mailboxActionError } from '../../src/components/settings/MailboxHealthTable';
+import { TooltipProvider } from '../../src/components/ui/tooltip';
 import type { MailboxSyncHealth } from '../../src/lib/api';
 import * as api from '../../src/lib/api';
+import { clearUser, setUser } from '../../src/lib/auth';
 import * as toast from '../../src/lib/toast';
 
 vi.mock('../../src/lib/api', () => ({
@@ -19,6 +21,7 @@ vi.mock('../../src/lib/api', () => ({
   addGmailMailbox: vi.fn(),
   fetchSenderCoverage: vi.fn(),
   fetchExpectedSenders: vi.fn(),
+  deleteMailbox: vi.fn(),
 }));
 vi.mock('../../src/lib/toast', async (orig) => ({
   ...(await orig<typeof import('../../src/lib/toast')>()),
@@ -46,7 +49,9 @@ function renderPage() {
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter>
-        <MailboxesSettings />
+        <TooltipProvider>
+          <MailboxesSettings />
+        </TooltipProvider>
       </MemoryRouter>
     </QueryClientProvider>
   );
@@ -57,17 +62,90 @@ beforeEach(() => {
   vi.mocked(api.fetchMailboxes).mockResolvedValue({ success: true, data: [] });
   vi.mocked(api.fetchSyncHealth).mockResolvedValue({ success: true, data: [ROW, REVOKED as MailboxSyncHealth] });
   vi.mocked(api.fetchSenderCoverage).mockRejectedValue(new Error('hidden'));
+  clearUser();
 });
+
+const asAdmin = () => setUser({ id: 'u1', email: 'andriy@archive.com', name: 'Andriy', role: 'admin' } as never);
 
 describe('Settings → Mailboxes', () => {
   it('renders the health table with per-mailbox state and a reconnect action', async () => {
     renderPage();
     expect(await screen.findByText('sofia@archive.com')).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: /live updates/i })).toBeInTheDocument();
     expect(screen.getByText('1 mailbox: reconnect required')).toBeInTheDocument();
     expect(screen.getByText(/invalid_grant/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Reconnect aaron@archive.com' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Reconnect sofia@archive.com' })).not.toBeInTheDocument();
+  });
+
+  it('shows only Mailbox / Status / Actions by default; the rest sits behind Details', async () => {
+    renderPage();
+    await screen.findByText('sofia@archive.com');
+    expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Mailbox', 'Status', 'Actions']);
+    // No raw ids or sync counters until a row's Details is opened.
+    expect(screen.queryByText('mb-1')).not.toBeInTheDocument();
+    expect(screen.queryByText(/live updates renew in/i)).not.toBeInTheDocument();
+
+    const details = screen.getByRole('button', { name: 'Details for sofia@archive.com' });
+    expect(details).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.click(details);
+    expect(details).toHaveAttribute('aria-expanded', 'true');
+    const panel = await screen.findByTestId('mailbox-details-mb-1');
+    expect(within(panel).getByText('mb-1')).toBeInTheDocument();
+    expect(within(panel).getByText(/live updates renew in/i)).toBeInTheDocument();
+    expect(within(panel).getByText('5d')).toBeInTheDocument();
+    expect(within(panel).getByText('Missed emails found')).toBeInTheDocument();
+    expect(within(panel).getByText('100')).toBeInTheDocument();
+    expect(screen.queryByTestId('mailbox-details-mb-2')).not.toBeInTheDocument();
+  });
+
+  it('Re-classify and Missed emails found explain themselves in a tooltip', async () => {
+    renderPage();
+    const reclassify = await screen.findByRole('button', { name: /re-classify unlinked threads in sofia/i });
+    await userEvent.hover(reclassify);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(/threads that aren't linked to a candidate/i);
+    await userEvent.unhover(reclassify);
+    await userEvent.click(screen.getByRole('button', { name: 'Details for sofia@archive.com' }));
+    const help = await screen.findByRole('button', { name: 'What is Missed emails found?' });
+    await userEvent.hover(help);
+    await waitFor(() => expect(screen.getByRole('tooltip')).toHaveTextContent(/catch-up sync found/i));
+  });
+
+  it('Disconnect is admin-only', async () => {
+    renderPage();
+    await screen.findByText('sofia@archive.com');
+    expect(screen.queryByRole('button', { name: /^Disconnect/ })).not.toBeInTheDocument();
+  });
+
+  it('Disconnect confirms what happens, then disconnects', async () => {
+    asAdmin();
+    vi.mocked(api.deleteMailbox).mockResolvedValue({ success: true, message: 'Mailbox disconnected' });
+    renderPage();
+    await userEvent.click(await screen.findByRole('button', { name: 'Disconnect sofia@archive.com' }));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByRole('heading')).toHaveTextContent('Disconnect sofia@archive.com?');
+    expect(dialog).toHaveTextContent(/stops receiving live updates/i);
+    expect(dialog).toHaveTextContent(/already synced .* kept/i);
+    expect(api.deleteMailbox).not.toHaveBeenCalled();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Disconnect' }));
+    await waitFor(() => expect(api.deleteMailbox).toHaveBeenCalledWith('mb-1'));
+    await waitFor(() => expect(toast.toastSuccess).toHaveBeenCalledWith('Mailbox disconnected', 'sofia@archive.com'));
+  });
+
+  it('Cancel leaves the mailbox connected; inactive mailboxes have no Disconnect', async () => {
+    asAdmin();
+    vi.mocked(api.fetchSyncHealth).mockResolvedValue({ success: true, data: [ROW, { ...ROW, mailboxId: 'mb-9', emailAddress: 'old@archive.com', isActive: false }] });
+    renderPage();
+    await userEvent.click(await screen.findByRole('button', { name: 'Disconnect sofia@archive.com' }));
+    await userEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Cancel' }));
+    expect(api.deleteMailbox).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Disconnect old@archive.com' })).not.toBeInTheDocument();
+  });
+
+  it('the header action is "Connect Gmail mailbox"', async () => {
+    renderPage();
+    await screen.findByText('sofia@archive.com');
+    expect(screen.getByRole('button', { name: 'Connect Gmail mailbox' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add mailbox' })).not.toBeInTheDocument();
   });
 
   it('the resync spinner follows the real request', async () => {
@@ -120,6 +198,7 @@ describe('Settings → Mailboxes', () => {
     vi.mocked(api.fetchSyncHealth).mockResolvedValue({ success: true, data: [ROW, FAILING, EXPIRED] as MailboxSyncHealth[] });
     const { container } = renderPage();
     await screen.findByText('paul@archive.com');
+    for (const b of screen.getAllByRole('button', { name: /^Details for/ })) await userEvent.click(b);
     expect(container.textContent).not.toMatch(/reconcil|drift|webhook|watch|vercel/i);
     expect(screen.getByText(/catch-up sync failed 4 times in a row/i)).toBeInTheDocument();
   });
@@ -140,12 +219,14 @@ describe('Settings → Mailboxes', () => {
     expect(await screen.findByText('sofia@archive.com')).toBeInTheDocument();
   });
 
-  it('with no mailboxes, the empty state has a Connect Gmail button that starts sign-in', async () => {
+  it('with no mailboxes, the empty state has a Connect Gmail mailbox button that starts sign-in', async () => {
     vi.mocked(api.fetchSyncHealth).mockResolvedValue({ success: true, data: [] });
     vi.mocked(api.addGmailMailbox).mockReturnValue(new Promise(() => {}));
     renderPage();
-    expect(await screen.findByText('Connect a Gmail mailbox')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Connect Gmail' }));
+    expect(await screen.findByRole('heading', { name: 'Connect a Gmail mailbox' })).toBeInTheDocument();
+    expect(screen.getByText(/no mailbox is connected yet/i)).toBeInTheDocument();
+    const buttons = screen.getAllByRole('button', { name: 'Connect Gmail mailbox' });
+    await userEvent.click(buttons[buttons.length - 1]!);
     expect(api.addGmailMailbox).toHaveBeenCalledTimes(1);
   });
 

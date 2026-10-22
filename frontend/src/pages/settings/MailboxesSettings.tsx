@@ -6,7 +6,7 @@ import { startGmailReconnect } from '../../lib/reconnect';
 import MailboxHealthTable from '../../components/settings/MailboxHealthTable';
 import ResyncAllButton from '../../components/settings/ResyncAllButton';
 import UnmonitoredSenders from '../../components/UnmonitoredSenders';
-import ConnectMailboxCard from '../../components/shell/ConnectMailboxCard';
+import ConnectMailboxCard, { CONNECT_MAILBOX_LABEL } from '../../components/shell/ConnectMailboxCard';
 import NotificationsSettings from '../../components/settings/NotificationsSettings';
 import QueryError from '../../components/shell/QueryError';
 import { Badge } from '../../components/ui/badge';
@@ -39,7 +39,7 @@ export default function MailboxesSettings() {
             <ResyncAllButton mailboxes={mailboxes} />
             <Button size="sm" onClick={() => void startGmailReconnect()}>
               <Plus data-icon="inline-start" />
-              Add mailbox
+              {CONNECT_MAILBOX_LABEL}
             </Button>
           </CardAction>
         </CardHeader>
@@ -54,7 +54,7 @@ export default function MailboxesSettings() {
               retrying={isFetching}
             />
           ) : health.length === 0 ? (
-            <ConnectMailboxCard />
+            <ConnectMailboxCard context="settings" />
           ) : (
             <MailboxHealthTable data={health} />
           )}

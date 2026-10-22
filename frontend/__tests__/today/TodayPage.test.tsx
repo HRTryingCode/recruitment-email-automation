@@ -135,8 +135,8 @@ describe('Today page', () => {
     vi.mocked(api.fetchSyncHealth).mockResolvedValue({ success: true, data: [] });
     renderPage();
     expect(await screen.findByText(/nothing waiting/i)).toBeInTheDocument();
-    expect(screen.getByText('No mailboxes connected')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /connect a mailbox/i })).toHaveAttribute('href', '/settings/mailboxes');
+    // No-mailbox onboarding is AppShell's ConnectMailboxCard; Today has no second empty state (U2a).
+    expect(screen.queryByText('No mailboxes connected')).not.toBeInTheDocument();
     expect(screen.getByText(/no activity in the last 14 days/i)).toBeInTheDocument();
   });
 

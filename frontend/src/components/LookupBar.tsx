@@ -33,6 +33,7 @@ import { Kbd, KbdGroup } from './ui/kbd';
 import { Spinner } from './ui/spinner';
 import LookupIntegrations from './LookupIntegrations';
 import { NAV_ITEMS } from './shell/nav';
+import { CONNECT_MAILBOX_LABEL } from './shell/ConnectMailboxCard';
 
 // CommandDialog's screen-reader title/description (not hover tooltips).
 const PALETTE_TITLE = 'Look up a person or run a command';
@@ -273,7 +274,7 @@ export default function LookupBar() {
           icon: RefreshCw,
           run: () => void startGmailReconnect(),
         })),
-        { id: 'add-mailbox', label: 'Connect a mailbox', icon: MailPlus, run: () => void startGmailReconnect() },
+        { id: 'add-mailbox', label: CONNECT_MAILBOX_LABEL, icon: MailPlus, run: () => void startGmailReconnect() },
         {
           id: 'shortcuts',
           label: 'Show shortcuts',

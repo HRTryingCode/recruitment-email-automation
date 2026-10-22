@@ -73,11 +73,20 @@ describe('first run — no mailboxes connected', () => {
     expect(screen.queryByText(/inbox zero/i)).not.toBeInTheDocument();
   });
 
+  it.each([
+    ['/inbox', 'inbox', /candidate replies show up here/i],
+    ['/today', 'today', /today's summary fills in/i],
+  ])('%s explains what the mailbox unlocks there', async (path, context, copy) => {
+    renderAt(path);
+    expect(await screen.findByText(copy)).toBeInTheDocument();
+    expect(document.querySelector(`[data-context=${context}]`)).not.toBeNull();
+  });
+
   it('the primary button starts the Gmail connect flow', async () => {
     const assign = vi.fn();
     vi.stubGlobal('location', { ...window.location, assign });
     renderAt('/inbox');
-    await userEvent.click(await screen.findByRole('button', { name: 'Connect Gmail' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Connect Gmail mailbox' }));
     await waitFor(() => expect(api.addGmailMailbox).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(assign).toHaveBeenCalledWith('https://accounts.google.com/x'));
     vi.unstubAllGlobals();
