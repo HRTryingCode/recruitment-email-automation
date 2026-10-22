@@ -36,6 +36,10 @@ interface Options {
   setItem: (key?: string) => void;
   /** Our own action is about to put replies back (undo / restore): not "new replies". */
   onLocalChange?: () => void;
+  /** Replies just scheduled to send (watched until they go out or fail). */
+  onSent?: (sends: Array<{ id: string; name: string }>) => void;
+  /** Candidate name for an item key (batch sends, announcements). */
+  nameOf?: (key: string) => string | undefined;
 }
 
 /**
@@ -43,18 +47,18 @@ interface Options {
  * Each ends by auto-advancing to the next reply; a 423 stops and surfaces
  * a blocking LockState whose retry replays the action with override.
  */
-export function useInboxActions({ keys, setItem, onLocalChange }: Options) {
+export function useInboxActions({ keys, setItem, onLocalChange, onSent, nameOf }: Options) {
   const qc = useQueryClient();
   const [lock, setLock] = useState<LockState | null>(null);
   const [busy, setBusy] = useState<'send' | 'rewrite' | null>(null);
   const lastSend = useRef<{ id: string; name: string; until: number; toastId: string | number } | null>(null);
   const keysRef = useRef(keys);
-  const onLocalChangeRef = useRef(onLocalChange);
+  const cbs = useRef({ onLocalChange, onSent, nameOf });
   useLayoutEffect(() => {
     keysRef.current = keys;
-    onLocalChangeRef.current = onLocalChange;
+    cbs.current = { onLocalChange, onSent, nameOf };
   });
-  const localChange = useCallback(() => onLocalChangeRef.current?.(), []);
+  const localChange = useCallback(() => cbs.current.onLocalChange?.(), []);
 
   const refreshInbox = useCallback(() => qc.invalidateQueries({ queryKey: ['inbox'] }), [qc]);
   const advanceFrom = useCallback(
@@ -120,6 +124,7 @@ export function useInboxActions({ keys, setItem, onLocalChange }: Options) {
           ...(override ? { override: true } : {}),
         });
         onSent?.();
+        cbs.current.onSent?.([{ id: draft.id, name }]);
         const toastId = showUndoToast({ title: `Sending to ${name}`, seconds: UNDO_SECONDS, onUndo: () => void undo(draft.id) });
         lastSend.current = { id: draft.id, name, until: Date.now() + UNDO_SECONDS * 1000, toastId };
         advanceFrom(draft.id);
@@ -271,6 +276,7 @@ export function useInboxActions({ keys, setItem, onLocalChange }: Options) {
       try {
         const res = await batchSendDrafts(draftIds, UNDO_SECONDS);
         const { scheduled } = res.data;
+        cbs.current.onSent?.(scheduled.map((id) => ({ id, name: cbs.current.nameOf?.(id) ?? 'a candidate' })));
         if (scheduled.length > 0) {
           showUndoToast({
             title: `Sending ${scheduled.length} ${scheduled.length === 1 ? 'reply' : 'replies'}`,

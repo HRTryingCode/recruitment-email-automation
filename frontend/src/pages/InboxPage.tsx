@@ -20,6 +20,7 @@ import { useDraftPresence } from '@/hooks/useDraftPresence';
 import { useInboxActions } from '@/hooks/useInboxActions';
 import { useInboxList } from '@/hooks/useInboxList';
 import { useNewReplyAlerts } from '@/hooks/useNewReplyAlerts';
+import { useSendWatch } from '@/hooks/useSendWatch';
 import { useInboxShortcuts } from '@/hooks/useInboxShortcuts';
 import { useInboxUrlState } from '@/hooks/useInboxUrlState';
 import { useTriageDraft, type TriageResult } from '@/hooks/useTriageDraft';
@@ -118,7 +119,13 @@ export default function InboxPage() {
   const editor = useDraftEditor(draft);
   const presence = useDraftPresence(draftId, editor.focused || editor.dirty ? 'editing' : 'viewing');
   const alerts = useNewReplyAlerts(counts, `${mailboxId ?? ''}|${roles.join('\n')}`);
-  const actions = useInboxActions({ keys, setItem: openItem, onLocalChange: alerts.resync });
+  // A send that fails lands in Needs review; Open goes straight there.
+  const openFailed = useCallback((id: string) => setPlace('needs_review', id), [setPlace]);
+  const refreshList = useCallback(() => void qc.invalidateQueries({ queryKey: ['inbox'] }), [qc]);
+  const sendWatch = useSendWatch(openFailed, refreshList);
+  const nameByKey = useMemo(() => new Map(items.map((i) => [itemKey(i), i.candidate?.name ?? 'Unknown candidate'])), [items]);
+  const nameOf = useCallback((key: string) => nameByKey.get(key), [nameByKey]);
+  const actions = useInboxActions({ keys, setItem: openItem, onLocalChange: alerts.resync, onSent: sendWatch.watch, nameOf });
 
   const itemIdRef = useRef(itemId);
   const listViewRef = useRef(listView);
