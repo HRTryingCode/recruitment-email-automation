@@ -7,13 +7,21 @@
 // registers our redirect URI (gemRedirectUri()) itself.
 //
 // Gem is OPTIONAL and UNSTABLE from our point of view (an MCP tool surface,
-// not a versioned API): every lookup is time-boxed (10s), tool output is
+// not a versioned API): every lookup is time-boxed (10s overall, 8s per MCP
+// call, 8s per OAuth request), tool output is
 // parsed defensively, and any surprise degrades to UNAVAILABLE so the Add
 // to Lever dialog still works with manual input. Read-only: only the
 // `search` and `get_person` tools are ever called.
 //
 // Tokens, the PKCE verifier and résumé URLs are never logged. Tokens are
 // stored encrypted (lib/crypto) in GemConnection.
+//
+// Speed (H5): a prod lookup took 13.6s, mostly per-request setup. Within a
+// function instance we now keep the OAuth discovery metadata (1h), one
+// connected MCP client per user (reused while its access token is unchanged
+// and it was used in the last 4 min), and a single in-flight token refresh
+// per user; `get_person` calls for the top search hits run in parallel.
+// Every lookup reports per-step timings (GemLookup.timings).
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import {
@@ -37,6 +45,9 @@ export const GEM_MCP_URL = process.env.GEM_MCP_URL ?? 'https://mcp.gem.com/mcp';
 export const GEM_UNAVAILABLE_MESSAGE = 'Gem unavailable — paste LinkedIn manually';
 const GEM_SCOPE = 'openid email profile';
 const DEFAULT_TIMEOUT_MS = 10_000;
+const CALL_TIMEOUT_MS = 8_000;
+const OAUTH_TIMEOUT_MS = 8_000;
+const CLIENT_IDLE_MS = 4 * 60 * 1000;
 // Refresh a little before expiry so a token can't lapse mid-lookup.
 const REFRESH_SKEW_MS = 60_000;
 const DISCOVERY_TTL_MS = 60 * 60 * 1000;
@@ -51,7 +62,17 @@ export interface GemDeps {
   fetchFn?: FetchFn;
   /** Tests: an in-process MCP transport instead of HTTP to mcp.gem.com. */
   transportFactory?: (accessToken: string) => Transport;
+  /** Whole lookup (after the token). */
   timeoutMs?: number;
+  /** Each MCP tool call. */
+  callTimeoutMs?: number;
+}
+
+/** OAuth requests (discovery, refresh) get their own 8s cap: they run before the lookup timeout starts. */
+function timedFetch(fetchFn: FetchFn | undefined): FetchFn {
+  const f = fetchFn ?? fetch;
+  return ((input: Parameters<FetchFn>[0], init?: RequestInit) =>
+    f(input, { ...init, signal: init?.signal ?? AbortSignal.timeout(OAUTH_TIMEOUT_MS) })) as FetchFn;
 }
 
 /**
@@ -86,7 +107,7 @@ export function __resetGemDiscoveryCache(): void {
 
 async function discover(fetchFn?: FetchFn): Promise<DiscoveredInfo> {
   if (!discoveryCache || Date.now() - discoveryCache.at > DISCOVERY_TTL_MS) {
-    const info = await discoverOAuthServerInfo(GEM_MCP_URL, { fetchFn });
+    const info = await discoverOAuthServerInfo(GEM_MCP_URL, { fetchFn: timedFetch(fetchFn) });
     const metadata = info.authorizationServerMetadata;
     if (!metadata) throw new Error('Gem OAuth metadata not found');
     discoveryCache = { at: Date.now(), info: { ...info, authorizationServerMetadata: metadata } };
@@ -222,8 +243,15 @@ async function markNeedsReauth(userId: string, err: unknown, source: string): Pr
 
 export type GemTokenResult = { ok: true; token: string } | { ok: false; status: 'NOT_CONNECTED' | 'NEEDS_REAUTH' };
 
+/** One refresh per user at a time: Gem rotates refresh tokens, so a second concurrent refresh would fail. */
+const refreshing = new Map<string, Promise<GemTokenResult>>();
+
 /** Valid access token for `userId`, refreshing if it expires within 60s. */
 export async function getGemAccessToken(userId: string, deps: GemDeps = {}): Promise<GemTokenResult> {
+  return accessToken(userId, deps, {});
+}
+
+async function accessToken(userId: string, deps: GemDeps, stats: { refreshMs?: number }): Promise<GemTokenResult> {
   const row = await prisma.gemConnection.findUnique({ where: { userId } });
   if (!row?.tokens) return { ok: false, status: 'NOT_CONNECTED' };
   if (row.status === GEM_STATUS_NEEDS_REAUTH) return { ok: false, status: 'NEEDS_REAUTH' };
@@ -242,14 +270,32 @@ export async function getGemAccessToken(userId: string, deps: GemDeps = {}): Pro
     await markNeedsReauth(userId, new Error('Gem token expired and cannot be refreshed'), 'refresh');
     return { ok: false, status: 'NEEDS_REAUTH' };
   }
+  const t0 = Date.now();
+  let pending = refreshing.get(userId);
+  if (!pending) {
+    pending = refreshTokens(userId, row.clientRegistration as unknown as OAuthClientInformationFull, tokens.refresh_token, deps);
+    refreshing.set(userId, pending);
+    void pending.finally(() => refreshing.delete(userId));
+  }
+  const out = await pending;
+  stats.refreshMs = Date.now() - t0;
+  return out;
+}
+
+async function refreshTokens(
+  userId: string,
+  clientInformation: OAuthClientInformationFull,
+  refreshToken: string,
+  deps: GemDeps
+): Promise<GemTokenResult> {
   try {
     const info = await discover(deps.fetchFn);
     const fresh = await refreshAuthorization(info.authorizationServerUrl, {
       metadata: info.authorizationServerMetadata,
-      clientInformation: row.clientRegistration as unknown as OAuthClientInformationFull,
-      refreshToken: tokens.refresh_token,
+      clientInformation,
+      refreshToken,
       resource: resourceUrl(info),
-      fetchFn: deps.fetchFn,
+      fetchFn: timedFetch(deps.fetchFn),
     });
     await prisma.gemConnection.update({
       where: { userId },
@@ -272,6 +318,8 @@ export interface GemResume {
 }
 
 export interface GemPerson {
+  /** Gem's person ext_id (cached on Candidate.gemPersonId; lets later lookups skip search). */
+  id: string | null;
   name: string;
   title: string | null;
   company: string | null;
@@ -284,10 +332,27 @@ export interface GemPerson {
 
 export type GemLookupStatus = 'FOUND' | 'NOT_FOUND' | 'NOT_CONNECTED' | 'NEEDS_REAUTH' | 'UNAVAILABLE';
 
+/** Where a lookup's time went (ms). Logged on GEM_PREFILL; no PII. */
+export interface GemTimings {
+  /** DB read + decrypt + any refresh. */
+  tokenMs: number;
+  tokenRefreshMs: number;
+  /** MCP initialize handshake; 0 when a cached client was reused. */
+  mcpConnectMs: number;
+  searchMs: number;
+  /** All get_person calls (parallel). */
+  getPersonMs: number;
+  totalMs: number;
+  /** First lookup in this function instance (cold start, empty caches). */
+  cold: boolean;
+  clientReused: boolean;
+}
+
 export interface GemLookup {
   status: GemLookupStatus;
   person?: GemPerson;
   message?: string;
+  timings?: GemTimings;
 }
 
 /** Thrown inside a lookup when Gem's output doesn't look like we expect. */
@@ -350,6 +415,7 @@ export function parseGemPerson(entity: unknown): GemPerson | null {
   }
 
   return {
+    id: str(e.ext_id) ?? str(e.id),
     name,
     title: str(e.title),
     company: str(e.company),
@@ -386,42 +452,148 @@ function isUnauthorized(err: unknown): boolean {
   return e?.code === 401 || e?.name === 'UnauthorizedError';
 }
 
-/**
- * Best Gem match for `email`. Never throws: problems come back as
- * NOT_CONNECTED / NEEDS_REAUTH / UNAVAILABLE.
- */
-export async function lookupGemPerson(userId: string, email: string, deps: GemDeps = {}): Promise<GemLookup> {
-  const unavailable: GemLookup = { status: 'UNAVAILABLE', message: GEM_UNAVAILABLE_MESSAGE };
-  let token: GemTokenResult;
-  try {
-    token = await getGemAccessToken(userId, deps);
-  } catch (err) {
-    console.warn('[Gem] token lookup failed:', safeError(err).message);
-    return unavailable;
-  }
-  if (!token.ok) return { status: token.status };
+// ── MCP client reuse (per function instance) ───────────────────────────────
 
-  const normalized = email.trim().toLowerCase();
+interface CachedClient {
+  token: string;
+  client: Client;
+  connected: Promise<void>;
+  lastUsed: number;
+}
+
+const clients = new Map<string, CachedClient>();
+let instanceWarm = false;
+
+/** Tests only. */
+export function __resetGemClientCache(): void {
+  for (const entry of clients.values()) entry.client.close().catch(() => {});
+  clients.clear();
+  refreshing.clear();
+  instanceWarm = false;
+}
+
+function evictClient(userId: string, entry: CachedClient): void {
+  if (clients.get(userId) === entry) clients.delete(userId);
+  entry.client.close().catch(() => {});
+}
+
+/** A connected client for this user + token: the cached one when still usable, else a new one. */
+async function clientFor(
+  userId: string,
+  token: string,
+  deps: GemDeps
+): Promise<{ entry: CachedClient; reused: boolean; connectMs: number }> {
+  const now = Date.now();
+  const cached = clients.get(userId);
+  if (cached && cached.token === token && now - cached.lastUsed < CLIENT_IDLE_MS) {
+    cached.lastUsed = now;
+    await cached.connected;
+    return { entry: cached, reused: true, connectMs: 0 };
+  }
+  if (cached) evictClient(userId, cached);
+
   const client = new Client({ name: 'recruitment-email-automation', version: '1.0.0' });
   const transport =
-    deps.transportFactory?.(token.token) ??
+    deps.transportFactory?.(token) ??
     new StreamableHTTPClientTransport(new URL(GEM_MCP_URL), {
-      requestInit: { headers: { Authorization: `Bearer ${token.token}` } },
+      requestInit: { headers: { Authorization: `Bearer ${token}` } },
     });
+  const entry: CachedClient = { token, client, connected: client.connect(transport), lastUsed: now };
+  clients.set(userId, entry);
+  try {
+    await entry.connected;
+  } catch (err) {
+    evictClient(userId, entry);
+    throw err;
+  }
+  return { entry, reused: false, connectMs: Date.now() - now };
+}
+
+/**
+ * Best Gem match for `email`. Never throws: problems come back as
+ * NOT_CONNECTED / NEEDS_REAUTH / UNAVAILABLE. With `extId` (a cached Gem
+ * person id) the search is skipped; the email check still applies.
+ */
+export async function lookupGemPerson(
+  userId: string,
+  email: string,
+  deps: GemDeps & { extId?: string | null } = {}
+): Promise<GemLookup> {
+  const t0 = Date.now();
+  const cold = !instanceWarm;
+  instanceWarm = true;
+  const timings: GemTimings = {
+    tokenMs: 0,
+    tokenRefreshMs: 0,
+    mcpConnectMs: 0,
+    searchMs: 0,
+    getPersonMs: 0,
+    totalMs: 0,
+    cold,
+    clientReused: false,
+  };
+  const done = (out: GemLookup): GemLookup => {
+    timings.totalMs = Date.now() - t0;
+    return { ...out, timings };
+  };
+  const unavailable: GemLookup = { status: 'UNAVAILABLE', message: GEM_UNAVAILABLE_MESSAGE };
+
+  let token: GemTokenResult;
+  const stats: { refreshMs?: number } = {};
+  try {
+    token = await accessToken(userId, deps, stats);
+  } catch (err) {
+    console.warn('[Gem] token lookup failed:', safeError(err).message);
+    return done(unavailable);
+  } finally {
+    timings.tokenMs = Date.now() - t0;
+    timings.tokenRefreshMs = stats.refreshMs ?? 0;
+  }
+  if (!token.ok) return done({ status: token.status });
+
+  const normalized = email.trim().toLowerCase();
+  const callOpts = { timeout: deps.callTimeoutMs ?? CALL_TIMEOUT_MS };
+  let entry: CachedClient | undefined;
 
   const work = async (): Promise<GemLookup> => {
-    await client.connect(transport);
-    const search = toolJson(await client.callTool({ name: 'search', arguments: { kind: 'person', query: normalized, max_results: 5 } }));
-    if (!Array.isArray(search.results)) throw new GemShapeError('search.results');
-    const extIds = (search.results as unknown[])
-      .map((r) => (r && typeof r === 'object' ? str((r as Record<string, unknown>).ext_id) : null))
-      .filter((x): x is string => !!x)
-      .slice(0, 3);
-    for (const extId of extIds) {
-      const got = toolJson(await client.callTool({ name: 'get_person', arguments: { ext_id: extId, fields: ['work_history', 'resumes'] } }));
+    const got = await clientFor(userId, token.token, deps);
+    entry = got.entry;
+    timings.clientReused = got.reused;
+    timings.mcpConnectMs = got.connectMs;
+    const client = got.entry.client;
+
+    let extIds: string[];
+    if (deps.extId) {
+      extIds = [deps.extId];
+    } else {
+      const ts = Date.now();
+      const search = toolJson(
+        await client.callTool({ name: 'search', arguments: { kind: 'person', query: normalized, max_results: 5 } }, undefined, callOpts)
+      );
+      timings.searchMs = Date.now() - ts;
+      if (!Array.isArray(search.results)) throw new GemShapeError('search.results');
+      extIds = (search.results as unknown[])
+        .map((r) => (r && typeof r === 'object' ? str((r as Record<string, unknown>).ext_id) : null))
+        .filter((x): x is string => !!x)
+        .slice(0, 3);
+    }
+
+    // Independent reads: fetch all candidates at once, then take the first
+    // (in search order) whose emails include ours.
+    const tp = Date.now();
+    const people = await Promise.all(
+      extIds.map(async (extId) =>
+        toolJson(
+          await client.callTool({ name: 'get_person', arguments: { ext_id: extId, fields: ['work_history', 'resumes'] } }, undefined, callOpts)
+        )
+      )
+    );
+    timings.getPersonMs = Date.now() - tp;
+    for (const [i, got] of people.entries()) {
       if (got.found !== true) continue;
-      const person = parseGemPerson(got.entity);
-      if (!person) throw new GemShapeError('get_person.entity');
+      const parsed = parseGemPerson(got.entity);
+      if (!parsed) throw new GemShapeError('get_person.entity');
+      const person = { ...parsed, id: parsed.id ?? extIds[i]! };
       // A free-text search can match on name; when Gem lists emails, require ours.
       const emails = allStrings((got.entity as Record<string, unknown>).emails, ['email_address', 'email', 'value']);
       if (emails.length > 0 && !emails.includes(normalized)) continue;
@@ -438,18 +610,27 @@ export async function lookupGemPerson(userId: string, email: string, deps: GemDe
     const out = await Promise.race([work(), timeout]);
     if (out === 'timeout') {
       console.warn('[Gem] lookup timed out');
-      return unavailable;
+      if (entry) evictClient(userId, entry);
+      else {
+        const pending = clients.get(userId);
+        if (pending?.token === token.token) evictClient(userId, pending);
+      }
+      return done(unavailable);
     }
-    return out;
+    return done(out);
   } catch (err) {
+    // Shape errors are about Gem's output; anything else may be a dead session.
+    if (!(err instanceof GemShapeError)) {
+      const current = entry ?? clients.get(userId);
+      if (current) evictClient(userId, current);
+    }
     if (isUnauthorized(err)) {
       await markNeedsReauth(userId, err, 'mcp');
-      return { status: 'NEEDS_REAUTH' };
+      return done({ status: 'NEEDS_REAUTH' });
     }
     console.warn('[Gem] lookup degraded:', err instanceof GemShapeError ? `unexpected shape (${err.message})` : safeError(err).message);
-    return unavailable;
+    return done(unavailable);
   } finally {
     clearTimeout(timer);
-    client.close().catch(() => {});
   }
 }

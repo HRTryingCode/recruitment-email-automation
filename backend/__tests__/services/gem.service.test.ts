@@ -20,6 +20,7 @@ import {
   gemConnectionStatus,
   gemRedirectUri,
   __resetGemDiscoveryCache,
+  __resetGemClientCache,
 } from '../../src/services/gem.service';
 
 const mockPrisma = injected as unknown as MockPrisma;
@@ -121,6 +122,7 @@ function okConnection(extra: Record<string, unknown> = {}) {
 beforeEach(() => {
   resetPrismaMock(mockPrisma);
   __resetGemDiscoveryCache();
+  __resetGemClientCache();
   mockPrisma.gemConnection.upsert.mockResolvedValue({});
   mockPrisma.gemConnection.update.mockResolvedValue({});
   mockPrisma.gemConnection.updateMany.mockResolvedValue({ count: 1 });
@@ -244,6 +246,7 @@ describe('lookupGemPerson (fake GeMCP server)', () => {
     const out = await lookupGemPerson(USER, 'jane@example.com', { transportFactory: gem.factory });
     expect(out.status).toBe('FOUND');
     expect(out.person).toEqual({
+      id: 'g-1',
       name: 'Jane Doe',
       title: 'Staff Engineer',
       company: 'Acme',
@@ -267,13 +270,14 @@ describe('lookupGemPerson (fake GeMCP server)', () => {
     mockPrisma.gemConnection.findUnique.mockResolvedValueOnce(okConnection());
     const gem = fakeGemMcp({ search: () => 'totally not json', get_person: () => PERSON });
     const out = await lookupGemPerson(USER, 'x@y.com', { transportFactory: gem.factory });
-    expect(out).toEqual({ status: 'UNAVAILABLE', message: 'Gem unavailable — paste LinkedIn manually' });
+    expect(out).toMatchObject({ status: 'UNAVAILABLE', message: 'Gem unavailable — paste LinkedIn manually' });
   });
 
   it('a get_person with found:false or garbage entity is NOT_FOUND / UNAVAILABLE, never throws', async () => {
     mockPrisma.gemConnection.findUnique.mockResolvedValue(okConnection());
     const notFound = fakeGemMcp({ search: () => ({ results: [{ ext_id: 'g' }] }), get_person: () => ({ found: false }) });
     expect((await lookupGemPerson(USER, 'x@y.com', { transportFactory: notFound.factory })).status).toBe('NOT_FOUND');
+    __resetGemClientCache(); // a different fake server behind the same token
     const garbage = fakeGemMcp({ search: () => ({ results: [{ ext_id: 'g' }] }), get_person: () => ({ found: true, entity: 42 }) });
     expect((await lookupGemPerson(USER, 'x@y.com', { transportFactory: garbage.factory })).status).toBe('UNAVAILABLE');
   });
@@ -320,7 +324,7 @@ describe('lookupGemPerson (fake GeMCP server)', () => {
       fetchFn: fakeAuthFetch({ tokenStatus: 400 }).fn,
       transportFactory: gem.factory,
     });
-    expect(out).toEqual({ status: 'NEEDS_REAUTH' });
+    expect(out).toMatchObject({ status: 'NEEDS_REAUTH' });
     expect(gem.seen).toEqual([]);
     expect(mockPrisma.gemConnection.updateMany.mock.calls[0]![0].data.status).toBe('NEEDS_REAUTH');
   });
@@ -332,6 +336,120 @@ describe('lookupGemPerson (fake GeMCP server)', () => {
       get_person: () => ({ ...PERSON, entity: { ...PERSON.entity, emails: [{ email_address: 'other@example.com' }] } }),
     });
     expect((await lookupGemPerson(USER, 'jane@example.com', { transportFactory: gem.factory })).status).toBe('NOT_FOUND');
+  });
+});
+
+describe('lookupGemPerson speed (H5)', () => {
+  it('reports per-step timings; the first lookup on an instance is cold', async () => {
+    mockPrisma.gemConnection.findUnique.mockResolvedValue(okConnection());
+    const gem = fakeGemMcp({ search: () => ({ results: [{ ext_id: 'g-1' }] }), get_person: () => PERSON });
+    const first = await lookupGemPerson(USER, 'jane@example.com', { transportFactory: gem.factory });
+    expect(first.timings).toMatchObject({ cold: true, clientReused: false, tokenRefreshMs: 0 });
+    for (const k of ['tokenMs', 'mcpConnectMs', 'searchMs', 'getPersonMs', 'totalMs'] as const) {
+      expect(typeof first.timings![k]).toBe('number');
+    }
+    const second = await lookupGemPerson(USER, 'jane@example.com', { transportFactory: gem.factory });
+    expect(second.timings).toMatchObject({ cold: false, clientReused: true, mcpConnectMs: 0 });
+  });
+
+  it('reuses the MCP client for the same user + token (one connect for two lookups)', async () => {
+    mockPrisma.gemConnection.findUnique.mockResolvedValue(okConnection());
+    const gem = fakeGemMcp({ search: () => ({ results: [{ ext_id: 'g-1' }] }), get_person: () => PERSON });
+    const factory = vi.fn(gem.factory);
+    await lookupGemPerson(USER, 'jane@example.com', { transportFactory: factory });
+    await lookupGemPerson(USER, 'jane@example.com', { transportFactory: factory });
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(gem.seen.map((s) => s.name)).toEqual(['search', 'get_person', 'search', 'get_person']);
+  });
+
+  it('a new access token opens a new client', async () => {
+    const gem = fakeGemMcp({ search: () => ({ results: [] }), get_person: () => PERSON });
+    const factory = vi.fn(gem.factory);
+    mockPrisma.gemConnection.findUnique.mockResolvedValueOnce(okConnection());
+    await lookupGemPerson(USER, 'a@b.com', { transportFactory: factory });
+    mockPrisma.gemConnection.findUnique.mockResolvedValueOnce(
+      okConnection({ tokens: encrypt(JSON.stringify({ access_token: 'at-2', refresh_token: 'rt-1', token_type: 'Bearer' })) })
+    );
+    await lookupGemPerson(USER, 'a@b.com', { transportFactory: factory });
+    expect(factory.mock.calls.map((c) => c[0])).toEqual(['at-1', 'at-2']);
+  });
+
+  it('a failed lookup evicts the cached client so the next one reconnects', async () => {
+    mockPrisma.gemConnection.findUnique.mockResolvedValue(okConnection());
+    let fail = true;
+    const gem = fakeGemMcp({
+      search: () => {
+        if (fail) throw new Error('session gone');
+        return { results: [] };
+      },
+      get_person: () => PERSON,
+    });
+    const factory = vi.fn(gem.factory);
+    expect((await lookupGemPerson(USER, 'a@b.com', { transportFactory: factory })).status).toBe('UNAVAILABLE');
+    fail = false;
+    expect((await lookupGemPerson(USER, 'a@b.com', { transportFactory: factory })).status).toBe('NOT_FOUND');
+    expect(factory).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes proactively when the token has < 60s left (not yet expired)', async () => {
+    mockPrisma.gemConnection.findUnique.mockResolvedValueOnce(okConnection({ expiresAt: new Date(Date.now() + 30_000) }));
+    const f = fakeAuthFetch();
+    const token = await getGemAccessToken(USER, { fetchFn: f.fn });
+    expect(token).toEqual({ ok: true, token: 'at-new' });
+    expect(f.calls.filter((c) => c.url.endsWith('/token'))).toHaveLength(1);
+  });
+
+  it('concurrent lookups with an expiring token share one refresh (Gem rotates refresh tokens)', async () => {
+    mockPrisma.gemConnection.findUnique.mockResolvedValue(okConnection({ expiresAt: new Date(Date.now() - 1000) }));
+    const f = fakeAuthFetch();
+    const gem = fakeGemMcp({ search: () => ({ results: [] }), get_person: () => PERSON });
+    const outs = await Promise.all([
+      lookupGemPerson(USER, 'a@b.com', { fetchFn: f.fn, transportFactory: gem.factory }),
+      lookupGemPerson(USER, 'a@b.com', { fetchFn: f.fn, transportFactory: gem.factory }),
+    ]);
+    expect(outs.map((o) => o.status)).toEqual(['NOT_FOUND', 'NOT_FOUND']);
+    expect(f.calls.filter((c) => c.url.endsWith('/token'))).toHaveLength(1);
+    expect(mockPrisma.gemConnection.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('runs get_person for the top results in parallel and keeps search order', async () => {
+    mockPrisma.gemConnection.findUnique.mockResolvedValue(okConnection());
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const gem = fakeGemMcp({
+      search: () => ({ results: [{ ext_id: 'g-a' }, { ext_id: 'g-b' }, { ext_id: 'g-c' }] }),
+      get_person: async (args) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((r) => setTimeout(r, 30));
+        inFlight -= 1;
+        const id = String(args.ext_id);
+        const emails = id === 'g-a' ? [{ email_address: 'someone@else.com' }] : PERSON.entity.emails;
+        return { ...PERSON, entity: { ...PERSON.entity, ext_id: id, display_name: id, emails } };
+      },
+    });
+    const out = await lookupGemPerson(USER, 'jane@example.com', { transportFactory: gem.factory });
+    expect(maxInFlight).toBe(3);
+    expect(out.person).toMatchObject({ id: 'g-b', name: 'g-b' });
+  });
+
+  it('a hung tool call is cut off by the per-call timeout', async () => {
+    mockPrisma.gemConnection.findUnique.mockResolvedValue(okConnection());
+    const gem = fakeGemMcp({ search: () => new Promise(() => {}), get_person: () => PERSON });
+    const t0 = Date.now();
+    const out = await lookupGemPerson(USER, 'x@y.com', { transportFactory: gem.factory, callTimeoutMs: 50 });
+    expect(out.status).toBe('UNAVAILABLE');
+    expect(Date.now() - t0).toBeLessThan(2000);
+  });
+
+  it('with a known Gem person id, skips search and checks the email on get_person', async () => {
+    mockPrisma.gemConnection.findUnique.mockResolvedValue(okConnection());
+    const gem = fakeGemMcp({ search: () => ({ results: [] }), get_person: () => PERSON });
+    const out = await lookupGemPerson(USER, 'jane@example.com', { transportFactory: gem.factory, extId: 'g-1' });
+    expect(out.status).toBe('FOUND');
+    expect(gem.seen.map((s) => s.name)).toEqual(['get_person']);
+    const other = await lookupGemPerson(USER, 'other@example.com', { transportFactory: gem.factory, extId: 'g-1' });
+    expect(other.status).toBe('NOT_FOUND');
   });
 });
 
