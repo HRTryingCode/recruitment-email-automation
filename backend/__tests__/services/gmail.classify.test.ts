@@ -13,6 +13,10 @@ vi.mock('../../src/services/claude.service', async (importOriginal) => {
   return { ...actual, classifyReply };
 });
 
+// H2: new candidates get a background Lever check.
+const { scheduleLeverRefresh } = vi.hoisted(() => ({ scheduleLeverRefresh: vi.fn() }));
+vi.mock('../../src/services/leverRealtime.service', () => ({ scheduleLeverRefresh }));
+
 import { prisma as injectedPrisma } from '../../src/db/client';
 import {
   classifyAndDraft,
@@ -135,6 +139,29 @@ describe('classifyAndDraft — status + conversation state (H6, M12)', () => {
       expect.objectContaining({ where: { email: { equals: 'cand@example.com', mode: 'insensitive' } } })
     );
     expect(upsertArgs().where).toEqual({ email: 'Cand@Example.com' });
+  });
+});
+
+describe('classifyAndDraft — Lever check on create (H2)', () => {
+  beforeEach(() => {
+    resetPrismaMock(mockPrisma);
+    classifyReply.mockReset();
+    scheduleLeverRefresh.mockReset();
+  });
+
+  it('schedules a Lever refresh for a newly created candidate', async () => {
+    const thread = setup();
+    classifyReply.mockResolvedValue(classification({ classification: 'INTERESTED' }));
+    await classifyAndDraft({ mailbox, thread, parsed: parsed() });
+    expect(scheduleLeverRefresh).toHaveBeenCalledTimes(1);
+    expect(scheduleLeverRefresh).toHaveBeenCalledWith('cand-1', 'created');
+  });
+
+  it('does not schedule one for an existing candidate', async () => {
+    const thread = setup({ existing: { id: 'cand-1', email: 'cand@example.com', status: 'NEUTRAL', role: 'X', lastInboundAt: null } });
+    classifyReply.mockResolvedValue(classification({}));
+    await classifyAndDraft({ mailbox, thread, parsed: parsed() });
+    expect(scheduleLeverRefresh).not.toHaveBeenCalled();
   });
 });
 
