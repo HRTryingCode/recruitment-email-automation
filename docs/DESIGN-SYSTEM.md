@@ -226,6 +226,36 @@ variant. `navigation-menu` is still not needed.
 | URL state | `hooks/useCandidateUrlState.ts` | `status reply lever q sort dir page view candidate` |
 | Keyboard | `hooks/useCandidateShortcuts.ts` | ↑ ↓ ↵ Esc x only |
 
+### Status vocabulary (U2a)
+
+One word per candidate state, used identically by the row chip, the side
+panel chip, the status filter, the row menu and the bulk bar. The source of
+truth is `lib/candidates.ts` (`replyLabel`, `STATUS_OPTIONS`,
+`SETTABLE_STATUSES`); `__tests__/lib/candidates.test.ts` fails if they drift.
+
+| `Candidate.status` | Word | Tone | Meaning |
+|---|---|---|---|
+| `INTERESTED` | Interested | success | wants to talk |
+| `NEUTRAL` | Unsure | warning | replied, but Claude classified it as neither yes nor no |
+| `NEEDS_REVIEW` | Needs review | warning | a human has to read it |
+| `PENDING` + a reply exists (or legacy `REPLIED`) | Needs review | warning | replied, not classified yet |
+| `PENDING`, nothing from them | No reply | info | contacted, hasn't written back |
+| `NOT_INTERESTED` | Not interested | destructive | declined |
+| `IGNORED` | Ignored | secondary | hidden from active lists |
+
+Never show the raw enum ("Pending", "Neutral") to a recruiter. The Inbox's
+classification chip (`lib/inbox.ts` `labelFor`) uses the same words.
+
+### Shared page pieces (U2a)
+
+| Piece | File | Use |
+|---|---|---|
+| Page header | `components/shell/PageHeader.tsx` | `title`, `description`, `actions`; the page's one `<h1>` (Candidates, Today, Settings; `srOnly` for Inbox) |
+| Query error | `components/shell/QueryError.tsx` | "Couldn't load <thing>" + description + Retry, for every failed `useQuery` |
+| Lever chip | `lib/leverChip.ts` `leverChip()` | label + badge variant per Lever state; table badge and side-panel section |
+| Connect card | `components/shell/ConnectMailboxCard.tsx` | `context="inbox" \| "today" \| "settings"`; button label is always "Connect Gmail mailbox" |
+| Age / initials | `lib/utils.ts` `formatAge`, `initials` | compact ages ("5m", "2d 4h") and avatar fallbacks |
+
 ## 5. Rules for R1–R4
 
 1. **Only `@/components/ui/*` for UI primitives.** No raw `<button>`,

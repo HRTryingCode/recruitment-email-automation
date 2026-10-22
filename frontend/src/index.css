@@ -42,7 +42,8 @@
     --info-foreground: oklch(0.986 0.002 67.8);
     --border: oklch(0.922 0.005 34.3);
     --input: oklch(0.922 0.005 34.3);
-    --ring: oklch(0.714 0.014 41.2);
+    /* Focus ring: ≥3:1 non-text contrast on white (U2a; was ≈2.5:1). */
+    --ring: oklch(0.55 0.014 41.2);
     --chart-1: oklch(0.868 0.007 39.5);
     --chart-2: oklch(0.547 0.021 43.1);
     --chart-3: oklch(0.438 0.017 39.3);
@@ -56,7 +57,7 @@
     --sidebar-accent: oklch(0.96 0.002 17.2);
     --sidebar-accent-foreground: oklch(0.214 0.009 43.1);
     --sidebar-border: oklch(0.922 0.005 34.3);
-    --sidebar-ring: oklch(0.714 0.014 41.2);
+    --sidebar-ring: oklch(0.55 0.014 41.2);
 
     /* Legacy purple ramp → taupe. Light: tints for 50–200, primary above. */
     --accent-50: var(--secondary);
