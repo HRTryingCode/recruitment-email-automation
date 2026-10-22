@@ -16,7 +16,7 @@ import {
   type DismissReason,
   type EmailDraft,
 } from '../lib/api';
-import { nextItemId } from '../lib/inbox';
+import { liveSummary, nextItemId } from '../lib/inbox';
 import { extractApiErrorMessage, toastError, toastSuccess, toastWarning } from '../lib/toast';
 import { dismissUndoToast, showUndoToast } from '../components/inbox/undoToast';
 import type { LockState } from '../components/inbox/ReplyPane';
@@ -48,6 +48,8 @@ interface Options {
   onSent?: (sends: Array<{ id: string; name: string }>) => void;
   /** Candidate name for an item key (batch sends, announcements). */
   nameOf?: (key: string) => string | undefined;
+  /** Polite live-region text after an action ("Sent to Ana. Opened Ben."). */
+  announce?: (text: string) => void;
 }
 
 /**
@@ -55,7 +57,7 @@ interface Options {
  * Each ends by auto-advancing to the next reply; a 423 stops and surfaces
  * a blocking LockState whose retry replays the action with override.
  */
-export function useInboxActions({ keys, setItem, onLocalChange, onSent, nameOf }: Options) {
+export function useInboxActions({ keys, setItem, onLocalChange, onSent, nameOf, announce }: Options) {
   const qc = useQueryClient();
   const [lock, setLock] = useState<LockState | null>(null);
   const [busy, setBusy] = useState<'send' | 'rewrite' | null>(null);
@@ -63,18 +65,24 @@ export function useInboxActions({ keys, setItem, onLocalChange, onSent, nameOf }
   const [rewriteUndo, setRewriteUndo] = useState<RewriteUndo | null>(null);
   const lastSend = useRef<{ id: string; name: string; until: number; toastId: string | number } | null>(null);
   const keysRef = useRef(keys);
-  const cbs = useRef({ onLocalChange, onSent, nameOf });
+  const cbs = useRef({ onLocalChange, onSent, nameOf, announce });
   useLayoutEffect(() => {
     keysRef.current = keys;
-    cbs.current = { onLocalChange, onSent, nameOf };
+    cbs.current = { onLocalChange, onSent, nameOf, announce };
   });
   const localChange = useCallback(() => cbs.current.onLocalChange?.(), []);
 
   const refreshInbox = useCallback(() => qc.invalidateQueries({ queryKey: ['inbox'] }), [qc]);
+  /** Open the reply after `key` and announce `done` plus what opened. */
   const advanceFrom = useCallback(
-    (key: string) => setItem(nextItemId(keysRef.current, key) ?? undefined),
+    (key: string, done: string) => {
+      const next = nextItemId(keysRef.current, key) ?? undefined;
+      setItem(next);
+      cbs.current.announce?.(liveSummary(done, next ? cbs.current.nameOf?.(next) : undefined));
+    },
     [setItem]
   );
+  const nameFor = (key: string) => cbs.current.nameOf?.(key) ?? 'the candidate';
 
   /** Run `fn(override)`; on 423 show the lock with `label` as the override button. */
   const guarded = useCallback(
@@ -137,7 +145,7 @@ export function useInboxActions({ keys, setItem, onLocalChange, onSent, nameOf }
         cbs.current.onSent?.([{ id: draft.id, name }]);
         const toastId = showUndoToast({ title: `Sending to ${name}`, seconds: UNDO_SECONDS, onUndo: () => void undo(draft.id) });
         lastSend.current = { id: draft.id, name, until: Date.now() + UNDO_SECONDS * 1000, toastId };
-        advanceFrom(draft.id);
+        advanceFrom(draft.id, `Sent to ${name}`);
         void refreshInbox();
       }).finally(() => setBusy(null));
     },
@@ -175,7 +183,7 @@ export function useInboxActions({ keys, setItem, onLocalChange, onSent, nameOf }
       void guarded('Dismiss anyway', 'Could not dismiss', async (override) => {
         await dismissDraft(draftId, { reason, ...(override ? { override: true } : {}) });
         toastSuccess('Dismissed', 'No reply will be sent.', { label: 'Undo', onClick: () => void undismiss(draftId) });
-        advanceFrom(key);
+        advanceFrom(key, `Dismissed ${nameFor(key)}`);
         void refreshInbox();
       });
     },
@@ -203,7 +211,7 @@ export function useInboxActions({ keys, setItem, onLocalChange, onSent, nameOf }
         await snoozeDraft(draftId, until.toISOString());
         const when = until.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' });
         toastSuccess(`Snoozed until ${when}`, undefined, { label: 'Undo', onClick: () => void unsnooze(draftId) });
-        advanceFrom(key);
+        advanceFrom(key, `Snoozed ${nameFor(key)}`);
         void refreshInbox();
       } catch (err) {
         toastError('Could not snooze', extractApiErrorMessage(err, 'Please try again.'));

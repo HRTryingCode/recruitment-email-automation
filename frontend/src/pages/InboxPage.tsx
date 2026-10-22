@@ -19,6 +19,7 @@ import { useDraftEditor } from '@/hooks/useDraftEditor';
 import { useDraftPresence } from '@/hooks/useDraftPresence';
 import { useInboxActions } from '@/hooks/useInboxActions';
 import { useInboxList } from '@/hooks/useInboxList';
+import { useLiveAnnouncer } from '@/hooks/useLiveAnnouncer';
 import { useNewReplyAlerts } from '@/hooks/useNewReplyAlerts';
 import { useSendWatch } from '@/hooks/useSendWatch';
 import { useInboxShortcuts } from '@/hooks/useInboxShortcuts';
@@ -125,7 +126,15 @@ export default function InboxPage() {
   const sendWatch = useSendWatch(openFailed, refreshList);
   const nameByKey = useMemo(() => new Map(items.map((i) => [itemKey(i), i.candidate?.name ?? 'Unknown candidate'])), [items]);
   const nameOf = useCallback((key: string) => nameByKey.get(key), [nameByKey]);
-  const actions = useInboxActions({ keys, setItem: openItem, onLocalChange: alerts.resync, onSent: sendWatch.watch, nameOf });
+  const live = useLiveAnnouncer();
+  const actions = useInboxActions({
+    keys,
+    setItem: openItem,
+    onLocalChange: alerts.resync,
+    onSent: sendWatch.watch,
+    nameOf,
+    announce: live.announce,
+  });
 
   const itemIdRef = useRef(itemId);
   const listViewRef = useRef(listView);
@@ -444,6 +453,9 @@ export default function InboxPage() {
         }}
       />
       <ShortcutHelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
+      <div data-testid="inbox-live" role="status" aria-live="polite" className="sr-only">
+        {live.message}
+      </div>
     </div>
   );
 }

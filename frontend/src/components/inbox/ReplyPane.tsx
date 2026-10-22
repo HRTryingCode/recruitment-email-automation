@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AlarmClock, AlertCircle, ArrowLeft, ChevronDown, Lock, Send, Undo2, X } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -176,6 +176,15 @@ interface Props {
 export default function ReplyPane(props: Props) {
   const { item, draft, loading, error, onRetry, editor, presence, lock, onCancelLock, onClose } = props;
   const name = draft?.thread?.candidate?.name ?? item?.candidate?.name ?? 'Unknown candidate';
+  // Opening a reply moves focus to its heading (screen readers hear who it
+  // is), unless focus is already inside the pane (E, a banner's Review).
+  const sectionRef = useRef<HTMLElement | null>(null);
+  const headingRef = useRef<HTMLHeadingElement | null>(null);
+  const shownId = draft?.id;
+  useEffect(() => {
+    if (!shownId || sectionRef.current?.contains(document.activeElement)) return;
+    headingRef.current?.focus({ preventScroll: true });
+  }, [shownId]);
 
   if (loading || (!draft && !error)) {
     return (
@@ -221,14 +230,16 @@ export default function ReplyPane(props: Props) {
   const sendable = isSendable(draft);
 
   return (
-    <section aria-label={`Reply to ${name}`} className="flex h-full min-h-0 flex-col">
+    <section ref={sectionRef} aria-label={`Reply to ${name}`} className="flex h-full min-h-0 flex-col">
       <header className="flex items-start gap-3 border-b border-border p-4">
         <Button size="icon-sm" variant="ghost" aria-label="Back to list" onClick={onClose} className="lg:hidden">
           <ArrowLeft />
         </Button>
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="truncate font-heading text-base font-semibold text-foreground">{name}</h2>
+            <h2 ref={headingRef} tabIndex={-1} className="truncate font-heading text-base font-semibold text-foreground outline-none">
+              {name}
+            </h2>
             <RoleChip role={role} />
             <LabelChip classification={draft.classification} confidenceLabel={draft.confidenceLabel} />
             <PresenceChip presence={presence} />
