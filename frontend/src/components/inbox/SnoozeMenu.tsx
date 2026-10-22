@@ -32,7 +32,7 @@ function ymd(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/** Snooze presets (ET) plus a custom date (9am ET that day, ≤ 30 days). */
+/** Snooze presets, each labelled with its ET time, plus a custom date (9am ET that day, ≤ 30 days). */
 export default function SnoozeMenu({ open, onOpenChange, onSelect, disabled }: Props) {
   const [customOpen, setCustomOpen] = useState(false);
   const [date, setDate] = useState('');
@@ -51,7 +51,7 @@ export default function SnoozeMenu({ open, onOpenChange, onSelect, disabled }: P
             <Kbd className="max-sm:hidden">S</Kbd>
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start">
+        <DropdownMenuContent align="start" className="w-auto min-w-56">
           {presets.map((p) => (
             <DropdownMenuItem key={p.key} onSelect={() => onSelect(p.until)}>
               {p.label}

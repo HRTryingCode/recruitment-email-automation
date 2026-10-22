@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
+import { isTypingTarget } from '../lib/shortcuts';
 
 export type InboxShortcut =
   | 'prev'
@@ -10,9 +11,10 @@ export type InboxShortcut =
   | 'dismiss'
   | 'snooze'
   | 'close'
-  | 'help';
+  | 'interested'
+  | 'not_interested';
 
-/** The approved (simplified) map; also rendered by the ? help dialog. */
+/** The approved (simplified) map; also rendered by the shell's ? dialog. */
 export const SHORTCUTS: Array<{ id: InboxShortcut; keys: string[]; label: string }> = [
   { id: 'prev', keys: ['↑'], label: 'Previous reply' },
   { id: 'next', keys: ['↓'], label: 'Next reply' },
@@ -20,18 +22,12 @@ export const SHORTCUTS: Array<{ id: InboxShortcut; keys: string[]; label: string
   { id: 'edit', keys: ['E'], label: 'Edit draft' },
   { id: 'send', keys: ['⌘', '↵'], label: 'Send' },
   { id: 'undo', keys: ['⌘', 'Z'], label: 'Undo send' },
-  { id: 'dismiss', keys: ['D'], label: 'Dismiss' },
-  { id: 'snooze', keys: ['S'], label: 'Snooze' },
+  { id: 'dismiss', keys: ['D'], label: 'Dismiss reply · Hide candidate' },
+  { id: 'snooze', keys: ['S'], label: 'Snooze reply' },
+  { id: 'interested', keys: ['I'], label: 'Reply as Interested (no draft yet)' },
+  { id: 'not_interested', keys: ['N'], label: 'Reply as Not interested (no draft yet)' },
   { id: 'close', keys: ['Esc'], label: 'Close / back' },
-  { id: 'help', keys: ['?'], label: 'Keyboard shortcuts' },
 ];
-
-function isTypingTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.isContentEditable) return true;
-  const tag = target.tagName;
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
-}
 
 /** The shell's `g` + letter navigation (ShortcutsDialog) waits this long for the letter. */
 const G_SEQUENCE_MS = 1200;
@@ -70,10 +66,14 @@ function resolve(e: KeyboardEvent): InboxShortcut | null {
     case 's':
     case 'S':
       return 'snooze';
+    case 'i':
+    case 'I':
+      return 'interested';
+    case 'n':
+    case 'N':
+      return 'not_interested';
     case 'Escape':
       return 'close';
-    case '?':
-      return 'help';
     default:
       return null;
   }
@@ -83,8 +83,8 @@ function resolve(e: KeyboardEvent): InboxShortcut | null {
  * Inbox keyboard map. While typing only ⌘↵ (send) and Esc (close) fire;
  * inside menus/dialogs nothing does. ⌘K stays with the shell palette, and
  * the key right after `g` is left to the shell's g-navigation (g s =
- * Settings, not Snooze). Handled keys are preventDefault-ed so the shell's
- * own `?` help yields to the Inbox one. `allowWhileTyping` lets a shortcut
+ * Settings, not Snooze). `?` is left to the shell's one shortcuts dialog.
+ * `allowWhileTyping` lets a shortcut
  * through from a text field when it says so (⌘Z undo-send from a clean editor).
  */
 export function useInboxShortcuts(

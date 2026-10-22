@@ -2,6 +2,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import InboxPage from '../../../src/pages/InboxPage';
+import LookupBar from '../../../src/components/LookupBar';
+import ShortcutsDialog from '../../../src/components/shell/ShortcutsDialog';
 import { TooltipProvider } from '../../../src/components/ui/tooltip';
 import { Toaster } from '../../../src/components/ui/sonner';
 
@@ -25,7 +27,10 @@ export function renderInbox(url = '/inbox') {
         <TooltipProvider>
           <Routes>
             <Route path="/inbox" element={<InboxPage />} />
+            <Route path="/candidates" element={<p>Candidates page</p>} />
           </Routes>
+          <LookupBar />
+          <ShortcutsDialog />
           <LocationSpy />
           <Toaster />
         </TooltipProvider>

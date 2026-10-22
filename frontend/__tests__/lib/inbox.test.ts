@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   VIEWS,
   customSnooze,
+  formatEt,
   diffWords,
   draftedLine,
   formatAge,
@@ -36,12 +37,14 @@ describe('snoozePresets', () => {
   const now = new Date('2026-10-22T15:00:00Z');
   const byKey = Object.fromEntries(snoozePresets(now).map((p) => [p.key, p]));
 
-  it('later today is +3h', () => {
+  it('later today is +3h, labelled with its ET time', () => {
     expect(byKey.later.until.toISOString()).toBe('2026-10-22T18:00:00.000Z');
+    expect(byKey.later.label).toBe('Later today · 2:00 PM ET');
   });
   it('later today never crosses ET midnight', () => {
     const late = Object.fromEntries(snoozePresets(new Date('2026-10-23T02:30:00Z')).map((p) => [p.key, p]));
     expect(late.later.until.toISOString()).toBe('2026-10-23T03:59:00.000Z');
+    expect(late.later.label).toBe('Later today · 11:59 PM ET');
   });
   it('tomorrow is 9am ET', () => {
     expect(byKey.tomorrow.until.toISOString()).toBe('2026-10-23T13:00:00.000Z');
@@ -49,9 +52,17 @@ describe('snoozePresets', () => {
   });
   it('next week is next Monday 9am ET', () => {
     expect(byKey.next_week.until.toISOString()).toBe('2026-10-26T13:00:00.000Z');
+    expect(byKey.next_week.label).toBe('Next week · Mon 9am ET');
   });
   it('custom date is 9am ET that day, across DST', () => {
     expect(customSnooze('2026-11-10').toISOString()).toBe('2026-11-10T14:00:00.000Z');
+  });
+});
+
+describe('formatEt', () => {
+  it('formats an instant in ET and says so, whatever the browser zone', () => {
+    expect(formatEt(new Date('2026-10-23T13:00:00Z'))).toBe('Fri, Oct 23, 9:00 AM ET');
+    expect(formatEt(new Date('2026-11-10T14:00:00Z'))).toBe('Tue, Nov 10, 9:00 AM ET');
   });
 });
 
