@@ -14,10 +14,13 @@ vi.mock('../../src/lib/api', () => ({
   updateCandidate: vi.fn(),
   ignoreCandidate: vi.fn(),
   unignoreCandidate: vi.fn(),
+  generateDraftForThread: vi.fn(),
 }));
 
 const fetchCandidatesMock = vi.mocked(api.fetchCandidates);
 const ignoreCandidateMock = vi.mocked(api.ignoreCandidate);
+const updateCandidateMock = vi.mocked(api.updateCandidate);
+const generateDraftMock = vi.mocked(api.generateDraftForThread);
 
 const STATUS_LABELS: Record<string, string> = {
   INTERESTED: 'Interested',
@@ -62,6 +65,16 @@ const CANDIDATES: Candidate[] = [
     name: 'Grace Hopper',
     email: 'grace@example.com',
     status: 'NEEDS_REVIEW',
+    threads: [
+      {
+        id: 't2',
+        mailboxId: 'mb-1',
+        externalThreadId: 'ext-2',
+        subject: 'Re: role',
+        lastMessageAt: '2026-05-20T10:00:00.000Z',
+        createdAt: '2026-05-19T10:00:00.000Z',
+      },
+    ],
   }),
   makeCandidate({
     id: 'c3',
@@ -89,11 +102,11 @@ function createClient() {
   });
 }
 
-function renderTable() {
+function renderTable(initialEntry = '/') {
   const client = createClient();
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[initialEntry]}>
         <TooltipProvider>
           <CandidateTable />
         </TooltipProvider>
@@ -179,7 +192,8 @@ describe('<CandidateTable />', () => {
     const footer = await screen.findByTestId('candidates-pagination-footer');
     expect(footer).toBeInTheDocument();
     expect(footer.textContent).toMatch(/Showing 1.{1,2}500 of 1500/);
-    expect(within(footer).getByRole('button', { name: /load more/i })).toBeEnabled();
+    // L16: the button pages forward; it never appended, so it no longer says "Load more".
+    expect(within(footer).getByRole('button', { name: /^next$/i })).toBeEnabled();
     expect(within(footer).getByRole('button', { name: /previous/i })).toBeDisabled();
   });
 
@@ -219,5 +233,78 @@ describe('<CandidateTable />', () => {
       );
     });
   });
-});
 
+  it('applies the dashboard ?filter=AWAITING_REPLY as a server-side replyStatus filter (M19)', async () => {
+    renderTable('/?tab=candidates&filter=AWAITING_REPLY');
+    await screen.findByText('Ada Lovelace');
+    expect(fetchCandidatesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ replyStatus: 'AWAITING_REPLY', status: undefined })
+    );
+    expect(screen.getByDisplayValue(/awaiting reply/i)).toBeInTheDocument();
+  });
+
+  it('applies ?filter=NEEDS_REVIEW as a status filter (M19)', async () => {
+    renderTable('/?tab=candidates&filter=NEEDS_REVIEW');
+    await screen.findByText('Ada Lovelace');
+    expect(fetchCandidatesMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'NEEDS_REVIEW' }));
+  });
+
+  it('choosing Ignored in a row dropdown goes through the ignore flow (M20)', async () => {
+    const user = userEvent.setup();
+    renderTable();
+    const row = (await screen.findByText('Ada Lovelace')).closest('tr')!;
+    await user.selectOptions(within(row).getByRole('combobox'), 'IGNORED');
+    await waitFor(() => expect(ignoreCandidateMock).toHaveBeenCalledWith('c1'));
+    expect(updateCandidateMock).not.toHaveBeenCalled();
+  });
+
+  it('sorting asks the server to sort, across all pages (L16)', async () => {
+    const user = userEvent.setup();
+    renderTable();
+    await screen.findByText('Ada Lovelace');
+    await user.click(screen.getByRole('button', { name: /^name$/i }));
+    await waitFor(() =>
+      expect(fetchCandidatesMock).toHaveBeenCalledWith(expect.objectContaining({ sort: 'name', dir: 'asc' }))
+    );
+  });
+
+  it('debounces search so typing does not fire a request per keystroke (L16)', async () => {
+    const user = userEvent.setup();
+    renderTable();
+    await screen.findByText('Ada Lovelace');
+    await user.type(screen.getByPlaceholderText(/search by name or email/i), 'ada');
+    await waitFor(() =>
+      expect(fetchCandidatesMock).toHaveBeenCalledWith(expect.objectContaining({ search: 'ada' }))
+    );
+    const searches = fetchCandidatesMock.mock.calls.map((c) => c[0]?.search).filter(Boolean);
+    expect(searches).not.toContain('a');
+    expect(searches).not.toContain('ad');
+  });
+
+  it('NEEDS_REVIEW triage: "Interested + draft" sets the status and generates a draft (M17)', async () => {
+    const user = userEvent.setup();
+    updateCandidateMock.mockResolvedValue({ success: true, data: { ...CANDIDATES[1], status: 'INTERESTED' } });
+    generateDraftMock.mockResolvedValue({ success: true, data: {} as never });
+    renderTable();
+    const row = (await screen.findByText('Grace Hopper')).closest('tr')!;
+    await user.click(within(row).getByRole('button', { name: /interested \+ draft/i }));
+    await waitFor(() => expect(generateDraftMock).toHaveBeenCalledWith('t2', 'INTERESTED'));
+    expect(updateCandidateMock).toHaveBeenCalledWith('c2', { status: 'INTERESTED' });
+  });
+
+  it('NEEDS_REVIEW triage: "Not interested" sets the status without drafting (M17)', async () => {
+    const user = userEvent.setup();
+    updateCandidateMock.mockResolvedValue({ success: true, data: { ...CANDIDATES[1], status: 'NOT_INTERESTED' } });
+    renderTable();
+    const row = (await screen.findByText('Grace Hopper')).closest('tr')!;
+    await user.click(within(row).getByRole('button', { name: /^not interested$/i }));
+    await waitFor(() => expect(updateCandidateMock).toHaveBeenCalledWith('c2', { status: 'NOT_INTERESTED' }));
+    expect(generateDraftMock).not.toHaveBeenCalled();
+  });
+
+  it('triage buttons only appear on NEEDS_REVIEW rows', async () => {
+    renderTable();
+    const row = (await screen.findByText('Ada Lovelace')).closest('tr')!;
+    expect(within(row).queryByRole('button', { name: /interested \+ draft/i })).not.toBeInTheDocument();
+  });
+});

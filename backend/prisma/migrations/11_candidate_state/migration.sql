@@ -1,6 +1,6 @@
 -- B7 (audit/classification-and-candidate-state). Additive only: nullable
 -- columns, one index, one FK. No data is changed here; backfills live in
--- scripts/b7/*.sql and are NOT run by migrate deploy.
+-- backend/scripts/b7/*.sql and are NOT run by migrate deploy.
 -- REQUIRES MIGRATION AUTHORIZATION before merge (vercel-build runs
 -- prisma migrate deploy against prod).
 

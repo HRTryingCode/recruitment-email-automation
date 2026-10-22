@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,6 +21,7 @@ import {
   ignoreCandidate,
   unignoreCandidate,
   type Candidate,
+  type CandidateSortColumn,
   type EmailThread,
 } from '../lib/api';
 import { cn, formatTimeAgo } from '../lib/utils';
@@ -92,7 +94,7 @@ function ThreadView({ threadId }: { threadId: string }) {
   const [genError, setGenError] = useState<string | null>(null);
   const [genDone, setGenDone] = useState(false);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError } = useQuery({
     queryKey: ['thread', threadId],
     queryFn: () => fetchMessages(threadId),
     staleTime: 60_000,
@@ -108,6 +110,10 @@ function ThreadView({ threadId }: { threadId: string }) {
     );
   }
 
+  if (isError) {
+    return <p className="p-4 text-[13px] text-rose-600">Could not load this thread.</p>;
+  }
+
   const thread = data?.data as EmailThread | undefined;
   const messages = thread?.messages ?? [];
   const hasPendingDraft = thread?.drafts?.some((d) => d.status === 'PENDING' || d.status === 'APPROVED');
@@ -121,8 +127,7 @@ function ThreadView({ threadId }: { threadId: string }) {
       void queryClient.invalidateQueries({ queryKey: ['drafts'] });
       void queryClient.invalidateQueries({ queryKey: ['thread', threadId] });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to generate draft';
-      setGenError(msg);
+      setGenError(extractApiErrorMessage(err, 'Failed to generate draft'));
     } finally {
       setGenerating(false);
     }
@@ -148,7 +153,7 @@ function ThreadView({ threadId }: { threadId: string }) {
                 </span>
               </div>
               <p className="line-clamp-3 text-[12.5px] leading-relaxed text-fg-muted">
-                {msg.bodyText}
+                {msg.bodyText || htmlToText(msg.bodyHtml)}
               </p>
             </div>
           ))
@@ -171,78 +176,36 @@ function ThreadView({ threadId }: { threadId: string }) {
   );
 }
 
+/** Readable text for HTML-only mail (bodyText is null for those). */
+function htmlToText(html: string | null | undefined): string {
+  if (!html) return '';
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  return (doc.body.textContent ?? '').replace(/\s+/g, ' ').trim();
+}
+
 interface Props {
   mailboxId?: string;
 }
 
-type SortColumn =
-  | 'name'
-  | 'email'
-  | 'company'
-  | 'role'
-  | 'status'
-  | 'reply'
-  | 'updatedAt';
+type SortColumn = 'name' | 'email' | 'company' | 'status' | 'updatedAt';
 type SortDir = 'asc' | 'desc';
 
-const STATUS_RANK: Record<string, number> = {
-  INTERESTED: 0,
-  NEEDS_REVIEW: 1,
-  NEUTRAL: 2,
-  PENDING: 3,
-  REPLIED: 4,
-  NOT_INTERESTED: 5,
-  IGNORED: 6,
-};
-const REPLY_RANK: Record<string, number> = {
-  AWAITING_REPLY: 0,
-  NEW: 1,
-  REPLIED: 2,
-};
-
-function deriveReplyStatus(c: Candidate): string {
-  return (
-    c.replyStatus ??
-    (c.repliedAt ? 'REPLIED' : c.threads?.length ? 'AWAITING_REPLY' : 'NEW')
-  );
+/**
+ * Server sort params for a column (L16). "Last activity" newest-first is the
+ * server's default ordering, so it sends no sort.
+ */
+function serverSort(sort: { column: SortColumn; dir: SortDir }): {
+  sort?: CandidateSortColumn;
+  dir?: SortDir;
+} {
+  if (sort.column === 'updatedAt' && sort.dir === 'desc') return {};
+  return { sort: sort.column, dir: sort.dir };
 }
 
-function compareCandidates(
-  a: Candidate,
-  b: Candidate,
-  column: SortColumn,
-  dir: SortDir
-): number {
-  const sign = dir === 'asc' ? 1 : -1;
-  const nullsLast = (v: unknown) => (v === null || v === undefined || v === '' ? 1 : 0);
-  switch (column) {
-    case 'name':
-      return sign * (a.name || '').localeCompare(b.name || '');
-    case 'email':
-      return sign * (a.email || '').localeCompare(b.email || '');
-    case 'company': {
-      const na = nullsLast(a.company);
-      const nb = nullsLast(b.company);
-      if (na !== nb) return na - nb;
-      return sign * (a.company || '').localeCompare(b.company || '');
-    }
-    case 'role': {
-      const na = nullsLast(a.role);
-      const nb = nullsLast(b.role);
-      if (na !== nb) return na - nb;
-      return sign * (a.role || '').localeCompare(b.role || '');
-    }
-    case 'status':
-      return sign * ((STATUS_RANK[a.status] ?? 99) - (STATUS_RANK[b.status] ?? 99));
-    case 'reply':
-      return sign * ((REPLY_RANK[deriveReplyStatus(a)] ?? 99) - (REPLY_RANK[deriveReplyStatus(b)] ?? 99));
-    case 'updatedAt': {
-      const ta = new Date(a.updatedAt ?? 0).getTime();
-      const tb = new Date(b.updatedAt ?? 0).getTime();
-      return sign * (ta - tb);
-    }
-  }
-}
+const SEARCH_DEBOUNCE_MS = 300;
+
+/** Dashboard pill filters (`?filter=`) this table understands (M19). */
+const URL_FILTERS = new Set(['AWAITING_REPLY', 'NEEDS_REVIEW']);
 
 function SortableTh({
   column,
@@ -292,8 +255,21 @@ const PAGE_SIZE = 100;
 
 export default function CandidateTable({ mailboxId }: Props) {
   const queryClient = useQueryClient();
-  const [statusFilter, setStatusFilter] = useState<string>('');
+  const [searchParams] = useSearchParams();
+  const urlFilter = searchParams.get('filter') ?? '';
+  const [statusFilter, setStatusFilter] = useState<string>(
+    URL_FILTERS.has(urlFilter) ? urlFilter : ''
+  );
+  // Follow the dashboard pill when the URL filter changes.
+  useEffect(() => {
+    if (URL_FILTERS.has(urlFilter)) setStatusFilter(urlFilter);
+  }, [urlFilter]);
+  const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(searchInput.trim()), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [searchInput]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<{ column: SortColumn; dir: SortDir }>({
@@ -310,25 +286,28 @@ export default function CandidateTable({ mailboxId }: Props) {
   }
 
   const includeIgnored = statusFilter === 'IGNORED' || statusFilter === '__ALL__';
+  const replyStatus = statusFilter === 'AWAITING_REPLY' ? 'AWAITING_REPLY' : undefined;
   const apiStatus =
-    statusFilter === '__ALL__' || statusFilter === '' ? undefined : statusFilter;
+    statusFilter === '__ALL__' || statusFilter === '' || replyStatus ? undefined : statusFilter;
 
   // Reset to page 1 when filters change so a user mid-pagination doesn't
   // land on a page that no longer exists in the filtered view.
   useEffect(() => {
     setPage(1);
-  }, [mailboxId, statusFilter, search]);
+  }, [mailboxId, statusFilter, search, sort]);
 
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ['candidates', { mailboxId, status: statusFilter, page, search }],
+    queryKey: ['candidates', { mailboxId, status: statusFilter, page, search, sort }],
     queryFn: () =>
       fetchCandidates({
         mailboxId,
         status: search ? undefined : apiStatus,
+        replyStatus: search ? undefined : replyStatus,
         includeIgnored: search ? true : includeIgnored,
         page,
         limit: PAGE_SIZE,
         search: search || undefined,
+        ...serverSort(sort),
       }),
     staleTime: 30_000,
   });
@@ -339,6 +318,7 @@ export default function CandidateTable({ mailboxId }: Props) {
     onSuccess: () => {
       toastSuccess('Status updated');
       void queryClient.invalidateQueries({ queryKey: ['candidates'] });
+      void queryClient.invalidateQueries({ queryKey: ['drafts'] });
     },
     onError: (err) => {
       toastError(
@@ -381,6 +361,38 @@ export default function CandidateTable({ mailboxId }: Props) {
     },
   });
 
+  // NEEDS_REVIEW triage (M17): the recruiter decides; "interested" also
+  // drafts the reply using that decision instead of re-classifying.
+  const triageMutation = useMutation({
+    mutationFn: async ({
+      candidate,
+      decision,
+    }: {
+      candidate: Candidate;
+      decision: 'INTERESTED' | 'NOT_INTERESTED';
+    }) => {
+      await updateCandidate(candidate.id, { status: decision });
+      const threadId = candidate.threads?.[0]?.id;
+      if (decision === 'INTERESTED' && threadId) {
+        await generateDraftForThread(threadId, 'INTERESTED');
+        return { drafted: true };
+      }
+      return { drafted: false };
+    },
+    onSuccess: ({ drafted }) => {
+      toastSuccess(
+        drafted ? 'Marked interested' : 'Status updated',
+        drafted ? 'A draft is waiting in the Drafts tab.' : undefined
+      );
+      void queryClient.invalidateQueries({ queryKey: ['candidates'] });
+      void queryClient.invalidateQueries({ queryKey: ['drafts'] });
+    },
+    onError: (err) => {
+      void queryClient.invalidateQueries({ queryKey: ['candidates'] });
+      toastError('Triage failed', extractApiErrorMessage(err, 'Please try again.'));
+    },
+  });
+
   const clearRepliedMutation = useMutation({
     mutationFn: (id: string) => clearRepliedAt(id),
     onSuccess: () => {
@@ -392,10 +404,8 @@ export default function CandidateTable({ mailboxId }: Props) {
     },
   });
 
-  const candidatesRaw = data?.data ?? [];
-  const candidates = [...candidatesRaw].sort((a, b) =>
-    compareCandidates(a, b, sort.column, sort.dir)
-  );
+  // Sorted server-side across every page (L16).
+  const candidates = data?.data ?? [];
 
   if (error) {
     return (
@@ -438,11 +448,12 @@ export default function CandidateTable({ mailboxId }: Props) {
           >
             <option value="">Active candidates</option>
             <option value="__ALL__">All (incl. ignored)</option>
+            <option value="AWAITING_REPLY">Awaiting reply</option>
             <option value="PENDING">Pending</option>
             <option value="INTERESTED">Interested</option>
             <option value="NOT_INTERESTED">Not Interested</option>
             <option value="NEUTRAL">Neutral</option>
-            <option value="REPLIED">Replied</option>
+            <option value="REPLIED">Replied (legacy)</option>
             <option value="NEEDS_REVIEW">Needs Review</option>
             <option value="IGNORED">Ignored</option>
           </select>
@@ -453,13 +464,16 @@ export default function CandidateTable({ mailboxId }: Props) {
           <input
             type="text"
             placeholder="Search by name or email…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
             className="w-full rounded-lg border border-line bg-surface-raised/70 py-1.5 pl-8 pr-8 text-[13px] text-fg-default placeholder:text-fg-subtle transition-colors hover:border-line-strong focus:border-accent-400 focus:outline-none"
           />
-          {search && (
+          {searchInput && (
             <button
-              onClick={() => setSearch('')}
+              onClick={() => {
+                setSearchInput('');
+                setSearch('');
+              }}
               className="absolute right-2.5 top-1/2 -translate-y-1/2 text-fg-muted hover:text-fg-strong"
             >
               <X className="h-3.5 w-3.5" />
@@ -486,7 +500,9 @@ export default function CandidateTable({ mailboxId }: Props) {
                 onSort={handleSort}
               />
               <SortableTh column="status" label="Status" current={sort} onSort={handleSort} />
-              <SortableTh column="reply" label="Reply" current={sort} onSort={handleSort} />
+              <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.08em] text-fg-muted">
+                Reply
+              </th>
               <SortableTh
                 column="updatedAt"
                 label="Last activity"
@@ -521,7 +537,16 @@ export default function CandidateTable({ mailboxId }: Props) {
                       )
                     }
                     onChangeStatus={(status) =>
-                      updateMutation.mutate({ id: candidate.id, status })
+                      // IGNORED must discard live drafts: same flow as the
+                      // ignore button, not a bare status write (M20).
+                      status === 'IGNORED'
+                        ? ignoreMutation.mutate(candidate.id)
+                        : updateMutation.mutate({ id: candidate.id, status })
+                    }
+                    onTriage={(decision) => triageMutation.mutate({ candidate, decision })}
+                    triaging={
+                      triageMutation.isPending &&
+                      triageMutation.variables?.candidate.id === candidate.id
                     }
                     onIgnore={() => ignoreMutation.mutate(candidate.id)}
                     onUnignore={() => unignoreMutation.mutate(candidate.id)}
@@ -615,7 +640,7 @@ function PaginationFooter({
           disabled={!hasNext}
           className="rounded-md bg-fg-strong/[0.04] px-2.5 py-1 text-[12px] font-medium text-fg-default transition-colors hover:bg-fg-strong/[0.09] disabled:cursor-not-allowed disabled:opacity-40"
         >
-          Load more
+          Next
         </button>
       </div>
     </div>
@@ -630,6 +655,8 @@ interface CandidateRowProps {
   onIgnore: () => void;
   onUnignore: () => void;
   onClearReplied: () => void;
+  onTriage: (decision: 'INTERESTED' | 'NOT_INTERESTED') => void;
+  triaging: boolean;
   ignoring: boolean;
   unignoring: boolean;
 }
@@ -642,6 +669,8 @@ function CandidateRow({
   onIgnore,
   onUnignore,
   onClearReplied,
+  onTriage,
+  triaging,
   ignoring,
   unignoring,
 }: CandidateRowProps) {
@@ -707,7 +736,7 @@ function CandidateRow({
         <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center gap-1.5">
             <ReplyStatusBadge candidate={candidate} />
-            {(candidate.replyStatus === 'REPLIED' || candidate.repliedAt) && (
+            {(candidate.replyStatus ?? (candidate.repliedAt ? 'REPLIED' : null)) === 'REPLIED' && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
@@ -744,12 +773,35 @@ function CandidateRow({
                 <option value="INTERESTED">Interested</option>
                 <option value="NOT_INTERESTED">Not Interested</option>
                 <option value="NEUTRAL">Neutral</option>
-                <option value="REPLIED">Replied</option>
+                {/* REPLIED is no longer an interest status (H6); shown only on legacy rows. */}
+                {candidate.status === 'REPLIED' && <option value="REPLIED">Replied (legacy)</option>}
                 <option value="NEEDS_REVIEW">Needs Review</option>
                 <option value="IGNORED">Ignored</option>
               </select>
               <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-fg-subtle" />
             </div>
+            {candidate.status === 'NEEDS_REVIEW' && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => onTriage('INTERESTED')}
+                  disabled={triaging}
+                  aria-label="Interested + draft"
+                  title="Mark interested and generate a draft"
+                  className="whitespace-nowrap rounded-md bg-emerald-500/10 px-2 py-1 text-[11.5px] font-medium text-emerald-700 ring-1 ring-inset ring-emerald-500/20 transition-colors hover:bg-emerald-500/20 disabled:opacity-50 dark:text-emerald-300"
+                >
+                  {triaging ? 'Drafting…' : 'Interested + draft'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onTriage('NOT_INTERESTED')}
+                  disabled={triaging}
+                  className="whitespace-nowrap rounded-md bg-fg-strong/[0.04] px-2 py-1 text-[11.5px] font-medium text-fg-default transition-colors hover:bg-fg-strong/[0.09] disabled:opacity-50"
+                >
+                  Not interested
+                </button>
+              </>
+            )}
             {candidate.status !== 'IGNORED' ? (
               <IgnoreConfirmButton
                 candidateName={candidate.name}

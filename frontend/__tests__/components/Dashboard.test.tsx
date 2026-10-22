@@ -15,6 +15,7 @@ import * as api from '../../src/lib/api';
 
 vi.mock('../../src/lib/api', () => ({
   fetchCandidates: vi.fn(),
+  fetchCandidateCounts: vi.fn(),
   fetchDrafts: vi.fn(),
   fetchMailboxes: vi.fn(),
   fetchSyncHealth: vi.fn(),
@@ -25,6 +26,7 @@ vi.mock('../../src/lib/api', () => ({
 }));
 
 const fetchCandidatesMock = vi.mocked(api.fetchCandidates);
+const fetchCandidateCountsMock = vi.mocked(api.fetchCandidateCounts);
 const fetchDraftsMock = vi.mocked(api.fetchDrafts);
 const fetchMailboxesMock = vi.mocked(api.fetchMailboxes);
 const fetchSyncHealthMock = vi.mocked(api.fetchSyncHealth);
@@ -202,6 +204,17 @@ describe('<Dashboard />', () => {
       data: CANDIDATES,
       meta: { total: CANDIDATES.length, page: 1, limit: 1000 },
     });
+    // Server-side totals, deliberately larger than any client sample (M18).
+    fetchCandidateCountsMock.mockResolvedValue({
+      success: true,
+      data: {
+        candidates: 592,
+        awaitingReply: 324,
+        needsReview: 75,
+        pendingDrafts: 2,
+        byMailbox: [{ mailboxId: MAILBOX.id, candidates: 592, awaitingReply: 324, needsReview: 75, pendingDrafts: 2 }],
+      },
+    });
     fetchDraftsMock.mockResolvedValue({
       success: true,
       data: DRAFTS,
@@ -229,7 +242,7 @@ describe('<Dashboard />', () => {
     ).toBeInTheDocument();
   });
 
-  it('renders the three action pills with counts derived from fixture data', async () => {
+  it('renders the three action pills with server-side counts (M18)', async () => {
     renderDashboard();
 
     // Wait for the queries to resolve — Ada Lovelace only renders inside the
@@ -242,15 +255,21 @@ describe('<Dashboard />', () => {
     });
     expect(within(draftsPill).getByText(/drafts pending/i)).toBeInTheDocument();
 
-    // 1 candidate is AWAITING_REPLY in the fixture.
     const awaitingPill = screen.getByTestId('action-pill-awaiting');
-    expect(within(awaitingPill).getByText('1')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(within(awaitingPill).getByText('324')).toBeInTheDocument();
+    });
     expect(within(awaitingPill).getByText(/awaiting reply/i)).toBeInTheDocument();
+    // M19: awaiting means the candidate wrote and we haven't answered.
+    expect(within(awaitingPill).getByText(/candidate replied — you haven't/i)).toBeInTheDocument();
 
-    // 1 NEEDS_REVIEW candidate (Grace Hopper)
     const reviewPill = screen.getByTestId('action-pill-review');
-    expect(within(reviewPill).getByText('1')).toBeInTheDocument();
+    expect(within(reviewPill).getByText('75')).toBeInTheDocument();
     expect(within(reviewPill).getByText(/needs review/i)).toBeInTheDocument();
+
+    // No 500-row candidate download; drafts fetch only the triage top 5.
+    expect(fetchCandidatesMock).not.toHaveBeenCalled();
+    expect(fetchDraftsMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'PENDING', limit: 5 }));
   });
 
   it('excludes candidates with no detected role from the awaiting-reply count', async () => {
