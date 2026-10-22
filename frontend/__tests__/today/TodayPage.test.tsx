@@ -93,7 +93,17 @@ describe('Today page', () => {
     const strip = await screen.findByRole('region', { name: 'Today' });
     expect(within(strip).getByText('2d 4h')).toBeInTheDocument();
     expect(within(strip).getByText(/over 2 days/i)).toBeInTheDocument();
-    expect(within(strip).getByText(/expiring in 24h/i).closest('a')).toHaveAttribute('href', '/inbox');
+    // U2a: never the default view — a real view, oldest first.
+    expect(within(strip).getByText(/expiring in 24h/i).closest('a')).toHaveAttribute('href', '/inbox?view=needs_review&sort=oldest');
+    expect(within(strip).getByText('2d 4h').closest('a')).toHaveAttribute('href', '/inbox?view=needs_review&sort=oldest');
+  });
+
+  it('Oldest waiting / Expiring soon open the first view that has anything waiting', async () => {
+    vi.mocked(api.fetchToday).mockResolvedValue({ success: true, data: { ...SUMMARY, views: { needs_review: 0, interested: 5, not_interested: 2 } } });
+    renderPage('/today?mailboxId=mb1');
+    const strip = await screen.findByRole('region', { name: 'Today' });
+    expect(within(strip).getByText('2d 4h').closest('a')).toHaveAttribute('href', '/inbox?mailboxId=mb1&view=interested&sort=oldest');
+    expect(within(strip).getByText(/expiring in 24h/i).closest('a')).toHaveAttribute('href', '/inbox?mailboxId=mb1&view=interested&sort=oldest');
   });
 
   it('per-mailbox table: waiting, sent today, last received, health dot linking to Settings only when unhealthy', async () => {

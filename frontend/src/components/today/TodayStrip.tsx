@@ -50,6 +50,10 @@ export default function TodayStrip({
 
   const { views } = summary;
   const waiting = views.needs_review + views.interested + views.not_interested;
+  // Oldest waiting / Expiring soon: the first waiting view with anything in
+  // it, oldest first — never the plain default view.
+  const oldestView = (['needs_review', 'interested', 'not_interested'] as const).find((v) => views[v] > 0) ?? 'needs_review';
+  const oldestFirst = viewHref('/inbox', params, { view: oldestView, sort: 'oldest' });
   const age = summary.oldestWaitingAt ? now - new Date(summary.oldestWaitingAt).getTime() : null;
 
   return (
@@ -60,12 +64,12 @@ export default function TodayStrip({
         <Tile to={inbox('not_interested')} label="Not interested" value={views.not_interested} />
         <Tile to={inbox('sent_today')} label="Sent today" value={summary.sentToday} />
         <Tile
-          to={inbox()}
+          to={oldestFirst}
           label="Oldest waiting"
           value={age === null ? '—' : formatAge(age, { withHours: true })}
           hint={age !== null && age > SLA_MS ? <Badge variant="warning">Over 2 days</Badge> : 'Reply within 2 days'}
         />
-        <Tile to={inbox()} label="Expiring soon" value={summary.draftsExpiringSoon} hint="Drafts expiring in 24h" />
+        <Tile to={oldestFirst} label="Expiring soon" value={summary.draftsExpiringSoon} hint="Drafts expiring in 24h" />
       </div>
       {waiting === 0 && (
         <p className="flex items-center gap-2 text-sm text-muted-foreground">

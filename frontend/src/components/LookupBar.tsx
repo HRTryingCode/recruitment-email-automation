@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowRight, Keyboard, MailPlus, RefreshCw, Search, SunMoon, UserRound } from 'lucide-react';
+import { ArrowRight, Inbox, Keyboard, MailPlus, RefreshCw, Search, SunMoon, UserRound } from 'lucide-react';
 import {
   fetchCandidates,
   fetchLookup,
+  fetchMailboxes,
   fetchSyncHealth,
   type LookupResult,
   type LookupVerdict,
@@ -15,7 +16,7 @@ import { LIVE_DRAFT_STATUSES } from '../lib/candidates';
 import { usePaletteCandidate } from '../lib/paletteContext';
 import { bannerIssues } from '../lib/statusBanner';
 import { setTheme } from '../lib/theme';
-import { viewHref } from '../lib/urlState';
+import { useMailboxFilter, viewHref } from '../lib/urlState';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Card, CardContent, CardFooter, CardHeader } from './ui/card';
@@ -208,6 +209,11 @@ export default function LookupBar() {
     retry: false,
   });
 
+  // Same cache entry as the shell. Phones and /settings have no header
+  // filter, so "Filter by mailbox" lives here too (U2a).
+  const mailboxes = useQuery({ queryKey: ['mailboxes'], queryFn: fetchMailboxes, enabled: open, staleTime: 60_000 });
+  const [, setMailboxId] = useMailboxFilter();
+
   const options = isPartial ? (partial.data?.data ?? []).slice(0, PARTIAL_LIMIT) : [];
 
   const handleOpenChange = (next: boolean) => {
@@ -259,6 +265,22 @@ export default function LookupBar() {
         run: () => go(n.path),
       })),
     },
+    ...((mailboxes.data?.data.length ?? 0) > 0
+      ? [
+          {
+            heading: 'Filter by mailbox',
+            items: [{ id: undefined, emailAddress: 'All mailboxes' }, ...(mailboxes.data?.data ?? [])].map((m) => ({
+              id: `filter-mailbox-${m.id ?? 'all'}`,
+              label: `Filter by mailbox: ${m.emailAddress}`,
+              icon: Inbox,
+              run: () => {
+                handleOpenChange(false);
+                setMailboxId(m.id);
+              },
+            })),
+          },
+        ]
+      : []),
     {
       heading: 'Actions',
       items: [
